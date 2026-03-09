@@ -749,7 +749,7 @@ async function toolWriteFile(
   filePath: string,
   content: string,
   expectedMtimeMs?: number,
-): Promise<string> {
+): Promise<string | ToolResult> {
   return withFileWriteLock(filePath, async () => {
     try {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -757,9 +757,33 @@ async function toolWriteFile(
       const initialVersion = getFileVersionSnapshot(filePath);
       validateExpectedMtime(filePath, expectedMtimeMs, initialVersion);
       const mode = initialVersion.mode;
+      const before = initialVersion.exists
+        ? readFileSync(filePath, { encoding: "utf-8" })
+        : "";
+      const beforeLines = before.length > 0 ? before.split("\n") : [];
+      const afterLines = content.length > 0 ? content.split("\n") : [];
+      const diffPreview = buildUnifiedDiffPreview(
+        simpleUnifiedDiff(
+          beforeLines,
+          afterLines,
+          filePath,
+          filePath,
+        ),
+      );
 
       await atomicWriteTextFile(filePath, content, mode, initialVersion);
-      return `OK: Wrote ${content.length} characters to ${filePath}`;
+
+      return new ToolResult({
+        content: `OK: Wrote ${content.length} characters to ${filePath}`,
+        metadata: {
+          path: filePath,
+          tui_preview: {
+            kind: "diff",
+            text: diffPreview.text,
+            truncated: diffPreview.truncated,
+          },
+        },
+      });
     } catch (e) {
       return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
     }

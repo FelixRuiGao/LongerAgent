@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatDisplayModelName,
+  formatScopedModelName,
   normalizeModelId,
   getContextLength,
   getMultimodalSupport,
@@ -25,6 +27,18 @@ describe("normalizeModelId", () => {
   it("handles multiple slashes by stripping at the last one", () => {
     expect(normalizeModelId("perplexity/llama-3.1-sonar-small-128k-online"))
       .toBe("llama-3.1-sonar-small-128k-online");
+  });
+});
+
+describe("OpenRouter display formatting", () => {
+  it("normalizes OpenRouter model names for short UI labels", () => {
+    expect(formatDisplayModelName("openrouter", "moonshotai/kimi-k2.5")).toBe("openrouter/kimi-k2.5");
+    expect(formatDisplayModelName("anthropic", "claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
+  });
+
+  it("formats provider-scoped labels without leaking OpenRouter vendor prefixes", () => {
+    expect(formatScopedModelName("openrouter", "moonshotai/kimi-k2.5")).toBe("openrouter/kimi-k2.5");
+    expect(formatScopedModelName("openai", "gpt-5")).toBe("openai/gpt-5");
   });
 });
 

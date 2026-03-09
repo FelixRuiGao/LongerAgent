@@ -145,6 +145,51 @@ describe("Phase 2 tool validation and grep limits", () => {
     }
   });
 
+  it("returns a diff preview metadata block for write_file when overwriting", async () => {
+    const root = makeTempDir("longeragent-phase2-write-preview-");
+    try {
+      writeFileSync(join(root, "a.txt"), "line 1\nold value\nline 3\n", "utf-8");
+
+      const result = await executeTool(
+        "write_file",
+        { path: "a.txt", content: "line 1\nnew value\nline 3\n" },
+        { projectRoot: root },
+      );
+
+      expect(result.content).toContain(`OK: Wrote ${"line 1\nnew value\nline 3\n".length} characters`);
+      expect(result.metadata.path).toBe(join(root, "a.txt"));
+      expect(result.metadata.tui_preview).toBeTruthy();
+      const preview = result.metadata.tui_preview as Record<string, unknown>;
+      expect(preview.kind).toBe("diff");
+      expect(String(preview.text)).toContain("| -old value");
+      expect(String(preview.text)).toContain("| +new value");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a diff preview metadata block for write_file when creating a new file", async () => {
+    const root = makeTempDir("longeragent-phase2-write-preview-new-");
+    try {
+      const result = await executeTool(
+        "write_file",
+        { path: "new.txt", content: "first line\nsecond line\n" },
+        { projectRoot: root },
+      );
+
+      expect(result.metadata.path).toBe(join(root, "new.txt"));
+      expect(result.metadata.tui_preview).toBeTruthy();
+      const preview = result.metadata.tui_preview as Record<string, unknown>;
+      expect(preview.kind).toBe("diff");
+      expect(String(preview.text)).toContain("--- ");
+      expect(String(preview.text)).toContain("+++ ");
+      expect(String(preview.text)).toContain("| +first line");
+      expect(String(preview.text)).toContain("| +second line");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("collapses large edit diffs to head and tail previews", async () => {
     const root = makeTempDir("longeragent-phase2-edit-preview-large-");
     try {

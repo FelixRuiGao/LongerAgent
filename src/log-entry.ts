@@ -320,6 +320,8 @@ export function createToolResult(
     contextId?: string;
     toolMetadata?: Record<string, unknown>;
     previewText?: string;
+    /** When true, TUI renders the preview in dim/gray style. */
+    previewDim?: boolean;
   },
 ): LogEntry {
   const meta: Record<string, unknown> = {
@@ -331,6 +333,7 @@ export function createToolResult(
   if (opts.toolMetadata && Object.keys(opts.toolMetadata).length > 0) {
     meta.toolMetadata = opts.toolMetadata;
   }
+  if (opts.previewDim) meta.tuiDim = true;
   return baseEntry(id, "tool_result", turnIndex, {
     roundIndex,
     tuiVisible: Boolean(opts.previewText),

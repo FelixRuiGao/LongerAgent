@@ -159,12 +159,13 @@ export function generateToolCallDisplay(
   }
 }
 
-function extractToolPreview(metadata: Record<string, unknown>): { text: string } | null {
+function extractToolPreview(metadata: Record<string, unknown>): { text: string; dim?: boolean } | null {
   const preview = metadata["tui_preview"];
   if (!preview || typeof preview !== "object") return null;
   const text = (preview as Record<string, unknown>)["text"];
   if (typeof text !== "string" || !text.trim()) return null;
-  return { text };
+  const dim = (preview as Record<string, unknown>)["dim"] === true ? true : undefined;
+  return { text, dim };
 }
 
 // ------------------------------------------------------------------
@@ -680,6 +681,7 @@ export async function asyncRunToolLoop(
           contextId: toolResultContextId,
           toolMetadata: resolved.metadata,
           previewText: preview?.text,
+          previewDim: preview?.dim,
         },
       ));
       if (onSaveCheckpoint) onSaveCheckpoint();

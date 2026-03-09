@@ -9,6 +9,11 @@ export interface ProviderPreset {
   models: Array<{ id: string; label: string }>;
 }
 
+const KIMI_MODELS = [
+  { id: "kimi-k2.5", label: "Kimi K2.5" },
+  { id: "kimi-k2-instruct", label: "Kimi K2 Instruct" },
+];
+
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: "anthropic", name: "Anthropic (Claude)", envVar: "ANTHROPIC_API_KEY",
@@ -27,10 +32,11 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     id: "kimi-cn", name: "Kimi / Moonshot (China)", envVar: "KIMI_API_KEY",
-    models: [
-      { id: "kimi-k2.5", label: "Kimi K2.5" },
-      { id: "kimi-k2-instruct", label: "Kimi K2 Instruct" },
-    ],
+    models: KIMI_MODELS,
+  },
+  {
+    id: "kimi", name: "Kimi / Moonshot (Global)", envVar: "KIMI_API_KEY",
+    models: KIMI_MODELS,
   },
   {
     id: "minimax", name: "MiniMax", envVar: "MINIMAX_API_KEY",
@@ -55,6 +61,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       // OpenAI
       { id: "openai/gpt-5", label: "GPT-5" },
       { id: "openai/gpt-5.1", label: "GPT-5.1" },
+      { id: "openai/gpt-4o", label: "GPT-4o" },
       // Kimi / Moonshot
       { id: "moonshotai/kimi-k2.5", label: "Kimi K2.5" },
       // MiniMax

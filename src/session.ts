@@ -31,7 +31,7 @@ import type {
 import { createEphemeralLogState } from "./ephemeral-log.js";
 import { isCompactMarker, allocateContextId, stripContextTags, ContextTagStripBuffer } from "./context-rendering.js";
 import { generateShowContext } from "./show-context.js";
-import type { Config, ModelConfig } from "./config.js";
+import { getThinkingLevels, type Config, type ModelConfig } from "./config.js";
 import type { MCPClientManager } from "./mcp-client.js";
 import { ProgressEvent, type ProgressLevel, type ProgressReporter } from "./progress.js";
 import { ToolResult } from "./providers/base.js";
@@ -100,7 +100,13 @@ import {
   createAskResolution,
 } from "./log-entry.js";
 import { projectToApiMessages, projectToTuiEntries } from "./log-projection.js";
-import { archiveWindow, createLogSessionMeta, type LogSessionMeta } from "./persistence.js";
+import {
+  archiveWindow,
+  createGlobalTuiPreferences,
+  createLogSessionMeta,
+  type GlobalTuiPreferences,
+  type LogSessionMeta,
+} from "./persistence.js";
 // ------------------------------------------------------------------
 // Constants
 // ------------------------------------------------------------------
@@ -361,7 +367,10 @@ export class Session {
   private _activeShells = new Map<string, BackgroundShellEntry>();
   private _shellCounter = 0;
 
-  // Thinking level + cache hit
+  // Thinking level + cache hit + accent
+  private _preferredThinkingLevel = "default";
+  private _preferredCacheHitEnabled = true;
+  private _preferredAccentColor?: string;
   private _thinkingLevel = "default";
   private _cacheHitEnabled = true;
 
@@ -1036,8 +1045,11 @@ export class Session {
     this._usedContextIds = new Set<string>();
 
     // 4. Reset thinking/cache state
-    this._thinkingLevel = "default";
-    this._cacheHitEnabled = true;
+    this._thinkingLevel = this._resolveThinkingLevelForModel(
+      this.primaryAgent.modelConfig.model,
+      this._preferredThinkingLevel,
+    );
+    this._cacheHitEnabled = this._preferredCacheHitEnabled;
 
     // 5. Reset MCP connection flag (will reconnect on next turn)
     this._mcpConnected = false;
@@ -1204,7 +1216,11 @@ export class Session {
   }
 
   set thinkingLevel(value: string) {
-    this._thinkingLevel = value;
+    this._preferredThinkingLevel = value;
+    this._thinkingLevel = this._resolveThinkingLevelForModel(
+      this.primaryAgent.modelConfig.model,
+      value,
+    );
   }
 
   get cacheHitEnabled(): boolean {
@@ -1212,7 +1228,16 @@ export class Session {
   }
 
   set cacheHitEnabled(value: boolean) {
+    this._preferredCacheHitEnabled = value;
     this._cacheHitEnabled = value;
+  }
+
+  get accentColor(): string | undefined {
+    return this._preferredAccentColor;
+  }
+
+  set accentColor(value: string | undefined) {
+    this._preferredAccentColor = value;
   }
 
   /** The model name from the primary agent's config. */
@@ -1232,8 +1257,41 @@ export class Session {
   switchModel(modelConfigName: string): void {
     const newModelConfig = this.config.getModel(modelConfigName);
     this.primaryAgent.replaceModelConfig(newModelConfig);
-    // Reset thinking level since capabilities may differ
-    this._thinkingLevel = "default";
+    this._thinkingLevel = this._resolveThinkingLevelForModel(
+      newModelConfig.model,
+      this._preferredThinkingLevel,
+    );
+    this._cacheHitEnabled = this._preferredCacheHitEnabled;
+  }
+
+  applyGlobalPreferences(preferences: GlobalTuiPreferences): void {
+    const prefs = createGlobalTuiPreferences(preferences);
+    this._preferredThinkingLevel = prefs.thinkingLevel;
+    this._preferredCacheHitEnabled = prefs.cacheHitEnabled;
+    this._preferredAccentColor = prefs.accentColor;
+    this._thinkingLevel = this._resolveThinkingLevelForModel(
+      this.primaryAgent.modelConfig.model,
+      prefs.thinkingLevel,
+    );
+    this._cacheHitEnabled = prefs.cacheHitEnabled;
+  }
+
+  getGlobalPreferences(): GlobalTuiPreferences {
+    return createGlobalTuiPreferences({
+      modelConfigName: this.currentModelConfigName || undefined,
+      modelProvider: this.primaryAgent.modelConfig.provider || undefined,
+      modelId: this.primaryAgent.modelConfig.model || undefined,
+      thinkingLevel: this._preferredThinkingLevel,
+      cacheHitEnabled: this._preferredCacheHitEnabled,
+      accentColor: this._preferredAccentColor,
+    });
+  }
+
+  private _resolveThinkingLevelForModel(modelName: string, preferredLevel: string): string {
+    if (!preferredLevel || preferredLevel === "default") return "default";
+    const levels = getThinkingLevels(modelName);
+    if (levels.length === 0) return "default";
+    return levels.includes(preferredLevel) ? preferredLevel : "default";
   }
 
   /** Input tokens from the most recent provider response. */
@@ -3203,7 +3261,7 @@ export class Session {
 
     // Auto-create important-log.md if it doesn't exist
     const logPath = this._getImportantLogPath();
-    if (!existsSync(logPath)) writeFileSync(logPath, "");
+    if (!existsSync(logPath)) writeFileSync(logPath, "# Important Log\n");
   }
 
   private _getArtifactsDir(): string {
@@ -3886,7 +3944,7 @@ export class Session {
     // Build TUI preview: list each sub-agent with truncated task
     let previewText: string | undefined;
     if (spawnedInfo.length) {
-      const maxTaskLen = 120;
+      const maxTaskLen = 60;
       const lines = spawnedInfo.map((info) => {
         const taskOneLine = info.task.replace(/\s+/g, " ");
         const taskTrunc = taskOneLine.length > maxTaskLen
@@ -3899,7 +3957,7 @@ export class Session {
 
     return new ToolResult({
       content: parts.join("\n") || "No agents spawned.",
-      metadata: previewText ? { tui_preview: { text: previewText } } : undefined,
+      metadata: previewText ? { tui_preview: { text: previewText, dim: true } } : undefined,
     });
   }
 

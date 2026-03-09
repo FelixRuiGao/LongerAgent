@@ -75,11 +75,13 @@ function toConversationEntry(entry: LogEntry): ConversationEntry {
     ? DISPLAY_KIND_TO_ENTRY_KIND[entry.displayKind]
     : "status";
 
-  return {
+  const ce: ConversationEntry = {
     kind,
     text: entry.display,
     id: entry.id,
   };
+  if (entry.meta["tuiDim"]) ce.dim = true;
+  return ce;
 }
 
 function isPrimaryRoundEntry(entry: LogEntry): boolean {

@@ -665,12 +665,12 @@ function diffLineColor(line: string): string | undefined {
   return undefined;
 }
 
-export function ToolResultView({ text }: { text: string }): React.ReactElement {
+export function ToolResultView({ text, dim }: { text: string; dim?: boolean }): React.ReactElement {
   const lines = text.split("\n");
   return (
     <Box flexDirection="column" paddingLeft={2}>
       {lines.map((line, idx) => (
-        <Text key={idx} color={diffLineColor(line)}>
+        <Text key={idx} color={dim ? undefined : diffLineColor(line)} dimColor={dim}>
           {line || " "}
         </Text>
       ))}
@@ -764,7 +764,7 @@ export function ConversationPanel({
           case "tool_call":
             return <ToolCallView key={key} text={entry.text} />;
           case "tool_result":
-            return <ToolResultView key={key} text={entry.text} />;
+            return <ToolResultView key={key} text={entry.text} dim={entry.dim} />;
           case "reasoning":
             return (
               <React.Fragment key={key}>

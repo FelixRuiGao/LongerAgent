@@ -61,6 +61,7 @@ import type { ProgressEvent, ProgressCallback } from "../progress.js";
 import { saveLog } from "../persistence.js";
 import type { SessionStore } from "../persistence.js";
 import { isCommandExitSignal } from "../commands.js";
+import { formatDisplayModelName } from "../config.js";
 import { projectToTuiEntries } from "../log-projection.js";
 import type {
   PendingAskUi,
@@ -202,6 +203,7 @@ export function App({
       setRawMode(false);
     };
   }, [isRawModeSupported, setRawMode]);
+
 
   useEffect(() => {
     const syncFromLog = () => {
@@ -1159,7 +1161,7 @@ export function App({
 
   return (
     <Box flexDirection="column" height="100%">
-      <LogoPanel />
+      <LogoPanel cwd={process.cwd()} />
       <ConversationPanel
         entries={entries}
         markdownMode={markdownMode}
@@ -1193,13 +1195,17 @@ export function App({
         commandRegistry={commandRegistry}
         store={store}
         hint={inputHint}
+        onHintRequested={showInputHint}
         session={session}
       />
       <StatusBar
         phase={activityPhase}
         toolName={activityToolName}
         error={statusError}
-        modelName={session.primaryAgent.modelConfig?.model}
+        modelName={formatDisplayModelName(
+          session.primaryAgent.modelConfig?.provider,
+          session.primaryAgent.modelConfig?.model,
+        )}
         contextTokens={contextTokens}
         contextLimit={session.primaryAgent.modelConfig?.contextLength}
         cacheReadTokens={cacheReadTokens}

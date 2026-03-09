@@ -22,8 +22,13 @@ import { Session } from "./session.js";
 import { loadTemplates } from "./templates/loader.js";
 import { loadSkills } from "./skills/loader.js";
 import { SessionStore } from "./persistence.js";
-import { buildDefaultRegistry, registerSkillCommands } from "./commands.js";
+import {
+  buildDefaultRegistry,
+  registerSkillCommands,
+  resolveModelSelection,
+} from "./commands.js";
 import type { Session as TuiSession } from "./tui/types.js";
+import { setAccent } from "./tui/theme.js";
 
 // ------------------------------------------------------------------
 // Primary agent resolution
@@ -197,6 +202,37 @@ async function main(): Promise<void> {
     mcpManager: mcpManager as never,
     store: store as never,
   });
+
+  const globalPreferences = store.loadGlobalPreferences();
+  try {
+    if (globalPreferences.modelConfigName) {
+      try {
+        session.switchModel(globalPreferences.modelConfigName);
+      } catch {
+        if (globalPreferences.modelProvider && globalPreferences.modelId) {
+          const restored = resolveModelSelection(
+            session,
+            `${globalPreferences.modelProvider}:${globalPreferences.modelId}`,
+          );
+          session.switchModel(restored.selectedConfigName);
+        }
+      }
+    } else if (globalPreferences.modelProvider && globalPreferences.modelId) {
+      const restored = resolveModelSelection(
+        session,
+        `${globalPreferences.modelProvider}:${globalPreferences.modelId}`,
+      );
+      session.switchModel(restored.selectedConfigName);
+    }
+  } catch (err) {
+    console.warn(
+      `Warning: failed to restore saved model preference: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  session.applyGlobalPreferences(globalPreferences);
+  if (globalPreferences.accentColor) {
+    setAccent(globalPreferences.accentColor);
+  }
 
   // Commands
   const commandRegistry = buildDefaultRegistry();

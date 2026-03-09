@@ -261,6 +261,17 @@ export class OpenAIChatProvider extends BaseProvider {
     }
   }
 
+  protected _augmentRequestKwargs(
+    _kwargs: Record<string, unknown>,
+    _ctx: {
+      hasNativeWebSearch: boolean;
+      tools?: ToolDef[];
+      options?: SendMessageOptions;
+    },
+  ): void {
+    // Subclasses can inject provider-specific request parameters.
+  }
+
   // ------------------------------------------------------------------
   // Core API call
   // ------------------------------------------------------------------
@@ -312,6 +323,15 @@ export class OpenAIChatProvider extends BaseProvider {
         };
       }
     }
+
+    this._augmentRequestKwargs(kwargs, {
+      hasNativeWebSearch:
+        tools && tools.length > 0
+          ? Boolean(kwargs["web_search_options"])
+          : false,
+      tools,
+      options,
+    });
 
     this._applyThinkingParams(kwargs, options);
 

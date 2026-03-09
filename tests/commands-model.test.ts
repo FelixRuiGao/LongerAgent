@@ -42,16 +42,43 @@ describe("/model command", () => {
       },
     };
 
-    const opts = cmd!.options!(session);
+    const opts = cmd!.options!({ session });
     const anthropic = opts.find((o) => o.value === "anthropic");
+    const kimiGlobal = opts.find((o) => o.value === "kimi");
     const openai = opts.find((o) => o.value === "openai");
 
     expect(anthropic).toBeTruthy();
+    expect(kimiGlobal).toBeTruthy();
     expect(openai).toBeTruthy();
     expect(anthropic!.children?.some((c) => c.label.includes("claude-sonnet-4-6  (current)"))).toBe(true);
     expect(
       openai!.children?.some((c) => c.label.includes("gpt-5  (key missing: run longeragent init)")),
     ).toBe(true);
+  });
+
+  it("normalizes OpenRouter child labels for display without vendor prefixes", () => {
+    const registry = buildDefaultRegistry();
+    const cmd = registry.lookup("/model");
+    expect(cmd?.options).toBeTruthy();
+
+    const session = {
+      config: {
+        modelNames: [],
+        listModelEntries: () => [],
+      },
+      primaryAgent: {
+        modelConfig: {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          apiKey: "sk-anthropic",
+        },
+      },
+    };
+
+    const opts = cmd!.options!({ session });
+    const openrouter = opts.find((o) => o.value === "openrouter");
+    expect(openrouter).toBeTruthy();
+    expect(openrouter!.children?.some((c) => c.label.startsWith("openrouter/kimi-k2.5"))).toBe(true);
   });
 
   it("blocks switching to provider:model when provider API key is missing", async () => {

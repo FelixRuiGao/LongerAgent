@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ModelConfig } from "../src/config.js";
 import { OpenRouterProvider } from "../src/providers/openrouter.js";
@@ -181,5 +181,68 @@ describe("OpenRouter _convertMessages reasoning_details round-trip", () => {
     expect(assistants).toHaveLength(2);
     expect(assistants[0]["reasoning_details"]).toEqual(details1);
     expect(assistants[1]["reasoning_details"]).toEqual(details2);
+  });
+});
+
+describe("OpenRouter web search integration", () => {
+  it("injects the web plugin when native web search is enabled", async () => {
+    const provider = new OpenRouterProvider(modelConfig({ supportsWebSearch: true }));
+    const create = vi.fn(async () => ({
+      choices: [{ message: { content: "ok" } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+
+    (provider as any)._client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+    };
+
+    await provider.sendMessage(
+      [{ role: "user", content: "hi" } as any],
+      [{ name: "web_search", description: "search", parameters: { type: "object", properties: {} } }],
+    );
+
+    const kwargs = create.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(kwargs["web_search_options"]).toEqual({});
+    expect(kwargs["plugins"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "web" }),
+      ]),
+    );
+  });
+
+  it("preserves existing plugins while adding the web plugin", async () => {
+    const provider = new OpenRouterProvider(modelConfig({
+      supportsWebSearch: true,
+      extra: { plugins: [{ id: "existing" }] },
+    }));
+    const create = vi.fn(async () => ({
+      choices: [{ message: { content: "ok" } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+
+    (provider as any)._client = {
+      chat: {
+        completions: {
+          create,
+        },
+      },
+    };
+
+    await provider.sendMessage(
+      [{ role: "user", content: "hi" } as any],
+      [{ name: "web_search", description: "search", parameters: { type: "object", properties: {} } }],
+    );
+
+    const kwargs = create.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(kwargs["plugins"]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "existing" }),
+        expect.objectContaining({ id: "web" }),
+      ]),
+    );
   });
 });

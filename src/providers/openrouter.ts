@@ -101,6 +101,28 @@ export class OpenRouterProvider extends OpenAIChatProvider {
     // OpenRouter normalizes these per-model internally.
   }
 
+  protected override _augmentRequestKwargs(
+    kwargs: Record<string, unknown>,
+    ctx: {
+      hasNativeWebSearch: boolean;
+      tools?: ToolDef[];
+      options?: SendMessageOptions;
+    },
+  ): void {
+    if (!ctx.hasNativeWebSearch) return;
+
+    const existing = Array.isArray(kwargs["plugins"])
+      ? [...(kwargs["plugins"] as Record<string, unknown>[])]
+      : [];
+    const hasWebPlugin = existing.some((plugin) =>
+      plugin && typeof plugin === "object" && plugin["id"] === "web"
+    );
+    if (!hasWebPlugin) {
+      existing.push({ id: "web" });
+    }
+    kwargs["plugins"] = existing;
+  }
+
   // ------------------------------------------------------------------
   // Response post-processing — extract reasoning_details
   // ------------------------------------------------------------------

@@ -11,6 +11,7 @@ import { StringDecoder } from "node:string_decoder";
 import { scanCandidates } from "../../file-attach.js";
 import type { CommandRegistry } from "../types.js";
 import type { SessionStore } from "../../persistence.js";
+import type { CommandOption } from "../../commands.js";
 import { InputProtocolParser } from "../input/protocol.js";
 import { mapInputEventToCommand } from "../input/keymap.js";
 import {
@@ -35,6 +36,16 @@ import { TurnPasteCounter, classifyPastedText } from "../input/paste.js";
 import { TurnPasteSlotStore } from "../input/paste-slots.js";
 import { sanitizeInputText, sanitizeSubmitText } from "../input/sanitize.js";
 import type { EditorCommand, InputEvent } from "../input/types.js";
+import {
+  acceptCommandPickerSelection,
+  createCommandPicker,
+  exitCommandPickerLevel,
+  getCommandPickerLevel,
+  getCommandPickerPath,
+  isCommandPickerActive,
+  moveCommandPickerSelection,
+  type CommandPickerState,
+} from "../command-picker.js";
 import { theme } from "../theme.js";
 
 // ------------------------------------------------------------------
@@ -43,16 +54,10 @@ import { theme } from "../theme.js";
 
 interface OverlayState {
   visible: boolean;
-  mode: "" | "file" | "command" | "resume" | "command_options";
+  mode: "" | "file" | "command";
   items: string[];
   values: string[];
   selected: number;
-  /** The command name that triggered this option overlay (e.g. "/thinking"). */
-  optionCommand?: string;
-  /** Map from value → child options for hierarchical selection (e.g., provider → model). */
-  childrenMap?: Record<string, { items: string[]; values: string[] }>;
-  /** Parent label shown as breadcrumb when drilled into children. */
-  parentLabel?: string;
 }
 
 const EMPTY_OVERLAY: OverlayState = {
@@ -153,19 +158,13 @@ function renderValueWithCursor(
 function OverlayView({ state }: { state: OverlayState }): React.ReactElement | null {
   if (!state.visible || state.items.length === 0) return null;
 
-  const maxVisible = state.mode === "resume" ? 10 : state.items.length;
-  const start =
-    state.mode === "resume" && state.items.length > maxVisible
-      ? clamp(state.selected - Math.floor(maxVisible / 2), 0, state.items.length - maxVisible)
-      : 0;
+  const maxVisible = state.items.length;
+  const start = 0;
   const end = Math.min(state.items.length, start + maxVisible);
   const visibleItems = state.items.slice(start, end);
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      {state.parentLabel && (
-        <Text color="gray" dimColor>{"   ← "}{state.parentLabel}</Text>
-      )}
       {visibleItems.map((item, i) => {
         const actualIndex = start + i;
         return (
@@ -183,6 +182,34 @@ function OverlayView({ state }: { state: OverlayState }): React.ReactElement | n
   );
 }
 
+function CommandPickerView({ picker }: { picker: CommandPickerState }): React.ReactElement | null {
+  if (!isCommandPickerActive(picker)) return null;
+  const level = getCommandPickerLevel(picker);
+  const path = getCommandPickerPath(picker);
+
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Text color={theme.accent}>{picker.commandName}</Text>
+      {path.length > 0 ? (
+        <Text color="gray" dimColor>
+          {"   "}
+          {path.join(" · ")}
+        </Text>
+      ) : null}
+      {level.options.map((item, i) => (
+        <Text
+          key={`picker-${i}`}
+          color={i === level.selected ? theme.accent : "gray"}
+          bold={i === level.selected}
+        >
+          {i === level.selected ? " > " : "   "}
+          {item.label}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
 // ------------------------------------------------------------------
 // InputPanel
 // ------------------------------------------------------------------
@@ -193,6 +220,7 @@ export interface InputPanelProps {
   commandRegistry: CommandRegistry;
   store: SessionStore | null;
   hint?: string | null;
+  onHintRequested?: (message: string, durationMs?: number) => void;
   /** Session reference for computing dynamic command options. */
   session?: any;
 }
@@ -205,10 +233,14 @@ export interface InputPanelHandle {
 }
 
 export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
-  function InputPanel({ onSubmit, disabled, commandRegistry, store, hint = null, session: sessionProp }, ref) {
+  function InputPanel(
+    { onSubmit, disabled, commandRegistry, store, hint = null, onHintRequested, session: sessionProp },
+    ref,
+  ) {
     const [value, setValue] = useState("");
     const [cursor, setCursor] = useState(0);
     const [overlay, setOverlay] = useState<OverlayState>(EMPTY_OVERLAY);
+    const [picker, setPicker] = useState<CommandPickerState | null>(null);
 
     const valueRef = useRef("");
     const cursorRef = useRef(0);
@@ -226,6 +258,33 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
     const hideOverlay = useCallback(() => {
       setOverlay(EMPTY_OVERLAY);
     }, []);
+
+    const hidePicker = useCallback(() => {
+      setPicker(null);
+    }, []);
+
+    const buildCommandOptions = useCallback(
+      (cmdName: string): CommandOption[] => {
+        const cmd = commandRegistry.lookup(cmdName);
+        if (!cmd?.options) return [];
+        return cmd.options({
+          session: sessionProp,
+          store: store ?? undefined,
+        });
+      },
+      [commandRegistry, sessionProp, store],
+    );
+
+    const startCommandPicker = useCallback(
+      (cmdName: string): boolean => {
+        const options = buildCommandOptions(cmdName);
+        if (options.length === 0) return false;
+        hideOverlay();
+        setPicker(createCommandPicker(cmdName, options));
+        return true;
+      },
+      [buildCommandOptions, hideOverlay],
+    );
 
     // ----- Build overlay items for /command prefix ----- //
     const showCommandOverlay = useCallback(
@@ -246,65 +305,6 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
         }
       },
       [commandRegistry, hideOverlay],
-    );
-
-    // ----- Build overlay items for /resume session list ----- //
-    const showResumeOverlay = useCallback(() => {
-      if (!store) {
-        hideOverlay();
-        return;
-      }
-      const sessions = store.listSessions();
-      if (sessions.length === 0) {
-        hideOverlay();
-        return;
-      }
-      const items: string[] = [];
-      const values: string[] = [];
-      for (let i = 0; i < sessions.length; i++) {
-        const s = sessions[i];
-        const date = (s.created || "").slice(0, 16);
-        items.push(`${i + 1}. ${date}  ${s.turns} turns  ${(s.summary || "").slice(0, 40)}`);
-        values.push(String(i + 1));
-      }
-      setOverlay({ visible: true, mode: "resume", items, values, selected: 0 });
-    }, [store, hideOverlay]);
-
-    // ----- Build overlay items for command options (dynamic) ----- //
-    const showCommandOptionsOverlay = useCallback(
-      (cmdName: string) => {
-        const cmd = commandRegistry.lookup(cmdName);
-        if (!cmd?.options || !sessionProp) {
-          hideOverlay();
-          return;
-        }
-        const opts = cmd.options(sessionProp);
-        if (opts.length === 0) {
-          hideOverlay();
-          return;
-        }
-        // Build childrenMap for options that have children (hierarchical)
-        let childrenMap: Record<string, { items: string[]; values: string[] }> | undefined;
-        for (const o of opts) {
-          if (o.children && o.children.length > 0) {
-            if (!childrenMap) childrenMap = {};
-            childrenMap[o.value] = {
-              items: o.children.map((c) => c.label),
-              values: o.children.map((c) => c.value),
-            };
-          }
-        }
-        setOverlay({
-          visible: true,
-          mode: "command_options",
-          items: opts.map((o) => o.label),
-          values: opts.map((o) => o.value),
-          selected: 0,
-          optionCommand: cmdName,
-          childrenMap,
-        });
-      },
-      [commandRegistry, sessionProp, hideOverlay],
     );
 
     // ----- Build overlay items for @file prefix ----- //
@@ -332,23 +332,6 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
 
         // Check / command prefix first
         if (beforeCursor.startsWith("/") && !beforeCursor.includes("\n")) {
-          // Check for /resume session list
-          if (beforeCursor.startsWith("/resume ") && beforeCursor.length >= 8) {
-            showResumeOverlay();
-            return;
-          }
-
-          // Check for commands with dynamic options (e.g. "/thinking ", "/cachehit ")
-          const spaceIdx = beforeCursor.indexOf(" ");
-          if (spaceIdx > 0) {
-            const cmdName = beforeCursor.slice(0, spaceIdx);
-            const cmd = commandRegistry.lookup(cmdName);
-            if (cmd?.options) {
-              showCommandOptionsOverlay(cmdName);
-              return;
-            }
-          }
-
           const prefix = beforeCursor.slice(1);
           if (!prefix.includes(" ")) {
             showCommandOverlay(prefix);
@@ -371,7 +354,7 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
 
         hideOverlay();
       },
-      [showCommandOverlay, showResumeOverlay, showCommandOptionsOverlay, showFileOverlay, commandRegistry, hideOverlay],
+      [showCommandOverlay, showFileOverlay, hideOverlay],
     );
 
     const commitEditorState = useCallback(
@@ -400,10 +383,14 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
     }, [commitEditorState]);
 
     const dismissOverlay = useCallback((): boolean => {
+      if (picker) {
+        hidePicker();
+        return true;
+      }
       if (!overlay.visible) return false;
       hideOverlay();
       return true;
-    }, [overlay.visible, hideOverlay]);
+    }, [picker, overlay.visible, hideOverlay, hidePicker]);
 
     React.useImperativeHandle(ref, () => ({
       clear: clearInput,
@@ -413,6 +400,21 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
       },
       dismissOverlay,
     }), [clearInput, resetTurnPasteState, dismissOverlay]);
+
+    const maybeStartPickerFromSubmittedText = useCallback(
+      (submitted: string): boolean => {
+        const trimmed = submitted.trim();
+        if (!trimmed.startsWith("/") || /\s/.test(trimmed)) return false;
+        const cmd = commandRegistry.lookup(trimmed);
+        if (!cmd?.options) return false;
+        const started = startCommandPicker(trimmed);
+        if (!started) return false;
+        clearInput();
+        resetTurnPasteState();
+        return true;
+      },
+      [commandRegistry, startCommandPicker, clearInput, resetTurnPasteState],
+    );
 
     const acceptOverlaySelection = useCallback(() => {
       const sel = overlay.values[overlay.selected];
@@ -439,43 +441,25 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
         hideOverlay();
       } else if (overlay.mode === "command") {
         hideOverlay();
-        if (sel === "/resume") {
-          commitEditorState("/resume ", "/resume ".length, null);
-        } else {
-          // Check if this command has dynamic options → show option picker
-          const cmd = commandRegistry.lookup(sel);
-          if (cmd?.options) {
-            commitEditorState(`${sel} `, `${sel} `.length, null);
-            return;
-          }
-          const accepted = onSubmit(sel);
-          if (accepted) clearInput();
-        }
-      } else if (overlay.mode === "resume") {
-        hideOverlay();
-        const accepted = onSubmit(`/resume ${sel}`);
-        if (accepted) clearInput();
-      } else if (overlay.mode === "command_options" && overlay.optionCommand) {
-        // Check if this option has children (hierarchical selection)
-        const children = overlay.childrenMap?.[sel];
-        if (children && children.items.length > 0) {
-          // Drill into children — replace overlay items
-          const parentLabel = overlay.items[overlay.selected];
-          setOverlay({
-            ...overlay,
-            items: children.items,
-            values: children.values,
-            selected: 0,
-            childrenMap: undefined,
-            parentLabel,
-          });
+        const cmd = commandRegistry.lookup(sel);
+        if (cmd?.options && startCommandPicker(sel)) {
+          clearInput();
+          resetTurnPasteState();
           return;
         }
-        hideOverlay();
-        const accepted = onSubmit(`${overlay.optionCommand} ${sel}`);
+        const accepted = onSubmit(sel);
         if (accepted) clearInput();
       }
-    }, [overlay, hideOverlay, onSubmit, commitEditorState, clearInput]);
+    }, [
+      overlay,
+      hideOverlay,
+      onSubmit,
+      commitEditorState,
+      clearInput,
+      resetTurnPasteState,
+      startCommandPicker,
+      commandRegistry,
+    ]);
 
     const completeCommandSelection = useCallback(() => {
       const sel = overlay.values[overlay.selected];
@@ -496,6 +480,22 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
       commitEditorState(nextValue, replacement.length, null);
     }, [overlay, commitEditorState, hideOverlay]);
 
+    const acceptPickerSelection = useCallback(() => {
+      if (!picker) return;
+      const result = acceptCommandPickerSelection(picker);
+      if (!result) {
+        hidePicker();
+        return;
+      }
+      if (result.kind === "drill_down") {
+        setPicker(result.picker);
+        return;
+      }
+      hidePicker();
+      const accepted = onSubmit(result.command);
+      if (accepted) clearInput();
+    }, [picker, onSubmit, clearInput, hidePicker]);
+
     const applyCommand = useCallback((command: EditorCommand) => {
       const state = withValueAndCursor(
         valueRef.current,
@@ -508,6 +508,7 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
           const expanded = turnPasteSlotsRef.current.expand(valueRef.current);
           const safe = sanitizeSubmitText(expanded).trim();
           if (!safe) return;
+          if (maybeStartPickerFromSubmittedText(safe)) return;
           const accepted = onSubmit(safe);
           if (!accepted) return;
           clearInput();
@@ -590,6 +591,15 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
           return;
         }
         case "overlay_hide": {
+          if (picker) {
+            const nextPicker = exitCommandPickerLevel(picker);
+            if (nextPicker) {
+              setPicker(nextPicker);
+            } else {
+              hidePicker();
+            }
+            return;
+          }
           hideOverlay();
           return;
         }
@@ -600,10 +610,23 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
           return;
         }
       }
-    }, [onSubmit, clearInput, commitEditorState, hideOverlay]);
+    }, [
+      onSubmit,
+      clearInput,
+      commitEditorState,
+      hideOverlay,
+      hidePicker,
+      maybeStartPickerFromSubmittedText,
+      picker,
+      resetTurnPasteState,
+    ]);
 
     const handleInsert = useCallback(
       (rawText: string, source: "typing" | "paste") => {
+        if (picker) {
+          onHintRequested?.("Picker is active. Press Esc to go back, Ctrl+C to close.", 2500);
+          return;
+        }
         const safeText = sanitizeInputText(rawText);
         if (!safeText) return;
 
@@ -631,12 +654,56 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
         const next = insertText(state, textToInsert);
         commitEditorState(next.value, next.cursor, next.preferredColumn);
       },
-      [commitEditorState],
+      [commitEditorState, onHintRequested, picker],
     );
 
     const handleInputEvent = useCallback(
       (event: InputEvent) => {
         if (disabled) return;
+
+        if (picker) {
+          if (event.type === "insert") {
+            handleInsert(event.text, event.source);
+            return;
+          }
+          if (event.key === "escape") {
+            const nextPicker = exitCommandPickerLevel(picker);
+            if (nextPicker) {
+              setPicker(nextPicker);
+            } else {
+              hidePicker();
+            }
+            return;
+          }
+          if (event.key === "up") {
+            setPicker((prev) => (prev ? moveCommandPickerSelection(prev, -1) : prev));
+            return;
+          }
+          if (event.key === "tab" && event.shift) {
+            setPicker((prev) => (prev ? moveCommandPickerSelection(prev, -1) : prev));
+            return;
+          }
+          if (event.key === "down" || event.key === "tab") {
+            setPicker((prev) => (prev ? moveCommandPickerSelection(prev, 1) : prev));
+            return;
+          }
+          if (event.key === "enter") {
+            acceptPickerSelection();
+            return;
+          }
+
+          const command = mapInputEventToCommand(event);
+          if (command === "overlay_hide") {
+            const nextPicker = exitCommandPickerLevel(picker);
+            if (nextPicker) {
+              setPicker(nextPicker);
+            } else {
+              hidePicker();
+            }
+            return;
+          }
+          return;
+        }
 
         if (event.type === "insert") {
           handleInsert(event.text, event.source);
@@ -646,12 +713,7 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
         // Overlay keyboard handling
         if (overlay.visible) {
           if (event.key === "escape") {
-            if (overlay.parentLabel && overlay.optionCommand) {
-              // Go back to parent level
-              showCommandOptionsOverlay(overlay.optionCommand);
-            } else {
-              hideOverlay();
-            }
+            hideOverlay();
             return;
           }
           if (overlay.mode === "command" && event.key === "tab" && !event.shift) {
@@ -699,13 +761,17 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
       },
       [
         disabled,
+        picker,
         overlay.visible,
         overlay.mode,
+        acceptPickerSelection,
         acceptOverlaySelection,
         applyCommand,
         handleInsert,
         hideOverlay,
+        hidePicker,
         completeCommandSelection,
+        onHintRequested,
       ],
     );
 
@@ -738,16 +804,19 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
     const renderedInput = renderValueWithCursor(
       viewport.text,
       viewport.cursor,
-      !disabled,
+      !disabled && !picker,
       turnPasteSlotsRef.current,
     ).replaceAll(
       "\n",
       `\n${PROMPT_INDENT}`,
     );
+    const pickerHint = picker
+      ? "  Enter select · Esc back/close · Ctrl+C close"
+      : null;
 
     return (
       <Box flexDirection="column" marginTop={2}>
-        <OverlayView state={overlay} />
+        {picker ? <CommandPickerView picker={picker} /> : <OverlayView state={overlay} />}
         <Box
           borderStyle="single"
           borderTop
@@ -764,7 +833,9 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
         </Box>
         <Box paddingX={1}>
           <Text color="gray">
-            {hint
+            {pickerHint
+              ? pickerHint
+              : hint
               ? `  ${hint}`
               : "  Opt+Enter/^N newline · ^G Markdown raw · ^C Cancel/Quit"}
           </Text>

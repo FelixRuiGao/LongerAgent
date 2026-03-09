@@ -30,6 +30,34 @@ function makeTempSession(entries: any[], metaOverrides?: Record<string, unknown>
 }
 
 describe("resume command", () => {
+  it("builds picker options from saved sessions", () => {
+    const registry = buildDefaultRegistry();
+    const resume = registry.lookup("/resume");
+    expect(resume?.options).toBeTruthy();
+
+    const options = resume!.options!({
+      session: {},
+      store: {
+        listSessions: vi.fn(() => [
+          {
+            path: "/tmp/s1",
+            created: "2026-02-21T08:00:00.000-08:00",
+            summary: "hello",
+            turns: 1,
+          },
+        ]),
+      } as unknown as CommandContext["store"],
+    });
+
+    expect(options).toEqual([
+      expect.objectContaining({
+        value: "1",
+      }),
+    ]);
+    expect(options[0]?.label).toContain("1.");
+    expect(options[0]?.label).toContain("hello");
+  });
+
   it("restores from log.json and rebuilds conversation", async () => {
     const registry = buildDefaultRegistry();
     const resume = registry.lookup("/resume");

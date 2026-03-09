@@ -42,6 +42,7 @@ export interface Session {
     name: string;
     modelConfig?: {
       name?: string;
+      provider?: string;
       model?: string;
       contextLength?: number;
     };
@@ -114,6 +115,8 @@ export interface ConversationEntry {
   id?: string;
   /** Whether this user message is queued for delivery (agent is working). */
   queued?: boolean;
+  /** When true, TUI renders this entry in dim/gray style. */
+  dim?: boolean;
 }
 
 // ------------------------------------------------------------------

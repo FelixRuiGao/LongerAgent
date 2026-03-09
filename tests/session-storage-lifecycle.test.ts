@@ -23,8 +23,8 @@ function makeTempDir(prefix: string): string {
 function makeSession(projectRoot: string, store: SessionStore): Session {
   const modelConfig = {
     name: "test-model",
-    provider: "test",
-    model: "test-model",
+    provider: "openai",
+    model: "gpt-5",
     maxTokens: 256,
     contextLength: 8192,
     supportsMultimodal: false,
@@ -69,6 +69,35 @@ function stubRunActivation(session: Session, text = "ok"): void {
 }
 
 describe("session storage lifecycle", () => {
+  it("round-trips global TUI preferences through SessionStore", () => {
+    const baseDir = makeTempDir("longeragent-prefs-base-");
+    const projectRoot = makeTempDir("longeragent-prefs-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      store.saveGlobalPreferences({
+        version: 1,
+        modelConfigName: "my-openrouter",
+        modelProvider: "openrouter",
+        modelId: "moonshotai/kimi-k2.5",
+        thinkingLevel: "high",
+        cacheHitEnabled: false,
+      });
+
+      expect(store.loadGlobalPreferences()).toEqual(
+        expect.objectContaining({
+          modelConfigName: "my-openrouter",
+          modelProvider: "openrouter",
+          modelId: "moonshotai/kimi-k2.5",
+          thinkingLevel: "high",
+          cacheHitEnabled: false,
+        }),
+      );
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("constructs with a store that has no active session directory", () => {
     const baseDir = makeTempDir("longeragent-lifecycle-base-");
     const projectRoot = makeTempDir("longeragent-lifecycle-project-");
@@ -139,6 +168,32 @@ describe("session storage lifecycle", () => {
       expect(secondArtifactsDir).toBeTruthy();
       expect(hydratedSystemContent).not.toContain("{SESSION_ARTIFACTS}");
       expect(hydratedSystemContent).toContain(secondArtifactsDir as string);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("uses global preference defaults when resetting for /new", () => {
+    const baseDir = makeTempDir("longeragent-lifecycle-base-");
+    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store);
+
+      session.applyGlobalPreferences({
+        version: 1,
+        modelConfigName: "test-model",
+        modelProvider: "openai",
+        modelId: "gpt-5",
+        thinkingLevel: "high",
+        cacheHitEnabled: false,
+      });
+
+      session.resetForNewSession(store);
+
+      expect(session.thinkingLevel).toBe("high");
+      expect(session.cacheHitEnabled).toBe(false);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });

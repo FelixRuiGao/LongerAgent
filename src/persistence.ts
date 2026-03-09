@@ -35,6 +35,7 @@ import { LogIdAllocator, type LogEntry, type LogEntryType, type TuiDisplayKind }
 
 const DEFAULT_LONGERAGENT_DIRNAME = ".longeragent";
 const ENV_BASE_DIR = "LONGERAGENT_HOME";
+const GLOBAL_TUI_PREFERENCES_FILE = "tui-preferences.json";
 
 // ------------------------------------------------------------------
 // Helpers
@@ -161,6 +162,25 @@ export class SessionStore {
     );
   }
 
+  private _globalPreferenceBaseDirs(): string[] {
+    const candidates = [
+      this._activeBaseDir,
+      ...this._candidateBaseDirs(),
+    ].filter((v): v is string => typeof v === "string" && v.length > 0);
+    const seen = new Set<string>();
+    const dedup: string[] = [];
+    for (const c of candidates) {
+      if (seen.has(c)) continue;
+      seen.add(c);
+      dedup.push(c);
+    }
+    return dedup;
+  }
+
+  private _globalPreferencesPath(baseDir: string): string {
+    return join(baseDir, GLOBAL_TUI_PREFERENCES_FILE);
+  }
+
   private static _createUniqueSessionDir(projectDir: string): string {
     const ts = timestampSlug();
     const first = join(projectDir, `${ts}_chat`);
@@ -211,6 +231,61 @@ export class SessionStore {
   /** Clear the current session directory (used by /new to defer creation). */
   clearSession(): void {
     this._sessionDir = undefined;
+  }
+
+  loadGlobalPreferences(): GlobalTuiPreferences {
+    for (const baseDir of this._globalPreferenceBaseDirs()) {
+      const path = this._globalPreferencesPath(baseDir);
+      if (!existsSync(path)) continue;
+      try {
+        const raw = JSON.parse(readFileSync(path, "utf-8"));
+        return createGlobalTuiPreferences({
+          version: raw.version ?? 1,
+          modelConfigName: raw.model_config_name ?? undefined,
+          modelProvider: raw.model_provider ?? undefined,
+          modelId: raw.model_id ?? undefined,
+          thinkingLevel: raw.thinking_level ?? "default",
+          accentColor: raw.accent_color ?? undefined,
+          cacheHitEnabled: raw.cache_hit_enabled ?? true,
+        });
+      } catch {
+        continue;
+      }
+    }
+    return createGlobalTuiPreferences();
+  }
+
+  saveGlobalPreferences(preferences: GlobalTuiPreferences): void {
+    const payload = createGlobalTuiPreferences(preferences);
+    const errors: string[] = [];
+
+    for (const baseDir of this._globalPreferenceBaseDirs()) {
+      try {
+        mkdirSync(baseDir, { recursive: true });
+        const file = this._globalPreferencesPath(baseDir);
+        const tmp = file + ".tmp";
+        writeFileSync(
+          tmp,
+          JSON.stringify({
+            version: payload.version,
+            model_config_name: payload.modelConfigName ?? null,
+            model_provider: payload.modelProvider ?? null,
+            model_id: payload.modelId ?? null,
+            thinking_level: payload.thinkingLevel,
+            cache_hit_enabled: payload.cacheHitEnabled,
+            accent_color: payload.accentColor ?? null,
+          }, null, 2),
+        );
+        renameSync(tmp, file);
+        this._activeBaseDir = baseDir;
+        return;
+      } catch (exc) {
+        errors.push(`${baseDir}: ${exc}`);
+      }
+    }
+
+    const detail = errors.length > 0 ? errors.join(" | ") : "no writable base directory available";
+    throw new Error(`Unable to save TUI preferences. Tried: ${detail}`);
   }
 
   listSessions(): Array<{ path: string; created: string; summary: string; turns: number }> {
@@ -289,6 +364,30 @@ export interface LogSessionMeta {
   thinkingLevel: string;
   cacheHitEnabled: boolean;
   activePlanFile?: string;
+}
+
+export interface GlobalTuiPreferences {
+  version: number;
+  modelConfigName?: string;
+  modelProvider?: string;
+  modelId?: string;
+  thinkingLevel: string;
+  cacheHitEnabled: boolean;
+  accentColor?: string;
+}
+
+export function createGlobalTuiPreferences(
+  partial?: Partial<GlobalTuiPreferences>,
+): GlobalTuiPreferences {
+  return {
+    version: 1,
+    modelConfigName: undefined,
+    modelProvider: undefined,
+    modelId: undefined,
+    thinkingLevel: "default",
+    cacheHitEnabled: true,
+    ...partial,
+  };
 }
 
 export function createLogSessionMeta(

@@ -14,9 +14,14 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionStore } from "./persistence.js";
 import { loadLog, validateAndRepairLog } from "./persistence.js";
-import { getThinkingLevels } from "./config.js";
+import {
+  formatDisplayModelName,
+  formatScopedModelName,
+  getThinkingLevels,
+} from "./config.js";
 import { PROVIDER_PRESETS } from "./provider-presets.js";
 import { resolveSkillContent, type SkillMeta } from "./skills/loader.js";
+import { ACCENT_PRESETS, DEFAULT_ACCENT, setAccent, theme } from "./tui/theme.js";
 
 // ------------------------------------------------------------------
 // Types
@@ -77,6 +82,12 @@ export interface CommandOption {
   children?: CommandOption[];
 }
 
+/** Context available when building dynamic picker options for a slash command. */
+export interface CommandOptionsContext {
+  session: any;
+  store?: SessionStore;
+}
+
 /**
  * A single slash command.
  */
@@ -90,9 +101,9 @@ export interface SlashCommand {
   /**
    * Optional callback that returns dynamic overlay options for this command.
    * When present, typing the command shows an option picker overlay.
-   * Receives the session so it can compute model-specific options.
+   * Receives session/store context so it can compute dynamic picker options.
    */
-  options?: (session: any) => CommandOption[];
+  options?: (ctx: CommandOptionsContext) => CommandOption[];
 }
 
 export class CommandExitSignal extends Error {
@@ -298,6 +309,26 @@ async function cmdResume(ctx: CommandContext, args: string): Promise<void> {
 
 }
 
+function buildResumeOptionLabel(
+  index: number,
+  created: string | undefined,
+  turns: number | undefined,
+  summary: string | undefined,
+): string {
+  const date = (created || "").slice(0, 16);
+  return `${index + 1}. ${date}  ${turns ?? 0} turns  ${(summary || "").slice(0, 40)}`;
+}
+
+function resumeOptions(ctx: CommandOptionsContext): CommandOption[] {
+  const store = ctx.store;
+  if (!store) return [];
+  const sessions = store.listSessions();
+  return sessions.map((s, i) => ({
+    label: buildResumeOptionLabel(i, s.created, s.turns, s.summary),
+    value: String(i + 1),
+  }));
+}
+
 async function cmdQuit(ctx: CommandContext, _args: string): Promise<void> {
   if (ctx.exit) {
     await ctx.exit();
@@ -316,7 +347,25 @@ async function cmdQuit(ctx: CommandContext, _args: string): Promise<void> {
   throw new CommandExitSignal(0);
 }
 
-function thinkingOptions(session: any): CommandOption[] {
+function currentSessionModelDisplayName(session: any): string {
+  return formatDisplayModelName(
+    session.primaryAgent?.modelConfig?.provider,
+    session.currentModelName ?? session.primaryAgent?.modelConfig?.model,
+  );
+}
+
+function persistGlobalPreferences(ctx: CommandContext): void {
+  if (!ctx.store || typeof ctx.store.saveGlobalPreferences !== "function") return;
+  if (typeof ctx.session.getGlobalPreferences !== "function") return;
+  try {
+    ctx.store.saveGlobalPreferences(ctx.session.getGlobalPreferences());
+  } catch {
+    // Ignore preference persistence failures during command execution.
+  }
+}
+
+function thinkingOptions(ctx: CommandOptionsContext): CommandOption[] {
+  const session = ctx.session;
   const model = session.currentModelName ?? "";
   const levels = getThinkingLevels(model);
   const current = session.thinkingLevel ?? "default";
@@ -340,6 +389,7 @@ function thinkingOptions(session: any): CommandOption[] {
 async function cmdThinking(ctx: CommandContext, args: string): Promise<void> {
   const session = ctx.session;
   const model = session.currentModelName;
+  const displayModel = currentSessionModelDisplayName(session);
   const levels = getThinkingLevels(model);
   const trimmed = args.trim().toLowerCase();
 
@@ -347,11 +397,11 @@ async function cmdThinking(ctx: CommandContext, args: string): Promise<void> {
     // No arg: show info (fallback for non-overlay usage)
     const current = session.thinkingLevel;
     if (!levels.length) {
-      ctx.showMessage(`Model '${model}' does not support configurable thinking levels.`);
+      ctx.showMessage(`Model '${displayModel}' does not support configurable thinking levels.`);
     } else {
       ctx.showMessage(
         `Thinking level: ${current}\n` +
-        `Available levels for ${model}: ${levels.join(", ")}`,
+        `Available levels for ${displayModel}: ${levels.join(", ")}`,
       );
     }
     return;
@@ -359,23 +409,26 @@ async function cmdThinking(ctx: CommandContext, args: string): Promise<void> {
 
   if (trimmed === "default") {
     session.thinkingLevel = "default";
+    persistGlobalPreferences(ctx);
     ctx.showMessage("Thinking level reset to provider default.");
     return;
   }
 
   if (levels.length && !levels.includes(trimmed)) {
     ctx.showMessage(
-      `Invalid level '${trimmed}' for ${model}.\n` +
+      `Invalid level '${trimmed}' for ${displayModel}.\n` +
       `Available: ${levels.join(", ")}`,
     );
     return;
   }
 
   session.thinkingLevel = trimmed;
+  persistGlobalPreferences(ctx);
   ctx.showMessage(`Thinking level set to: ${trimmed}`);
 }
 
-function cacheHitOptions(session: any): CommandOption[] {
+function cacheHitOptions(ctx: CommandOptionsContext): CommandOption[] {
+  const session = ctx.session;
   const enabled = session.cacheHitEnabled ?? true;
   return [
     { label: enabled ? "ON  (current)" : "ON", value: "on" },
@@ -395,6 +448,8 @@ async function cmdCacheHit(ctx: CommandContext, args: string): Promise<void> {
     // No argument toggles the current setting.
     session.cacheHitEnabled = !session.cacheHitEnabled;
   }
+
+  persistGlobalPreferences(ctx);
 
   const state = session.cacheHitEnabled ? "ON" : "OFF";
   const provider = session.primaryAgent?.modelConfig?.provider ?? "";
@@ -534,11 +589,80 @@ function runtimeModelName(provider: string, model: string): string {
   return `runtime-${slug(provider)}-${slug(model)}`;
 }
 
+export function resolveModelSelection(
+  session: any,
+  target: string,
+  apiKey?: string,
+): { selectedConfigName: string; selectedHint: string } {
+  const config = session.config;
+  let selectedConfigName = target;
+  let selectedHint = target;
+
+  const knownNames = new Set<string>((config?.modelNames as string[]) ?? []);
+  if (knownNames.has(selectedConfigName)) {
+    const existing = config.getModel(selectedConfigName);
+    return {
+      selectedConfigName,
+      selectedHint: formatScopedModelName(existing.provider, existing.model),
+    };
+  }
+
+  const parsed = parseProviderModelTarget(target);
+  if (!parsed) {
+    throw new Error(
+      "Invalid model target. Use config name or provider:model (e.g. openai:gpt-5).",
+    );
+  }
+
+  const entries = readModelEntries(config);
+  const exactEntries = entries.filter((e) =>
+    e.provider === parsed.provider && e.model === parsed.model
+  );
+  const exactWithKey = exactEntries.find((e) => e.hasResolvedApiKey);
+
+  if (exactWithKey && !apiKey) {
+    selectedConfigName = exactWithKey.name;
+  } else {
+    const keySource = (apiKey && apiKey.trim() !== "")
+      ? apiKey
+      : getProviderKeySource(entries, parsed.provider)
+        ?? (session.primaryAgent?.modelConfig?.provider === parsed.provider
+          && session.primaryAgent?.modelConfig?.apiKey
+          ? session.primaryAgent.modelConfig.apiKey
+          : undefined);
+
+    if (!keySource) {
+      const envVar = PROVIDER_ENV_VARS.get(providerKeyGroup(parsed.provider));
+      const envHint = envVar ? ` or export ${envVar}` : "";
+      throw new Error(
+        `Missing API key for provider '${parsed.provider}'.\n` +
+        `Run 'longeragent init' to set keys, or use: /model ${parsed.provider}:${parsed.model} key=YOUR_API_KEY${envHint}`,
+      );
+    }
+
+    if (typeof config?.upsertModelRaw !== "function") {
+      throw new Error("Runtime model creation is not supported by this config object.");
+    }
+
+    const runtimeName = runtimeModelName(parsed.provider, parsed.model);
+    config.upsertModelRaw(runtimeName, {
+      provider: parsed.provider,
+      model: parsed.model,
+      api_key: keySource,
+    });
+    selectedConfigName = runtimeName;
+  }
+
+  selectedHint = formatScopedModelName(parsed.provider, parsed.model);
+  return { selectedConfigName, selectedHint };
+}
+
 /**
  * Build two-level options for /model: provider → model.
  * Each provider is a parent option with model children.
  */
-function modelOptions(session: any): CommandOption[] {
+function modelOptions(ctx: CommandOptionsContext): CommandOption[] {
+  const session = ctx.session;
   const config = session.config;
   if (!config) return [];
 
@@ -594,7 +718,7 @@ function modelOptions(session: any): CommandOption[] {
       const isCurrent = provider === currentProvider && model === currentModel;
       const missingApiKey = !providerHasKey.get(providerKeyGroup(provider));
 
-      let label = model;
+      let label = formatDisplayModelName(provider, model);
       if (isCurrent && missingApiKey) {
         label = `${label}  (current, key missing: run longeragent init)`;
       } else if (isCurrent) {
@@ -623,15 +747,17 @@ function modelOptions(session: any): CommandOption[] {
 /**
  * /model command: switch model by creating a new session.
  *
- * The selected value is the model config name (from the children level).
+ * The selected value is either a config name or a provider:model target.
  */
 async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
   const session = ctx.session;
   const trimmed = args.trim();
-  const config = session.config;
 
   if (!trimmed) {
-    const current = session.currentModelConfigName ?? session.currentModelName ?? "unknown";
+    const displayCurrent = currentSessionModelDisplayName(session) || "unknown";
+    const current = session.currentModelConfigName
+      ? `${session.currentModelConfigName} (${displayCurrent})`
+      : displayCurrent;
     ctx.showMessage(
       `Current model: ${current}\n` +
       "Use /model to select a new model.\n" +
@@ -647,58 +773,7 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
 
   try {
     const { target, apiKey } = parseModelArgs(trimmed);
-    let selectedConfigName = target;
-    let selectedHint = target;
-
-    // First try the configured model name.
-    const knownNames = new Set<string>((config?.modelNames as string[]) ?? []);
-    if (!knownNames.has(selectedConfigName)) {
-      const parsed = parseProviderModelTarget(target);
-      if (!parsed) {
-        throw new Error(
-          "Invalid model target. Use config name or provider:model (e.g. openai:gpt-5).",
-        );
-      }
-
-      const entries = readModelEntries(config);
-      const exactEntries = entries.filter((e) =>
-        e.provider === parsed.provider && e.model === parsed.model
-      );
-      const exactWithKey = exactEntries.find((e) => e.hasResolvedApiKey);
-
-      if (exactWithKey && !apiKey) {
-        selectedConfigName = exactWithKey.name;
-      } else {
-        const keySource = (apiKey && apiKey.trim() !== "")
-          ? apiKey
-          : getProviderKeySource(entries, parsed.provider);
-
-        if (!keySource) {
-          const envVar = PROVIDER_ENV_VARS.get(providerKeyGroup(parsed.provider));
-          const envHint = envVar
-            ? ` or export ${envVar}`
-            : "";
-          ctx.showMessage(
-            `Missing API key for provider '${parsed.provider}'.\n` +
-            `Run 'longeragent init' to set keys, or use: /model ${parsed.provider}:${parsed.model} key=YOUR_API_KEY${envHint}`,
-          );
-          return;
-        }
-
-        if (typeof config?.upsertModelRaw !== "function") {
-          throw new Error("Runtime model creation is not supported by this config object.");
-        }
-
-        const runtimeName = runtimeModelName(parsed.provider, parsed.model);
-        config.upsertModelRaw(runtimeName, {
-          provider: parsed.provider,
-          model: parsed.model,
-          api_key: keySource,
-        });
-        selectedConfigName = runtimeName;
-      }
-      selectedHint = `${parsed.provider}/${parsed.model}`;
-    }
+    const { selectedConfigName, selectedHint } = resolveModelSelection(session, target, apiKey);
 
     // Save current session before switching
     ctx.resetUiState();
@@ -710,11 +785,12 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
     // Switch model, then create fresh session
     session.switchModel(selectedConfigName);
     session.resetForNewSession(ctx.store);
+    persistGlobalPreferences(ctx);
 
     const mc = session.primaryAgent?.modelConfig;
     if (mc) {
       ctx.showMessage(
-        `--- New session with ${selectedHint} (${mc.provider}/${mc.model}) ---\n` +
+        `--- New session with ${selectedHint} (${formatScopedModelName(mc.provider, mc.model)}) ---\n` +
         `  Context: ${(mc.contextLength ?? 0).toLocaleString()} tokens`
       );
     } else {
@@ -723,6 +799,52 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
   } catch (e) {
     ctx.showMessage(`Failed to switch model: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+// ------------------------------------------------------------------
+// /theme command
+// ------------------------------------------------------------------
+
+function themeOptions(_ctx: CommandOptionsContext): CommandOption[] {
+  const current = theme.accent;
+  return ACCENT_PRESETS.map((preset) => {
+    const isCurrent = preset.value === current;
+    return {
+      label: isCurrent ? `${preset.label}  (current)` : preset.label,
+      value: preset.value,
+    };
+  });
+}
+
+async function cmdTheme(ctx: CommandContext, args: string): Promise<void> {
+  const trimmed = args.trim();
+
+  if (!trimmed) {
+    ctx.showMessage(
+      `Current accent: ${theme.accent}\n` +
+      "Use /theme to select a new accent color.",
+    );
+    return;
+  }
+
+  // Accept preset label (case-insensitive) or raw hex value
+  const preset = ACCENT_PRESETS.find(
+    (p) => p.value === trimmed || p.label.toLowerCase() === trimmed.toLowerCase(),
+  );
+  const color = preset ? preset.value : trimmed;
+
+  // Basic hex validation
+  if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
+    ctx.showMessage(`Invalid color: "${trimmed}". Use a preset name or a hex color like #3b82f6.`);
+    return;
+  }
+
+  setAccent(color);
+  ctx.session.accentColor = color;
+  persistGlobalPreferences(ctx);
+
+  const label = preset ? `${preset.label} (${color})` : color;
+  ctx.showMessage(`Accent color set to: ${label}`);
 }
 
 // ------------------------------------------------------------------
@@ -737,13 +859,14 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/help", description: "Show commands and shortcuts", handler: cmdHelp });
   registry.register({ name: "/compact", description: "Manually compact the active context", handler: cmdCompact });
   registry.register({ name: "/new", description: "Start a new session", handler: cmdNew });
-  registry.register({ name: "/resume", description: "Resume a previous session", handler: cmdResume });
+  registry.register({ name: "/resume", description: "Resume a previous session", handler: cmdResume, options: resumeOptions });
   registry.register({ name: "/summarize", description: "Manually summarize older context", handler: cmdSummarize });
   registry.register({ name: "/model", description: "Switch model", handler: cmdModel, options: modelOptions });
   registry.register({ name: "/quit", description: "Exit the application", handler: cmdQuit });
   registry.register({ name: "/exit", description: "Exit the application", handler: cmdQuit });
   registry.register({ name: "/thinking", description: "Set thinking level", handler: cmdThinking, options: thinkingOptions });
   registry.register({ name: "/cachehit", description: "Prompt caching", handler: cmdCacheHit, options: cacheHitOptions });
+  registry.register({ name: "/theme", description: "Change accent color", handler: cmdTheme, options: themeOptions });
   return registry;
 }
 

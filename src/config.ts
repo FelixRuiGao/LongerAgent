@@ -174,6 +174,29 @@ export function normalizeModelId(model: string): string {
   return idx >= 0 ? model.slice(idx + 1) : model;
 }
 
+/** Format a short user-facing model label for UI surfaces such as the status bar. */
+export function formatDisplayModelName(provider: string | undefined, model: string | undefined): string {
+  const safeProvider = String(provider ?? "").trim();
+  const safeModel = String(model ?? "").trim();
+  if (!safeModel) return safeProvider;
+  if (safeProvider === "openrouter") {
+    return `openrouter/${normalizeModelId(safeModel)}`;
+  }
+  return safeModel;
+}
+
+/** Format a provider-scoped user-facing model label for status messages. */
+export function formatScopedModelName(provider: string | undefined, model: string | undefined): string {
+  const safeProvider = String(provider ?? "").trim();
+  const safeModel = String(model ?? "").trim();
+  if (!safeProvider) return formatDisplayModelName(undefined, safeModel);
+  if (!safeModel) return safeProvider;
+  if (safeProvider === "openrouter") {
+    return `openrouter/${normalizeModelId(safeModel)}`;
+  }
+  return `${safeProvider}/${safeModel}`;
+}
+
 /** Resolve effective context length. Priority: explicit > known lookup (exact then normalized) > 0. */
 export function getContextLength(model: string, contextLength = 0): number {
   if (contextLength > 0) return contextLength;
@@ -391,6 +414,7 @@ function isDir(p: string): boolean {
 
 const PROVIDER_URLS: Record<string, string> = {
   "kimi-cn": "https://api.moonshot.cn/v1",
+  "kimi": "https://api.moonshot.ai/v1",
   "kimi-ai": "https://api.moonshot.ai/v1",
   "glm": "https://open.bigmodel.cn/api/paas/v4",
   "glm-intl": "https://api.z.ai/api/paas/v4",

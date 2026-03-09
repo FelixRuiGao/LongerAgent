@@ -18,7 +18,7 @@ export class KimiProvider extends OpenAIChatProvider {
     if (!config.baseUrl) {
       throw new Error(
         "Kimi provider requires a base_url. " +
-          "Use provider 'kimi-cn' or 'kimi-ai', or set base_url explicitly.",
+          "Use provider 'kimi-cn', 'kimi', or 'kimi-ai', or set base_url explicitly.",
       );
     }
     super(config);

@@ -73,5 +73,20 @@ describe("Config model validation", () => {
       "Invalid model config 'bad': field 'temperature' must be a number",
     );
   });
-});
 
+  it("applies the global Moonshot base URL for provider 'kimi'", () => {
+    const cfg = new Config({
+      raw: {
+        models: {
+          kimiGlobal: {
+            provider: "kimi",
+            model: "kimi-k2.5",
+            api_key: "sk-test",
+          },
+        },
+      },
+    });
+
+    expect(cfg.getModel("kimiGlobal").baseUrl).toBe("https://api.moonshot.ai/v1");
+  });
+});
