@@ -49,7 +49,8 @@ longeragent
 |----------|--------|-------------|
 | **Anthropic** | Claude Haiku 4.5, Opus 4.6, Sonnet 4.6 (+ 1M context beta variants) | `ANTHROPIC_API_KEY` |
 | **OpenAI** | GPT-5.2, GPT-5.2 Codex, GPT-5.3 Codex, GPT-5.4 | `OPENAI_API_KEY` |
-| **Kimi / Moonshot** | Kimi K2.5, K2 Instruct, K2 Thinking | `KIMI_API_KEY` |
+| **Kimi / Moonshot (China)** | Kimi K2.5, K2 Instruct, K2 Thinking | `KIMI_CN_API_KEY` |
+| **Kimi / Moonshot (Global)** | Kimi K2.5, K2 Instruct, K2 Thinking | `KIMI_API_KEY` |
 | **MiniMax** | M2.1, M2.5, M2.5 Highspeed, M1-40k, M1-80k | `MINIMAX_API_KEY` |
 | **GLM / Zhipu** | GLM-5, GLM-4.7, GLM-4.7 Flash | `GLM_API_KEY` |
 | **OpenRouter** | Curated presets for Claude, GPT, Kimi, MiniMax, GLM, plus any custom model | `OPENROUTER_API_KEY` |

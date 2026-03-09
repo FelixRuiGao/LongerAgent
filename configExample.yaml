@@ -32,9 +32,9 @@ models:
 
   # ── Kimi (Moonshot) ────────────────────────────────────────────────
   # my-kimi:
-  #   provider: kimi-cn               # or: kimi-ai (international)
+  #   provider: kimi-cn               # or: kimi / kimi-ai (international)
   #   model: kimi-k2.5
-  #   api_key: ${KIMI_API_KEY}
+  #   api_key: ${KIMI_CN_API_KEY}     # international: ${KIMI_API_KEY}
 
   # ── MiniMax ────────────────────────────────────────────────────────
   # my-minimax:

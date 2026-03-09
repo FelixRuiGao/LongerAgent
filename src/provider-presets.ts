@@ -70,7 +70,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     ],
   },
   {
-    id: "kimi-cn", name: "Kimi / Moonshot (China)", envVar: "KIMI_API_KEY",
+    id: "kimi-cn", name: "Kimi / Moonshot (China)", envVar: "KIMI_CN_API_KEY",
     models: KIMI_MODELS,
   },
   {
