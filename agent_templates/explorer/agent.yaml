@@ -9,5 +9,5 @@ tools:
   - glob
   - web_search
   - web_fetch
-prompt_sections: [important_log]
+prompt_sections: [important_log, agents_md]
 max_tool_rounds: 200

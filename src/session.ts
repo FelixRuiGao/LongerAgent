@@ -15,6 +15,7 @@ import {
   statSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as yaml from "js-yaml";
@@ -130,7 +131,7 @@ const COMPACT_PROMPT_OUTPUT = `Distill this conversation into a continuation pro
 
 **Before writing the continuation prompt**, update your important log with any key discoveries, decisions, or insights from this session that aren't already recorded there. The important log survives compaction and will be visible to the new instance — this is your last chance to persist valuable knowledge.
 
-**What the new instance will already have:** your system prompt, the important log, and the active plan file (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state.
+**What the new instance will already have:** your system prompt, the important log, AGENTS.md persistent memory, and the active plan file (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state. If you've discovered stable, long-term knowledge during this session, consider persisting it to the project AGENTS.md before compaction.
 
 Your summary should capture everything that matters and nothing that doesn't. Use whatever structure best fits the actual content — there is no fixed template. But as you write, pressure-test yourself against these questions:
 
@@ -152,7 +153,7 @@ You just made a tool call and received its result above. That result is real and
 
 **Before writing the continuation prompt**, update your important log with any key discoveries, decisions, or insights from this session that aren't already recorded there. The important log survives compaction and will be visible to the new instance — this is your last chance to persist valuable knowledge.
 
-**What the new instance will already have:** your system prompt, the important log, and the active plan file (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state.
+**What the new instance will already have:** your system prompt, the important log, AGENTS.md persistent memory, and the active plan file (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state. If you've discovered stable, long-term knowledge during this session, consider persisting it to the project AGENTS.md before compaction.
 
 Write in natural prose. Use structure where it aids clarity, not for its own sake. As you write, pressure-test yourself against these questions:
 
@@ -2225,9 +2226,11 @@ export class Session {
     } catch {
       importantLog = "";
     }
+    const agentsMd = this._readAgentsMd();
     const messages = projectToApiMessages(this._log, {
       resolveImageRef: (refPath) => this._resolveImageRef(refPath),
       importantLog,
+      agentsMd,
       requiresAlternatingRoles: (this.primaryAgent as any)._provider.requiresAlternatingRoles,
     });
     if (messages.length === 0) return null;
@@ -2468,9 +2471,11 @@ export class Session {
           // Plan file may have been deleted externally — ignore
         }
       }
+      const agentsMd = this._readAgentsMd();
       return projectToApiMessages(this._log, {
         resolveImageRef: (refPath) => this._resolveImageRef(refPath),
         importantLog,
+        agentsMd,
         requiresAlternatingRoles: (this.primaryAgent as any)._provider.requiresAlternatingRoles,
         showContextAnnotations: showAnnotations ?? undefined,
       });
@@ -3292,6 +3297,50 @@ export class Session {
 
   private _getImportantLogPath(): string {
     return join(this._getArtifactsDir(), "important-log.md");
+  }
+
+  // ==================================================================
+  // AGENTS.md persistent memory
+  // ==================================================================
+
+  /**
+   * Read AGENTS.md from user home (~/) and project root, concatenating both.
+   * Global file comes first, project file second.
+   */
+  private _readAgentsMd(): string {
+    const parts: string[] = [];
+
+    // 1. Global: ~/AGENTS.md
+    const globalPath = join(homedir(), "AGENTS.md");
+    if (existsSync(globalPath)) {
+      try {
+        const content = readFileSync(globalPath, "utf-8").trim();
+        parts.push(
+          content
+            ? `## Global Memory (~/AGENTS.md)\n\n${content}`
+            : `## Global Memory (~/AGENTS.md)\n\n(empty file)`,
+        );
+      } catch {
+        // Ignore read errors
+      }
+    }
+
+    // 2. Project: {PROJECT_ROOT}/AGENTS.md
+    const projectPath = join(this._projectRoot, "AGENTS.md");
+    if (existsSync(projectPath)) {
+      try {
+        const content = readFileSync(projectPath, "utf-8").trim();
+        parts.push(
+          content
+            ? `## Project Memory (AGENTS.md)\n\n${content}`
+            : `## Project Memory (AGENTS.md)\n\n(empty file)`,
+        );
+      } catch {
+        // Ignore read errors
+      }
+    }
+
+    return parts.join("\n\n---\n\n");
   }
 
   private _getArtifactsDirIfAvailable(): string | undefined {
@@ -4664,6 +4713,18 @@ export class Session {
             logContent,
         });
       }
+    }
+    // Always inject AGENTS.md for sub-agents (persistent memory is always relevant)
+    const agentsMdContent = this._readAgentsMd();
+    if (agentsMdContent.trim()) {
+      extra.push({
+        role: "user",
+        content:
+          "[AGENTS.MD — PERSISTENT MEMORY]\n" +
+          "The following is persistent memory across sessions. " +
+          "Use it as background context for your task:\n\n" +
+          agentsMdContent,
+      });
     }
     return extra;
   }

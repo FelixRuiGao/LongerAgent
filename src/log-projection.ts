@@ -258,6 +258,11 @@ export interface ApiProjectionOptions {
    */
   importantLog?: string;
   /**
+   * AGENTS.md content (global + project) to inject after system prompt.
+   * If not empty, injected similarly to importantLog.
+   */
+  agentsMd?: string;
+  /**
    * Resolve an image_ref path to base64 data for API consumption.
    * If not provided, image_ref blocks are passed through as-is.
    */
@@ -457,6 +462,11 @@ export function projectToApiMessages(
     injectImportantLog(messages, options.importantLog);
   }
 
+  // Inject AGENTS.md content if provided
+  if (options?.agentsMd?.trim()) {
+    injectAgentsMd(messages, options.agentsMd);
+  }
+
   let projected = options?.truncateSummarizeToolArgs === false
     ? messages
     : truncateSummarizeToolArgs(messages);
@@ -604,6 +614,38 @@ function injectImportantLog(
 
   if (insertIdx < messages.length && messages[insertIdx].role === "user") {
     // Merge into first user message
+    const first = messages[insertIdx];
+    messages[insertIdx] = {
+      ...first,
+      content: mergeMessageContent(fullContent, first.content),
+    };
+  } else {
+    // Insert standalone user message
+    messages.splice(insertIdx, 0, { role: "user", content: fullContent });
+  }
+}
+
+/**
+ * Inject AGENTS.md content after the system prompt (and after important log).
+ * Merges into the first user message if possible.
+ */
+function injectAgentsMd(
+  messages: InternalMessage[],
+  agentsMdContent: string,
+): void {
+  const header =
+    "[AGENTS.MD — PERSISTENT MEMORY]\n" +
+    "The following is your persistent memory across sessions:\n\n";
+  const fullContent = header + agentsMdContent;
+
+  // Find position after system prompt(s)
+  let insertIdx = 0;
+  while (insertIdx < messages.length && messages[insertIdx].role === "system") {
+    insertIdx++;
+  }
+
+  if (insertIdx < messages.length && messages[insertIdx].role === "user") {
+    // Merge into first user message (important log may already be merged there)
     const first = messages[insertIdx];
     messages[insertIdx] = {
       ...first,
