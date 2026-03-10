@@ -18,8 +18,6 @@ Most AI agents crash, loop, or silently lose context when conversations get long
 
 ![LongerAgent Terminal UI](https://raw.githubusercontent.com/FelixRuiGao/LongerAgent/main/assets/screenshot.png)
 
-https://github.com/user-attachments/assets/377fe648-d43c-45da-b111-9434b2a0dc61
-
 > **Platform:** macOS. Windows is not tested.
 >
 > **Security:** LongerAgent does not sandbox commands or require approval before file edits and shell execution. Use it in trusted environments and review what it does.
@@ -36,6 +34,12 @@ longeragent init
 # Start
 longeragent
 ```
+
+## Demo
+
+Parallel sub-agents investigating a codebase, an async message mid-task, and context summarization — all in one session.
+
+https://github.com/user-attachments/assets/377fe648-d43c-45da-b111-9434b2a0dc61
 
 ---
 

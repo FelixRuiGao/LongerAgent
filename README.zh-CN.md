@@ -18,8 +18,6 @@
 
 ![LongerAgent Terminal UI](https://raw.githubusercontent.com/FelixRuiGao/LongerAgent/main/assets/screenshot.png)
 
-https://github.com/user-attachments/assets/377fe648-d43c-45da-b111-9434b2a0dc61
-
 > **平台：** macOS。Windows 未经测试。
 >
 > **安全：** LongerAgent 不对命令做沙盒隔离，也不会在文件编辑和 Shell 执行前要求审批。请在可信环境中使用，并留意它的操作。
@@ -36,6 +34,12 @@ longeragent init
 # 启动
 longeragent
 ```
+
+## 演示
+
+并行子 Agent 调查代码架构、运行中发送异步消息、上下文压缩——一个会话内完成。
+
+https://github.com/user-attachments/assets/377fe648-d43c-45da-b111-9434b2a0dc61
 
 ---
 
