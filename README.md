@@ -20,6 +20,17 @@ A terminal AI coding agent that manages its own context proactively, runs parall
 
 > **Platform:** macOS.
 
+## Why LongerAgent
+
+Most coding agents work well for short bursts, then degrade as the session gets longer. LongerAgent is built for the opposite case:
+
+- **Long-running sessions** — context is monitored, summarized, and compacted before it collapses
+- **Interruptible work** — you can send a new message while the agent is still executing
+- **Parallel execution** — delegate exploration and implementation to sub-agents in the same session
+- **Project memory** — `AGENTS.md` and the Important Log survive across sessions and compactions
+
+If you want a terminal-native agent that can stay productive through a long refactor, investigation, or multi-step task, this is the point of the project.
+
 ## Quick Start
 
 ```bash
@@ -33,6 +44,30 @@ longeragent init
 longeragent
 ```
 
+The setup wizard walks you through provider and model selection. If you prefer to edit config yourself, use [configExample.yaml](./configExample.yaml) as the reference.
+
+### First 5 Minutes
+
+Typical first session:
+
+```text
+$ longeragent
+You: audit the auth flow and find dead code
+You: while you do that, also check whether password reset uses the same token path
+You: /summarize keep the final findings and file references
+```
+
+Useful early commands:
+
+```text
+/model       # switch model/provider for the current session
+/thinking    # raise or lower reasoning depth
+/skills      # enable or disable installed skills
+/resume      # reopen an older session from log
+```
+
+> **Safety:** LongerAgent does not sandbox shell commands or file edits. Run it in trusted environments and review what it does.
+
 ## Demo
 
 Parallel sub-agents investigating a codebase, an async message mid-task, and context summarization — all in one session.
@@ -43,12 +78,23 @@ https://github.com/user-attachments/assets/377fe648-d43c-45da-b111-9434b2a0dc61
 
 ## Highlights
 
-- **Three-layer context management** — sessions that last longer and longer
-- **Parallel sub-agents** — spawn workers for concurrent tasks from YAML call files
-- **Skills system** — install, manage, and create reusable skill packages by itself
+- **Three-layer context management** — hinting, surgical summarization, and full compaction
+- **Parallel sub-agents** — spawn workers from chat or YAML call files
+- **Skills system** — install, manage, and create reusable skill packages from inside the agent
 - **Persistent memory** — `AGENTS.md` files and Important Log survive across sessions and compactions
 - **Async messaging** — talk to the agent while it's mid-task
-- **7 provider families** — Anthropic, OpenAI, Kimi, MiniMax, GLM, OpenRouter, and any OpenRouter-compatible model
+- **7 provider families** — Anthropic, OpenAI, Kimi, MiniMax, GLM, OpenRouter, and OpenRouter-compatible models
+
+## What It Feels Like
+
+LongerAgent is optimized for a specific workflow:
+
+1. Start a real task, not a toy prompt.
+2. Let the agent explore, edit, and test for a while.
+3. Interrupt it with clarifications or side requests without losing momentum.
+4. Keep the session alive by summarizing or compacting instead of restarting from scratch.
+
+That combination is the core product, more than any individual slash command or tool.
 
 ## Usage
 

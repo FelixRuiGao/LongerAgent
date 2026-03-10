@@ -20,6 +20,17 @@
 
 > **平台：** macOS。
 
+## 为什么是 LongerAgent
+
+很多 Coding Agent 在短任务里表现不错，但会话一长就开始失速。LongerAgent 是反过来设计的：
+
+- **长会话** —— 在上下文崩掉之前就监控、压缩、重置
+- **可打断执行** —— Agent 工作到一半时，你还能继续发消息
+- **并行执行** —— 同一会话里把探索和执行拆给多个子 Agent
+- **项目记忆** —— `AGENTS.md` 和 Important Log 跨会话、跨压缩保留
+
+如果你想要的是一个真正适合长时间重构、排查、迭代执行的终端 Agent，这就是它的设计目标。
+
 ## 快速开始
 
 ```bash
@@ -33,6 +44,30 @@ longeragent init
 longeragent
 ```
 
+初始化向导会带你完成 provider 和 model 的选择。如果你更想手动配置，可以直接参考 [configExample.yaml](./configExample.yaml)。
+
+### 前 5 分钟
+
+一个典型的首次会话会是这样：
+
+```text
+$ longeragent
+你：检查一下认证流程，顺便找出死代码
+你：另外也看看 password reset 是否复用了同一条 token 路径
+你：/summarize 保留最终结论和文件引用
+```
+
+前期最常用的几个命令：
+
+```text
+/model       # 切换当前会话使用的模型/provider
+/thinking    # 调高或调低推理深度
+/skills      # 启用或禁用已安装技能
+/resume      # 从日志恢复旧会话
+```
+
+> **安全提示：** LongerAgent 不会对 shell 命令或文件编辑做沙箱隔离。请只在可信环境中使用，并留意它的实际操作。
+
 ## 演示
 
 并行子 Agent 调查代码架构、运行中发送异步消息、上下文压缩——一个会话内完成。
@@ -43,12 +78,23 @@ https://github.com/user-attachments/assets/377fe648-d43c-45da-b111-9434b2a0dc61
 
 ## 亮点
 
-- **三层上下文管理** —— 会话越来越长，也不怕
-- **并行子 Agent** —— 通过 YAML 调用文件 spawn 多个 worker 并发执行
-- **Skills 系统** —— 自主搜索、安装和管理可复用的技能包
+- **三层上下文管理** —— 提示、精确压缩、全量 compact 三层协作
+- **并行子 Agent** —— 可在对话里或通过 YAML 调用文件派发任务
+- **Skills 系统** —— 直接在 Agent 内安装、管理、创建可复用技能包
 - **持久记忆** —— `AGENTS.md` 和 Important Log 跨会话、跨压缩存续
 - **异步消息** —— Agent 工作中随时发送消息，不用等它完成
-- **7 大 Provider** —— Anthropic、OpenAI、Kimi、MiniMax、GLM、OpenRouter，以及任何 OpenRouter 兼容模型
+- **7 大 Provider** —— Anthropic、OpenAI、Kimi、MiniMax、GLM、OpenRouter，以及 OpenRouter 兼容模型
+
+## 实际使用感受
+
+LongerAgent 重点优化的是这样一条工作流：
+
+1. 直接开始做真实任务，而不是演示型 prompt。
+2. 让 Agent 连续探索、修改、测试一段时间。
+3. 中途随时插话补充要求，不需要重新开局。
+4. 通过 summarize 或 compact 维持会话寿命，而不是上下文一满就从头再来。
+
+这个组合本身，才是 LongerAgent 的核心价值，而不只是某一个命令或工具。
 
 ## 使用
 
