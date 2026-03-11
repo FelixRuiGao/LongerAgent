@@ -2,6 +2,8 @@
  * Shared provider/model catalog used by setup and runtime model picker.
  */
 
+import { getManagedCredentialEnvVar } from "./managed-provider-credentials.js";
+
 export interface ProviderPresetModel {
   /** Stable selector used by `/model` and init choices. */
   key: string;
@@ -28,6 +30,10 @@ export interface ProviderPreset {
   groupLabel?: string;
   /** Display label for this preset within its group (middle level, e.g. "Kimi-Global"). */
   subLabel?: string;
+  /** Whether this is a local inference server (oMLX, LM Studio, etc.). Local providers skip API key prompts and use dynamic model discovery. */
+  localServer?: boolean;
+  /** Default base URL for local servers (e.g. "http://localhost:8000/v1"). */
+  defaultBaseUrl?: string;
 }
 
 const KIMI_MODELS = [
@@ -103,51 +109,67 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   // ── Moonshot (Kimi) — three-level: group → region/plan → model ──
   {
-    id: "kimi", name: "Moonshot (Kimi) Global", envVar: "KIMI_API_KEY",
+    id: "kimi", name: "Moonshot (Kimi) Global", envVar: getManagedCredentialEnvVar("kimi")!,
     group: "kimi", groupLabel: "Moonshot (Kimi)", subLabel: "Kimi-Global",
     models: KIMI_MODELS,
   },
   {
-    id: "kimi-cn", name: "Moonshot (Kimi) China", envVar: "KIMI_CN_API_KEY",
+    id: "kimi-cn", name: "Moonshot (Kimi) China", envVar: getManagedCredentialEnvVar("kimi-cn")!,
     group: "kimi", groupLabel: "Moonshot (Kimi)", subLabel: "Kimi-China",
     models: KIMI_MODELS,
   },
   {
-    id: "kimi-code", name: "Kimi Code (Coding Plan)", envVar: "KIMI_CODE_API_KEY",
+    id: "kimi-code", name: "Kimi Code (Coding Plan)", envVar: getManagedCredentialEnvVar("kimi-code")!,
     group: "kimi", groupLabel: "Moonshot (Kimi)", subLabel: "Kimi-Code",
     models: KIMI_MODELS,
   },
   // ── MiniMax — three-level ──
   {
-    id: "minimax", name: "MiniMax (Global)", envVar: "MINIMAX_API_KEY",
+    id: "minimax", name: "MiniMax (Global)", envVar: getManagedCredentialEnvVar("minimax")!,
     group: "minimax", groupLabel: "MiniMax", subLabel: "MiniMax-Global",
     models: MINIMAX_MODELS,
   },
   {
-    id: "minimax-cn", name: "MiniMax (China)", envVar: "MINIMAX_CN_API_KEY",
+    id: "minimax-cn", name: "MiniMax (China)", envVar: getManagedCredentialEnvVar("minimax-cn")!,
     group: "minimax", groupLabel: "MiniMax", subLabel: "MiniMax-China",
     models: MINIMAX_MODELS,
   },
   // ── z.ai (GLM/Zhipu) — three-level ──
   {
-    id: "glm", name: "GLM / Zhipu (China)", envVar: "GLM_API_KEY",
+    id: "glm", name: "GLM / Zhipu (China)", envVar: getManagedCredentialEnvVar("glm")!,
     group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-China",
     models: GLM_MODELS,
   },
   {
-    id: "glm-intl", name: "GLM / Zhipu (Global)", envVar: "GLM_INTL_API_KEY",
+    id: "glm-intl", name: "GLM / Zhipu (Global)", envVar: getManagedCredentialEnvVar("glm-intl")!,
     group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-Global",
     models: GLM_MODELS,
   },
   {
-    id: "glm-code", name: "GLM / Zhipu (China Coding)", envVar: "GLM_API_KEY",
+    id: "glm-code", name: "GLM / Zhipu (China Coding)", envVar: getManagedCredentialEnvVar("glm-code")!,
     group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-China-Code",
     models: GLM_MODELS,
   },
   {
-    id: "glm-intl-code", name: "GLM / Zhipu (Global Coding)", envVar: "GLM_INTL_API_KEY",
+    id: "glm-intl-code", name: "GLM / Zhipu (Global Coding)", envVar: getManagedCredentialEnvVar("glm-intl-code")!,
     group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-Global-Code",
     models: GLM_MODELS,
+  },
+  // ── Local inference servers ──
+  {
+    id: "ollama", name: "Ollama (Local)", envVar: "_OLLAMA_LOCAL",
+    localServer: true, defaultBaseUrl: "http://localhost:11434/v1",
+    models: [],
+  },
+  {
+    id: "omlx", name: "oMLX (Local)", envVar: "_OMLX_LOCAL",
+    localServer: true, defaultBaseUrl: "http://localhost:8000/v1",
+    models: [],
+  },
+  {
+    id: "lmstudio", name: "LM Studio (Local)", envVar: "_LMSTUDIO_LOCAL",
+    localServer: true, defaultBaseUrl: "http://localhost:1234/v1",
+    models: [],
   },
   // ── OpenRouter (no group field; sub-grouped by vendor prefix in the picker) ──
   {

@@ -1,14 +1,25 @@
 /**
- * Configuration management — load YAML config, resolve env vars,
- * auto-detect model capabilities from known lookup tables.
+ * Configuration management — resolve env vars, auto-detect model
+ * capabilities from known lookup tables, build Config from preferences.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as yaml from "js-yaml";
 import { readOAuthAccessToken, hasOAuthTokens } from "./auth/openai-oauth.js";
+import { getLongerAgentHomeDir } from "./home-path.js";
+import {
+  findProviderPreset,
+  findProviderPresetModel,
+  PROVIDER_PRESETS,
+} from "./provider-presets.js";
+import {
+  MANAGED_PROVIDER_CREDENTIAL_SPECS,
+  isManagedProvider,
+} from "./managed-provider-credentials.js";
+import type { LocalProviderConfig } from "./persistence.js";
+
+export { LONGERAGENT_HOME_DIR } from "./home-path.js";
 
 // ------------------------------------------------------------------
 // Data interfaces
@@ -47,12 +58,6 @@ export interface MCPServerConfig {
   env: Record<string, string>;
   envAllowlist?: string[];
   sensitiveTools?: string[];
-}
-
-export interface PathsConfig {
-  projectRoot: string;
-  sessionArtifacts: string;
-  systemData: string;
 }
 
 // ------------------------------------------------------------------
@@ -297,18 +302,6 @@ export function getWebSearchSupport(model: string, explicit?: boolean, provider?
 // Environment variable resolution
 // ------------------------------------------------------------------
 
-function resolveEnv(value: string): string {
-  if (typeof value === "string" && value.startsWith("${") && value.endsWith("}")) {
-    const envName = value.slice(2, -1);
-    const resolved = process.env[envName];
-    if (resolved === undefined) {
-      throw new Error(`Environment variable '${envName}' is not set`);
-    }
-    return resolved;
-  }
-  return value;
-}
-
 function parseEnvRef(value: string): string | null {
   if (typeof value === "string" && value.startsWith("${") && value.endsWith("}")) {
     return value.slice(2, -1);
@@ -392,10 +385,7 @@ function optionalConfigBooleanField(
 // ------------------------------------------------------------------
 
 /** Default home directory for LongerAgent configuration. */
-export const LONGERAGENT_HOME_DIR = ".longeragent";
-
 export interface ResolvedPaths {
-  configPath: string | null;      // null = not found → trigger wizard
   templatesPath: string | null;
   promptsPath: string | null;
   skillsPath: string | null;
@@ -403,32 +393,17 @@ export interface ResolvedPaths {
 }
 
 /**
- * Discover config, templates, and skills paths.
+ * Discover templates, prompts, and skills paths.
  *
  * Discovery chain (highest priority first):
- *   1. CLI flags (--config, --templates)
+ *   1. CLI flag (--templates)
  *   2. ~/.longeragent/
  *   3. Current working directory
  */
-export function resolveConfigPaths(opts?: {
-  configFlag?: string;
+export function resolveAssetPaths(opts?: {
   templatesFlag?: string;
 }): ResolvedPaths {
-  const home = join(homedir(), LONGERAGENT_HOME_DIR);
-
-  // --- Config ---
-  let configPath: string | null = null;
-  if (opts?.configFlag) {
-    configPath = existsSync(opts.configFlag) ? opts.configFlag : null;
-  } else {
-    const homeConfig = join(home, "config.yaml");
-    const cwdConfig = join(process.cwd(), "config.yaml");
-    if (existsSync(homeConfig)) {
-      configPath = homeConfig;
-    } else if (existsSync(cwdConfig)) {
-      configPath = cwdConfig;
-    }
-  }
+  const home = getLongerAgentHomeDir();
 
   // --- Templates ---
   let templatesPath: string | null = null;
@@ -482,7 +457,7 @@ export function resolveConfigPaths(opts?: {
     }
   }
 
-  return { configPath, templatesPath, promptsPath, skillsPath, homeDir: home };
+  return { templatesPath, promptsPath, skillsPath, homeDir: home };
 }
 
 function isDir(p: string): boolean {
@@ -509,6 +484,9 @@ export function getBundledAssetsDir(): string {
 // ------------------------------------------------------------------
 
 const PROVIDER_URLS: Record<string, string> = {
+  "ollama": "http://localhost:11434/v1",
+  "omlx": "http://localhost:8000/v1",
+  "lmstudio": "http://localhost:1234/v1",
   "openai-codex": "https://chatgpt.com/backend-api/codex",
   "kimi": "https://api.moonshot.ai/v1",
   "kimi-cn": "https://api.moonshot.cn/v1",
@@ -528,27 +506,90 @@ const PROVIDER_URLS: Record<string, string> = {
 // ------------------------------------------------------------------
 
 export class Config {
-  private _data: Record<string, unknown>;
-  private _rawModels: Record<string, Record<string, unknown>>;
+  private _rawModels: Record<string, Record<string, unknown>> = {};
   private _models: Map<string, ModelConfig> = new Map();
   private _mcpServers: MCPServerConfig[];
 
-  constructor(opts?: { path?: string; raw?: Record<string, unknown> }) {
-    if (opts?.raw) {
-      this._data = opts.raw;
-    } else if (opts?.path) {
-      this._data = this._loadYaml(opts.path);
-    } else {
-      this._data = { models: {} };
-    }
-
-    this._rawModels = (this._data["models"] as Record<string, Record<string, unknown>>) ?? {};
-    this._mcpServers = this._parseMcpServers();
+  constructor(opts: {
+    providerEnvVars?: Record<string, string>;
+    localProviders?: Record<string, LocalProviderConfig>;
+    mcpServers?: MCPServerConfig[];
+  }) {
+    this._mcpServers = opts.mcpServers ?? [];
+    this._populateFromPreferences(
+      opts.providerEnvVars ?? {},
+      opts.localProviders ?? {},
+    );
   }
 
-  private _loadYaml(path: string): Record<string, unknown> {
-    const content = readFileSync(path, "utf-8");
-    return (yaml.load(content) as Record<string, unknown>) ?? {};
+  /**
+   * Populate the raw model map from provider env-var mappings and local server configs.
+   * For each configured provider, all preset models are registered.
+   * For each local server, a single model entry is registered.
+   */
+  private _populateFromPreferences(
+    providerEnvVars: Record<string, string>,
+    localProviders: Record<string, LocalProviderConfig>,
+  ): void {
+    const preferenceApiKey = (providerId: string, source: string): string => {
+      if (
+        providerId === "openai-codex"
+        && (source === "_OPENAI_CODEX_OAUTH" || source === "oauth:openai-codex")
+      ) {
+        return "oauth:openai-codex";
+      }
+      if (source.startsWith("${") && source.endsWith("}")) {
+        return source;
+      }
+      return `\${${source}}`;
+    };
+
+    // Cloud / standard providers
+    for (const [providerId, envVar] of Object.entries(providerEnvVars)) {
+      const preset = findProviderPreset(providerId);
+      if (!preset || preset.localServer || isManagedProvider(providerId)) continue;
+
+      for (const model of preset.models) {
+        const name = `${providerId}:${model.key}`;
+        this._rawModels[name] = {
+          provider: providerId,
+          model: model.id,
+          api_key: preferenceApiKey(providerId, envVar),
+          ...(model.config ?? {}),
+        };
+      }
+    }
+
+    // Managed cloud providers: resolve directly from fixed LongerAgent env slots.
+    for (const spec of MANAGED_PROVIDER_CREDENTIAL_SPECS) {
+      const raw = process.env[spec.internalEnvVar];
+      if (typeof raw !== "string" || raw.trim() === "") continue;
+      const preset = findProviderPreset(spec.providerId);
+      if (!preset || preset.localServer) continue;
+
+      for (const model of preset.models) {
+        const name = `${spec.providerId}:${model.key}`;
+        this._rawModels[name] = {
+          provider: spec.providerId,
+          model: model.id,
+          api_key: preferenceApiKey(spec.providerId, spec.internalEnvVar),
+          ...(model.config ?? {}),
+        };
+      }
+    }
+
+    // Local inference servers
+    for (const [providerId, local] of Object.entries(localProviders)) {
+      const name = `${providerId}:${local.model}`;
+      this._rawModels[name] = {
+        provider: providerId,
+        model: local.model,
+        api_key: "local",
+        base_url: local.baseUrl,
+        context_length: local.contextLength,
+        supports_web_search: false,
+      };
+    }
   }
 
   private _buildModel(name: string, cfg: Record<string, unknown>): ModelConfig {
@@ -679,92 +720,29 @@ export class Config {
   }
 
   /**
-   * Insert or replace a raw model config at runtime.
-   * This mutates in-memory config only; it does not write config.yaml.
+   * Insert or replace a raw model config at runtime (in-memory only).
    */
   upsertModelRaw(name: string, cfg: Record<string, unknown>): void {
     this._rawModels[name] = { ...cfg };
-    if (!this._data["models"] || typeof this._data["models"] !== "object") {
-      this._data["models"] = {};
-    }
-    (this._data["models"] as Record<string, Record<string, unknown>>)[name] = this._rawModels[name];
     this._models.delete(name);
   }
 
   /**
    * Return the best default model name.
-   * Priority: explicit default_model > first with resolvable API key > first model.
+   * Priority: first with resolvable API key > first model.
    */
   get defaultModel(): string | undefined {
-    // 1. Explicit config key
-    const explicit = this._data["default_model"] as string | undefined;
-    if (explicit && explicit in this._rawModels) return explicit;
-
-    // 2. First model with resolvable API key
     for (const [name, cfg] of Object.entries(this._rawModels)) {
       const apiKeyRaw = (cfg["api_key"] as string) ?? "";
       if (typeof apiKeyRaw === "string" && apiKeyRaw.startsWith("${") && apiKeyRaw.endsWith("}")) {
         const envName = apiKeyRaw.slice(2, -1);
         if (process.env[envName]) return name;
       } else if (apiKeyRaw) {
-        return name; // literal key, always available
+        return name;
       }
     }
-
-    // 3. Fallback: first model
     const names = Object.keys(this._rawModels);
     return names.length > 0 ? names[0] : undefined;
-  }
-
-  /** Return the sub_agent_model config name, or undefined if not set. */
-  get subAgentModelName(): string | undefined {
-    return this._data["sub_agent_model"] as string | undefined;
-  }
-
-  /** Return path overrides from config.yaml `paths:` section. */
-  get pathOverrides(): Partial<PathsConfig> {
-    const raw = this._data["paths"] as Record<string, string> | undefined;
-    if (!raw) return {};
-    const result: Partial<PathsConfig> = {};
-    if (raw["project_root"]) result.projectRoot = raw["project_root"];
-    if (raw["session_artifacts"]) result.sessionArtifacts = raw["session_artifacts"];
-    if (raw["system_data"]) result.systemData = raw["system_data"];
-    return result;
-  }
-
-  // ------------------------------------------------------------------
-  // MCP server configuration
-  // ------------------------------------------------------------------
-
-  private _parseMcpServers(): MCPServerConfig[] {
-    const raw = this._data["mcp_servers"] as Record<string, Record<string, unknown>> | undefined;
-    if (!raw) return [];
-
-    const servers: MCPServerConfig[] = [];
-    for (const [name, cfg] of Object.entries(raw)) {
-      const env: Record<string, string> = {};
-      const rawEnv = cfg["env"] as Record<string, string> | undefined;
-      if (rawEnv) {
-        for (const [k, v] of Object.entries(rawEnv)) {
-          env[k] = resolveEnv(String(v));
-        }
-      }
-      servers.push({
-        name,
-        transport: (cfg["transport"] as "stdio" | "sse") ?? "stdio",
-        command: (cfg["command"] as string) ?? "",
-        args: (cfg["args"] as string[]) ?? [],
-        url: (cfg["url"] as string) ?? "",
-        env,
-        envAllowlist: Array.isArray(cfg["env_allowlist"])
-          ? (cfg["env_allowlist"] as unknown[]).map((v) => String(v))
-          : undefined,
-        sensitiveTools: Array.isArray(cfg["sensitive_tools"])
-          ? (cfg["sensitive_tools"] as unknown[]).map((v) => String(v))
-          : undefined,
-      });
-    }
-    return servers;
   }
 
   get mcpServerConfigs(): MCPServerConfig[] {

@@ -12,18 +12,13 @@ function makeTempDir(prefix: string): string {
 }
 
 function makeConfig(): Config {
-  return new Config({
-    raw: {
-      default_model: "test-model",
-      models: {
-        "test-model": {
-          provider: "openai",
-          model: "gpt-5.2",
-          api_key: "dummy-key",
-        },
-      },
-    },
+  const cfg = new Config({});
+  cfg.upsertModelRaw("test-model", {
+    provider: "openai",
+    model: "gpt-5.2",
+    api_key: "dummy-key",
   });
+  return cfg;
 }
 
 describe("template type validation", () => {

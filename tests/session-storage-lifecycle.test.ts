@@ -165,7 +165,7 @@ describe("session storage lifecycle", () => {
 
       expect(store.sessionDir).toBeUndefined();
       expect(systemContent).toContain("{SESSION_ARTIFACTS}");
-      expect(systemContent).toContain(projectRoot);
+      expect(systemContent).toContain(store.projectDir);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });

@@ -27,14 +27,13 @@ import {
 import { gunzipSync, gzipSync } from "node:zlib";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { getLongerAgentHomeDir } from "./home-path.js";
 import { LogIdAllocator, type LogEntry, type LogEntryType, type TuiDisplayKind } from "./log-entry.js";
 
 // ------------------------------------------------------------------
 // Constants
 // ------------------------------------------------------------------
 
-const DEFAULT_LONGERAGENT_DIRNAME = ".longeragent";
-const ENV_BASE_DIR = "LONGERAGENT_HOME";
 const GLOBAL_TUI_PREFERENCES_FILE = "tui-preferences.json";
 
 // ------------------------------------------------------------------
@@ -49,9 +48,7 @@ function projectSlug(projectPath: string): string {
 
 function resolvePreferredBaseDir(baseDir?: string): string {
   if (baseDir) return baseDir.replace(/^~/, homedir());
-  const envValue = process.env[ENV_BASE_DIR];
-  if (envValue) return envValue.replace(/^~/, homedir());
-  return join(homedir(), DEFAULT_LONGERAGENT_DIRNAME);
+  return getLongerAgentHomeDir();
 }
 
 function resolveSessionTimezone(): string {
@@ -249,6 +246,9 @@ export class SessionStore {
           accentColor: raw.accent_color ?? undefined,
           cacheHitEnabled: raw.cache_hit_enabled ?? true,
           disabledSkills: Array.isArray(raw.disabled_skills) ? raw.disabled_skills : undefined,
+          providerEnvVars: raw.provider_env_vars ?? undefined,
+          localProviders: raw.local_providers ?? undefined,
+          contextRatio: typeof raw.context_ratio === "number" ? raw.context_ratio : undefined,
         });
       } catch {
         continue;
@@ -278,6 +278,9 @@ export class SessionStore {
             cache_hit_enabled: payload.cacheHitEnabled,
             accent_color: payload.accentColor ?? null,
             disabled_skills: payload.disabledSkills ?? null,
+            provider_env_vars: payload.providerEnvVars ?? null,
+            local_providers: payload.localProviders ?? null,
+            context_ratio: payload.contextRatio ?? null,
           }, null, 2),
         );
         renameSync(tmp, file);
@@ -373,6 +376,13 @@ export interface LogSessionMeta {
   activePlanFile?: string;
 }
 
+/** Local inference server config (oMLX, LM Studio, etc.) */
+export interface LocalProviderConfig {
+  baseUrl: string;
+  model: string;
+  contextLength: number;
+}
+
 export interface GlobalTuiPreferences {
   version: number;
   modelConfigName?: string;
@@ -383,6 +393,12 @@ export interface GlobalTuiPreferences {
   cacheHitEnabled: boolean;
   accentColor?: string;
   disabledSkills?: string[];
+  /** Provider → environment variable name mapping (e.g. { "openai": "OPENAI_API_KEY_1" }) */
+  providerEnvVars?: Record<string, string>;
+  /** Local inference server configurations (e.g. { "lmstudio": { baseUrl, model, contextLength } }) */
+  localProviders?: Record<string, LocalProviderConfig>;
+  /** Context window multiplier (0.0–1.0). Effective context = contextLength × contextRatio. Default 1.0. */
+  contextRatio?: number;
 }
 
 export function createGlobalTuiPreferences(

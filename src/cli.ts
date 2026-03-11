@@ -7,22 +7,26 @@
  *
  *   longeragent                       # auto-detect config
  *   longeragent init                  # run initialization wizard
- *   longeragent --config my.yaml      # explicit config path
  *   longeragent --templates ./tpls    # explicit templates path
  *   longeragent --verbose             # enable debug logging
  */
 
-import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 
-import { Config, resolveConfigPaths, getBundledAssetsDir } from "./config.js";
+import { Config, resolveAssetPaths, getBundledAssetsDir } from "./config.js";
 import { Agent } from "./agents/agent.js";
 import { Session } from "./session.js";
 import { loadTemplates } from "./templates/loader.js";
 import { loadSkillsMulti } from "./skills/loader.js";
 import { SessionStore } from "./persistence.js";
-import { loadSettingsFile, resolveSettings } from "./settings.js";
+import { loadMcpServers } from "./mcp-config.js";
+import { loadDotenv } from "./dotenv.js";
+import { getLongerAgentHomeDir } from "./home-path.js";
+import { checkForUpdates } from "./update-check.js";
+import { VERSION } from "./version.js";
 import {
   buildDefaultRegistry,
   registerSkillCommands,
@@ -30,6 +34,7 @@ import {
   resolveModelSelection,
 } from "./commands.js";
 import type { PersistedModelSelection } from "./model-selection.js";
+import { hasAnyManagedCredential, isManagedProvider } from "./managed-provider-credentials.js";
 import type { Session as TuiSession } from "./tui/types.js";
 import { setAccent } from "./tui/theme.js";
 
@@ -62,12 +67,12 @@ function identifyPrimaryAgent(
 // Main
 // ------------------------------------------------------------------
 
-async function main(): Promise<void> {
+export async function main(argv: string[] = process.argv): Promise<void> {
   const program = new Command();
   program
     .name("longeragent")
+    .version(VERSION, "-V, --version", "Output the current version")
     .description("A terminal AI coding agent built for long sessions")
-    .option("--config <path>", "Path to config.yaml")
     .option("--templates <path>", "Path to agent_templates directory")
     .option("--verbose", "Enable debug logging");
 
@@ -95,16 +100,22 @@ async function main(): Promise<void> {
   // when no subcommand is provided.
   program.action(() => {});
 
-  await program.parseAsync(process.argv);
+  // Load ~/.longeragent/.env before dispatching any subcommand so `init`
+  // can detect previously saved keys and offer the expected reuse flow.
+  loadDotenv(getLongerAgentHomeDir());
+
+  await program.parseAsync(argv);
 
   // If a subcommand ran, exit — don't continue into TUI
   if (ranSubcommand) return;
 
   const opts = program.opts<{
-    config?: string;
     templates?: string;
     verbose?: boolean;
   }>();
+
+  // Start update check in background (non-blocking)
+  const showUpdateNotice = checkForUpdates(VERSION);
 
   // Logging
   if (opts.verbose) {
@@ -112,44 +123,60 @@ async function main(): Promise<void> {
     console.debug = (...args: unknown[]) => origDebug("[DEBUG]", ...args);
   }
 
-  // Resolve paths with discovery chain: CLI flags → ~/.longeragent/ → cwd/
-  let paths = resolveConfigPaths({
-    configFlag: opts.config,
-    templatesFlag: opts.templates,
-  });
+  // Session store (also used for loading preferences)
+  let store: SessionStore;
+  try {
+    store = new SessionStore({ projectPath: process.cwd() });
+  } catch (e) {
+    console.error(
+      `Error: Failed to initialize session storage.\n` +
+      `Reason: ${e}\n` +
+      `Possible causes:\n` +
+      `  - File permission issues`,
+    );
+    process.exit(1);
+  }
 
-  // If no config found, run the initialization wizard
-  if (!paths.configPath) {
-    console.log("No configuration found. Starting setup wizard...\n");
+  // Load global preferences (provider env vars, model selection, etc.)
+  let globalPreferences = store.loadGlobalPreferences();
+
+  // If no providers configured, run initialization wizard
+  const hasLegacyCloudProviders = Boolean(
+    globalPreferences.providerEnvVars
+      && Object.keys(globalPreferences.providerEnvVars).some((providerId) => !isManagedProvider(providerId)),
+  );
+  const hasProviders = hasLegacyCloudProviders
+    || (globalPreferences.localProviders && Object.keys(globalPreferences.localProviders).length > 0)
+    || hasAnyManagedCredential();
+
+  if (!hasProviders) {
+    console.log("No providers configured. Starting setup wizard...\n");
     try {
       const { runInitWizard } = await import("./init-wizard.js");
       await runInitWizard();
-      // Re-resolve paths after wizard completes
-      paths = resolveConfigPaths({
-        configFlag: opts.config,
-        templatesFlag: opts.templates,
-      });
+      // Re-load preferences after wizard completes
+      globalPreferences = store.loadGlobalPreferences();
     } catch {
       console.error(
-        "Error: no config.yaml found.\n" +
-        "  Run 'longeragent init' to set up, or use --config to specify the path.",
+        "Error: no providers configured.\n" +
+        "  Run 'longeragent init' to set up providers.",
       );
       process.exit(1);
     }
   }
 
-  if (!paths.configPath) {
-    console.error(
-      "Error: no config.yaml found after setup.\n" +
-      "  Run 'longeragent init' to set up, or use --config to specify the path.",
-    );
-    process.exit(1);
-  }
+  // Resolve asset paths: templates, prompts, skills
+  const paths = resolveAssetPaths({
+    templatesFlag: opts.templates,
+  });
 
-  const configPath = paths.configPath;
-
-  // Load config
-  const config = new Config({ path: configPath });
+  // Build Config from preferences
+  const mcpServers = loadMcpServers(paths.homeDir);
+  const config = new Config({
+    providerEnvVars: globalPreferences.providerEnvVars ?? {},
+    localProviders: globalPreferences.localProviders ?? {},
+    mcpServers,
+  });
 
   // Refresh OAuth tokens if any model uses them (before building providers)
   const oauthEntries = config.listModelEntries().filter(
@@ -167,16 +194,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // Load user settings (~/.longeragent/settings.json)
-  const rawSettings = loadSettingsFile(paths.homeDir);
-  const settings = resolveSettings(rawSettings);
-
-  // Display settings warnings (invalid thresholds, clamped values, etc.)
-  for (const warning of settings.warnings) {
-    console.warn(`Warning: ${warning}`);
-  }
-
-  // Initialise MCP client manager (if mcp_servers configured)
+  // Initialise MCP client manager (if mcp.json configured)
   let mcpManager: unknown = null;
   if (config.mcpServerConfigs.length > 0) {
     try {
@@ -185,7 +203,7 @@ async function main(): Promise<void> {
       mcpManager = new MCPClientManager(config.mcpServerConfigs);
     } catch {
       console.warn(
-        "Warning: mcp_servers configured but MCP client module not available. " +
+        "Warning: mcp.json configured but MCP client module not available. " +
           "Install with: npm install @modelcontextprotocol/sdk",
       );
     }
@@ -228,22 +246,8 @@ async function main(): Promise<void> {
   }
   const skills = loadSkillsMulti(skillRoots);
 
-  // Session store (session directory is created lazily on the first turn)
-  let store: SessionStore;
-  try {
-    store = new SessionStore({ projectPath: process.cwd() });
-  } catch (e) {
-    console.error(
-      `Error: Failed to initialize session storage.\n` +
-      `Reason: ${e}\n` +
-      `Possible causes:\n` +
-      `  - Invalid LONGERAGENT_HOME configuration\n` +
-      `  - File permission issues`,
-    );
-    process.exit(1);
-  }
-
-  // Build Session with store attached from the start
+  // Build Session
+  const contextRatio = globalPreferences.contextRatio ?? 1.0;
   const session = new Session({
     primaryAgent: primary as never,
     config,
@@ -254,10 +258,10 @@ async function main(): Promise<void> {
     mcpManager: mcpManager as never,
     promptsDirs,
     store: store as never,
-    settings,
+    contextRatio,
   });
 
-  const globalPreferences = store.loadGlobalPreferences();
+  // Restore model selection from preferences
   try {
     if (globalPreferences.modelConfigName) {
       try {
@@ -310,6 +314,9 @@ async function main(): Promise<void> {
   const commandRegistry = buildDefaultRegistry();
   registerSkillCommands(commandRegistry, session.skills);
 
+  // Show update notice (if background check found a newer version)
+  showUpdateNotice();
+
   // Launch TUI
   const { launchTui } = await import("./tui/launch.js");
   await launchTui(session as unknown as TuiSession, commandRegistry, store, {
@@ -317,7 +324,20 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+function normalizeEntryPath(pathValue: string | undefined): string | null {
+  if (!pathValue) return null;
+  try {
+    return realpathSync(resolve(pathValue));
+  } catch {
+    return null;
+  }
+}
+
+const entryPath = normalizeEntryPath(process.argv[1]);
+const modulePath = normalizeEntryPath(fileURLToPath(import.meta.url));
+if (entryPath && modulePath && entryPath === modulePath) {
+  main().catch((err) => {
+    console.error("Fatal error:", err);
+    process.exit(1);
+  });
+}

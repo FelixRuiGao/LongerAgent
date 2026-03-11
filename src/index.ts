@@ -18,9 +18,22 @@ export {
   getMultimodalSupport,
   getThinkingSupport,
   getWebSearchSupport,
-  resolveConfigPaths,
+  resolveAssetPaths,
+  getBundledAssetsDir,
   LONGERAGENT_HOME_DIR,
 } from "./config.js";
+
+// -- Dotenv ---------------------------------------------------------------
+export { loadDotenv, setDotenvKey } from "./dotenv.js";
+
+// -- MCP config -----------------------------------------------------------
+export { loadMcpServers } from "./mcp-config.js";
+
+// -- Model discovery ------------------------------------------------------
+export { fetchModelsFromServer, type DiscoveredModel } from "./model-discovery.js";
+
+// -- Update check ---------------------------------------------------------
+export { checkForUpdates } from "./update-check.js";
 
 // -- Session --------------------------------------------------------------
 export { Session } from "./session.js";
@@ -137,4 +150,4 @@ export type {
 } from "./tui/types.js";
 
 // -- Version --------------------------------------------------------------
-export const VERSION = "0.1.0";
+export { VERSION } from "./version.js";

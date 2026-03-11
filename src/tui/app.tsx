@@ -30,6 +30,10 @@ import { LogoPanel } from "./components/logo-panel.js";
 import { StatusBar, type ActivityPhase } from "./components/status-bar.js";
 import { ConversationPanel } from "./components/conversation-panel.js";
 import { AskPanel } from "./components/ask-panel.js";
+import {
+  CommandPromptPanel,
+  type CommandPromptState,
+} from "./components/command-prompt-panel.js";
 import { PlanPanel, type PlanCheckpointUi } from "./components/plan-panel.js";
 import { InputPanel, type InputPanelHandle } from "./components/input-panel.js";
 import { InputProtocolParser } from "./input/protocol.js";
@@ -69,6 +73,10 @@ import type {
   AgentQuestionDecision,
   AgentQuestionItem,
 } from "../ask.js";
+import type {
+  PromptSecretRequest,
+  PromptSelectRequest,
+} from "../provider-credential-flow.js";
 
 // ------------------------------------------------------------------
 // Goodbye messages
@@ -182,6 +190,7 @@ export function App({
   const [reviewMode, setReviewMode] = useState(false);
   // Plan panel state
   const [planCheckpoints, setPlanCheckpoints] = useState<PlanCheckpointUi[] | null>(null);
+  const [commandPrompt, setCommandPrompt] = useState<CommandPromptState | null>(null);
 
   const cancelledRef = useRef(false);
   const lastCtrlCRef = useRef(0);
@@ -194,6 +203,7 @@ export function App({
   const runTurnRef = useRef<((input: string) => void) | null>(null);
   const runManualSummarizeRef = useRef<((instruction: string) => void) | null>(null);
   const runManualCompactRef = useRef<((instruction: string) => void) | null>(null);
+  const commandPromptResolveRef = useRef<((value: string | undefined) => void) | null>(null);
 
   // Raw mode
   useEffect(() => {
@@ -291,6 +301,48 @@ export function App({
     }
     showInputHint(markdownMode === "raw" ? "Markdown raw: ON" : "Markdown raw: OFF");
   }, [markdownMode, showInputHint]);
+
+  const resolveCommandPrompt = useCallback((value: string | undefined) => {
+    const resolve = commandPromptResolveRef.current;
+    commandPromptResolveRef.current = null;
+    setCommandPrompt(null);
+    resolve?.(value);
+  }, []);
+
+  const promptSelect = useCallback((request: PromptSelectRequest): Promise<string | undefined> => {
+    return new Promise((resolve) => {
+      commandPromptResolveRef.current = resolve;
+      setCommandPrompt({
+        kind: "select",
+        message: request.message,
+        options: request.options,
+        selected: 0,
+      });
+    });
+  }, []);
+
+  const promptSecret = useCallback((request: PromptSecretRequest): Promise<string | undefined> => {
+    return new Promise((resolve) => {
+      commandPromptResolveRef.current = resolve;
+      setCommandPrompt({
+        kind: "secret",
+        message: request.message,
+        value: "",
+        cursor: 0,
+        allowEmpty: request.allowEmpty,
+        error: null,
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (commandPromptResolveRef.current) {
+        commandPromptResolveRef.current(undefined);
+        commandPromptResolveRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setAskSelectionIndex(0);
@@ -432,8 +484,10 @@ export function App({
       onManualCompactRequested: (instruction: string) => {
         runManualCompactRef.current?.(instruction);
       },
+      promptSelect,
+      promptSecret,
     };
-  }, [session, store, commandRegistry, autoSave, performExit, showInputHint]);
+  }, [session, store, commandRegistry, autoSave, performExit, showInputHint, promptSelect, promptSecret]);
 
   // ------------------------------------------------------------------
   // Progress callback (streaming)
@@ -814,6 +868,7 @@ export function App({
     (input: string): boolean => {
       clearInputHint();
 
+      // If a command is waiting for user input (e.g. API key paste), resolve it.
       if (pendingAsk) {
         if (pendingAsk.kind === "agent_question") {
           showInputHint("Use ↑/↓ to select options, ←/→ to navigate questions, Enter to confirm.", 2500);
@@ -886,6 +941,12 @@ export function App({
   // ------------------------------------------------------------------
 
   const handleCtrlC = useCallback(() => {
+    if (commandPrompt) {
+      resolveCommandPrompt(undefined);
+      clearInputHint();
+      return;
+    }
+
     if (inputPanelRef.current?.dismissOverlay()) {
       clearInputHint();
       return;
@@ -936,6 +997,8 @@ export function App({
       showInputHint("Press Ctrl+C again to exit");
     }
   }, [
+    commandPrompt,
+    resolveCommandPrompt,
     processing,
     clearInputHint,
     showInputHint,
@@ -976,6 +1039,69 @@ export function App({
       const chunk = typeof data === "string" ? data : shortcutDecoderRef.current.write(data);
       const events = shortcutParserRef.current.push(chunk);
       for (const event of events) {
+        if (commandPrompt) {
+          if (event.type !== "key" && event.type !== "insert") continue;
+          if (commandPrompt.kind === "select") {
+            if (event.type !== "key") continue;
+            if (event.key === "up" && commandPrompt.options.length > 0) {
+              setCommandPrompt((prev) => {
+                if (!prev || prev.kind !== "select" || prev.options.length === 0) return prev;
+                return {
+                  ...prev,
+                  selected: (prev.selected - 1 + prev.options.length) % prev.options.length,
+                };
+              });
+              continue;
+            }
+            if (event.key === "down" && commandPrompt.options.length > 0) {
+              setCommandPrompt((prev) => {
+                if (!prev || prev.kind !== "select" || prev.options.length === 0) return prev;
+                return {
+                  ...prev,
+                  selected: (prev.selected + 1) % prev.options.length,
+                };
+              });
+              continue;
+            }
+            if (event.key === "enter") {
+              const selected = commandPrompt.options[commandPrompt.selected];
+              resolveCommandPrompt(selected?.value);
+              continue;
+            }
+            if (event.key === "escape" || event.key === "ctrl_c") {
+              resolveCommandPrompt(undefined);
+              continue;
+            }
+            continue;
+          }
+
+          if (event.type === "key" && event.key === "enter") {
+            if (!commandPrompt.allowEmpty && commandPrompt.value.trim() === "") {
+              setCommandPrompt((prev) =>
+                prev && prev.kind === "secret"
+                  ? { ...prev, error: "API key cannot be empty." }
+                  : prev,
+              );
+              continue;
+            }
+            resolveCommandPrompt(commandPrompt.value);
+            continue;
+          }
+          if (event.type === "key" && (event.key === "escape" || event.key === "ctrl_c")) {
+            resolveCommandPrompt(undefined);
+            continue;
+          }
+          const result = applyInlineEdit(commandPrompt.value, commandPrompt.cursor, event);
+          if (result) {
+            setCommandPrompt((prev) =>
+              prev && prev.kind === "secret"
+                ? { ...prev, value: result.value, cursor: result.cursor, error: null }
+                : prev,
+            );
+          }
+          continue;
+        }
+
         // --- Review mode for multi-question ask ---
         if (pendingAsk?.kind === "agent_question" && reviewMode) {
           if (event.type !== "key") continue;
@@ -1137,6 +1263,8 @@ export function App({
     };
   }, [
     stdin,
+    commandPrompt,
+    resolveCommandPrompt,
     pendingAsk,
     resolveSelectedPendingAsk,
     resolveAgentQuestion,
@@ -1195,10 +1323,11 @@ export function App({
           optionNotes={optionNotes}
         />
       ) : null}
+      {commandPrompt ? <CommandPromptPanel prompt={commandPrompt} /> : null}
       <InputPanel
         ref={inputPanelRef}
         onSubmit={handleSubmit}
-        disabled={!!pendingAsk}
+        disabled={!!pendingAsk || !!commandPrompt}
         commandRegistry={commandRegistry}
         store={store}
         hint={inputHint}

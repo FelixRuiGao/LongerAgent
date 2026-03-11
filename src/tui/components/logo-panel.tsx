@@ -4,11 +4,8 @@
 
 import React from "react";
 import { Box, Text } from "ink";
-import { createRequire } from "node:module";
 import { theme } from "../theme.js";
-
-const require = createRequire(import.meta.url);
-const pkg = require("../../../package.json") as { version: string };
+import { VERSION } from "../../version.js";
 
 const LOGO = `\
 ╦  ╔═╗╔╗╔╔═╗╔═╗╦═╗  ╔═╗╔═╗╔═╗╔╗╔╔╦╗
@@ -38,7 +35,7 @@ export interface LogoPanelProps {
 
 export function getLogoMetaRows(
   cwd = process.cwd(),
-  version = pkg.version,
+  version = VERSION,
 ): Array<{ label: string; value: string }> {
   return [
     { label: META_LABELS.version, value: `v${version}` },

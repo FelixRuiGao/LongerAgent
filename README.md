@@ -8,9 +8,8 @@
   English | <a href="./README.zh-CN.md">中文</a>
 </p>
 <p align="center">
+  <a href="https://felixruigao.github.io/LongerAgent/"><img alt="Docs" src="https://img.shields.io/badge/docs-website-4b4bf0?style=flat-square" /></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
-  <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D18-brightgreen?style=flat-square" />
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-blue?style=flat-square&logo=typescript&logoColor=white" />
   <img alt="Author" src="https://img.shields.io/badge/author-Felix%20Rui%20Gao-4b4bf0?style=flat-square" />
 </p>
 
@@ -37,14 +36,14 @@ If you want a terminal-native agent that can stay productive through a long refa
 # Install globally
 npm install -g longer-agent
 
-# Run the setup wizard (creates ~/.longeragent/config.yaml)
+# Run the setup wizard
 longeragent init
 
 # Start
 longeragent
 ```
 
-The setup wizard walks you through provider and model selection. If you prefer to edit config yourself, use [configExample.yaml](./configExample.yaml) as the reference.
+The setup wizard walks you through provider selection, API key configuration, and model selection. All preferences are saved to `~/.longeragent/tui-preferences.json`. For GLM, Kimi, and MiniMax, LongerAgent stores endpoint-specific keys in its own managed env slots inside `~/.longeragent/.env` and can import detected external env vars during `init` or `/model`. For OpenAI (ChatGPT Login), OAuth tokens are stored in `~/.longeragent/auth.json`; no runtime API-key env var is required.
 
 ### First 5 Minutes
 
@@ -60,7 +59,8 @@ You: /summarize keep the final findings and file references
 Useful early commands:
 
 ```text
-/model       # switch model/provider for the current session
+ /model       # switch model/provider; can import or paste missing keys
+ /mcp         # connect configured MCP servers and list discovered tools
 /thinking    # raise or lower reasoning depth
 /skills      # enable or disable installed skills
 /resume      # reopen an older session from log
@@ -83,7 +83,7 @@ https://github.com/user-attachments/assets/377fe648-d43c-45da-b111-9434b2a0dc61
 - **Skills system** — install, manage, and create reusable skill packages from inside the agent
 - **Persistent memory** — `AGENTS.md` files and Important Log survive across sessions and compactions
 - **Async messaging** — talk to the agent while it's mid-task
-- **7 provider families** — Anthropic, OpenAI, Kimi, MiniMax, GLM, OpenRouter, and OpenRouter-compatible models
+- **10 providers** — Anthropic, OpenAI, Kimi, MiniMax, GLM, Ollama, oMLX, LM Studio, OpenRouter, and more
 
 ## What It Feels Like
 
@@ -169,14 +169,19 @@ Three layers work together to keep context under control:
 
 ## Supported Providers
 
-| Provider | Models | Env Variable |
+| Provider | Models | Auth |
 |----------|--------|-------------|
 | **Anthropic** | Claude Haiku 4.5, Opus 4.6, Sonnet 4.6 (+ 1M context variants) | `ANTHROPIC_API_KEY` |
 | **OpenAI** | GPT-5.2, GPT-5.2 Codex, GPT-5.3 Codex, GPT-5.4 | `OPENAI_API_KEY` or OAuth |
-| **Kimi / Moonshot** | Kimi K2.5, K2 Instruct (Global, China, Coding Plan) | `KIMI_CN_API_KEY` / `KIMI_API_KEY` |
-| **MiniMax** | M2.1, M2.5 (Global, China) | `MINIMAX_API_KEY` |
-| **GLM / Zhipu** | GLM-5, GLM-4.7 (Global, China, Coding Plan) | `GLM_API_KEY` |
+| **Kimi / Moonshot** | Kimi K2.5, K2 Instruct (Global, China, Coding Plan\*) | LongerAgent-managed slots (`LONGERAGENT_KIMI_*`); detects `MOONSHOT_API_KEY` and `KIMI_*` during setup |
+| **MiniMax** | M2.1, M2.5 (Global, China) | LongerAgent-managed slots (`LONGERAGENT_MINIMAX_*`); detects `MINIMAX_*` during setup |
+| **GLM / Zhipu** | GLM-5, GLM-4.7 (Global, China, Coding Plan) | LongerAgent-managed slots (`LONGERAGENT_GLM_*`); detects `GLM_*` during setup |
+| **Ollama** | Any local Ollama model (dynamic discovery) | — |
+| **oMLX** | Any local MLX model (dynamic discovery) | — |
+| **LM Studio** | Any local GGUF model (dynamic discovery) | — |
 | **OpenRouter** | Curated presets for Claude, GPT, Kimi, MiniMax, GLM, plus any custom model | `OPENROUTER_API_KEY` |
+
+> \* **Kimi Coding Plan note:** The `kimi-code` endpoint (`api.kimi.com/coding/v1`) is currently restricted by Moonshot to whitelisted agents. You may receive a `403 Kimi For Coding is currently only available for Coding Agents` error. Use `kimi` or `kimi-cn` (standard API) instead.
 
 ## Tools
 
@@ -192,13 +197,14 @@ Three layers work together to keep context under control:
 
 **Skills system** — Load reusable skill definitions as a dynamic `skill` tool. Manage with `/skills` (checkbox picker for enable/disable), hot-reload with `reload_skills`. Includes a built-in `skill-manager` that teaches the agent to search, download, and install new skills autonomously.
 
-**MCP Integration** — Connect to Model Context Protocol servers for additional tools.
+**MCP Integration** — Connect to Model Context Protocol servers for additional tools. Use `/mcp` to verify configured servers and inspect discovered tools before your first turn.
 
 ## Slash Commands
 
 | Command | Description |
 |---------|-------------|
-| `/model` | Switch between configured models at runtime |
+| `/model` | Switch between configured models at runtime; can prompt for missing managed-provider keys |
+| `/mcp` | Connect configured MCP servers on demand and list discovered tools |
 | `/thinking` | Control thinking/reasoning depth per model |
 | `/skills` | Enable/disable skills with a checkbox picker |
 | `/resume` | Resume a previous session from its log |
@@ -208,34 +214,17 @@ Three layers work together to keep context under control:
 ## Configuration
 
 LongerAgent loads bundled defaults from the installed package and user overrides from `~/.longeragent/`.
-`longeragent init` creates `config.yaml` plus empty override directories.
+`longeragent init` creates and updates the LongerAgent home directory, including managed API-key slots in `~/.longeragent/.env`.
 
 ```text
 ~/.longeragent/
-├── config.yaml            # Model and provider configurations (created by init)
-├── settings.json          # Runtime tuning (optional)
-├── tui-preferences.json   # Auto-saved TUI state
+├── tui-preferences.json   # Model selection, local provider config, preferences (auto-managed)
+├── .env                   # API keys and managed provider slots (0600 perms)
+├── mcp.json               # MCP server configurations (optional, user-edited)
+├── auth.json              # OAuth tokens (auto-managed)
 ├── agent_templates/       # User template overrides
 ├── skills/                # User skills
 └── prompts/               # User prompt overrides
-```
-
-See [configExample.yaml](./configExample.yaml) for a configuration reference.
-
-### Runtime Settings (`settings.json`)
-
-```jsonc
-{
-  // Override max output tokens (clamped to [4096, model max])
-  "max_output_tokens": 32000,
-  // Context management thresholds (percentage of effective context, 20-95)
-  "context": {
-    "summarize_hint_level1": 60,
-    "summarize_hint_level2": 80,
-    "compact_output": 85,
-    "compact_toolcall": 90
-  }
-}
 ```
 
 ## Architecture
@@ -245,17 +234,17 @@ LongerAgent is built around a **Session → Agent → Provider** pipeline:
 - **Session** orchestrates the turn loop, message delivery, summarization, compaction, and sub-agent lifecycle
 - **Session Log** is the single source of truth — 20+ entry types capture every runtime event; the TUI display and provider input are both projections of the same data
 - **Agent** wraps a model + system prompt + tools into a reusable execution unit
-- **Provider** adapters normalize streaming, reasoning, tool calls, and usage across 7 provider families
+- **Provider** adapters normalize streaming, reasoning, tool calls, and usage across 10 providers
 
 ## CLI Options
 
 ```text
 longeragent                     # Start with auto-detected config
+longeragent --version           # Show the current version
 longeragent init                # Run setup wizard
 longeragent oauth               # Log in to OpenAI via OAuth (device code / browser)
 longeragent oauth status        # Check OAuth login status
 longeragent oauth logout        # Log out
-longeragent --config <path>     # Use a specific config file
 longeragent --templates <path>  # Use a specific templates directory
 longeragent --verbose           # Enable debug logging
 ```

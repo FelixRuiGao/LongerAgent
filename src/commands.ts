@@ -24,6 +24,15 @@ import {
   type ProviderPresetModel,
 } from "./provider-presets.js";
 import { resolveModelSelection as resolveModelSelectionCore } from "./model-selection.js";
+import {
+  isManagedProvider,
+} from "./managed-provider-credentials.js";
+import {
+  ensureManagedProviderCredential,
+  type CredentialPromptAdapter,
+  type PromptSecretRequest,
+  type PromptSelectRequest,
+} from "./provider-credential-flow.js";
 import { resolveSkillContent, type SkillMeta } from "./skills/loader.js";
 import { ACCENT_PRESETS, DEFAULT_ACCENT, setAccent, theme } from "./tui/theme.js";
 import { hasOAuthTokens } from "./auth/openai-oauth.js";
@@ -73,6 +82,12 @@ export interface CommandContext {
 
   /** Trigger a manual compact request through the TUI execution pipeline. */
   onManualCompactRequested?: (instruction: string) => void;
+
+  /** Prompt the user to choose one option during command execution. */
+  promptSelect?: (request: PromptSelectRequest) => Promise<string | undefined>;
+
+  /** Prompt the user for a secret value during command execution. */
+  promptSecret?: (request: PromptSecretRequest) => Promise<string | undefined>;
 }
 
 /**
@@ -374,7 +389,17 @@ function persistGlobalPreferences(ctx: CommandContext): void {
   if (!ctx.store || typeof ctx.store.saveGlobalPreferences !== "function") return;
   if (typeof ctx.session.getGlobalPreferences !== "function") return;
   try {
-    ctx.store.saveGlobalPreferences(ctx.session.getGlobalPreferences());
+    const current = ctx.session.getGlobalPreferences();
+    const existing = typeof ctx.store.loadGlobalPreferences === "function"
+      ? ctx.store.loadGlobalPreferences()
+      : undefined;
+    ctx.store.saveGlobalPreferences({
+      ...existing,
+      ...current,
+      providerEnvVars: current.providerEnvVars ?? existing?.providerEnvVars,
+      localProviders: current.localProviders ?? existing?.localProviders,
+      contextRatio: current.contextRatio ?? existing?.contextRatio,
+    });
   } catch {
     // Ignore preference persistence failures during command execution.
   }
@@ -499,13 +524,7 @@ const PROVIDER_KEY_GROUP_ALIASES: Record<string, string> = {
   "openai-chat": "openai",
   "openai-responses": "openai",
   "openai-codex": "openai-codex", // Separate group — uses OAuth, not shared API key
-  "kimi-cn": "kimi",
   "kimi-ai": "kimi",
-  "kimi-code": "kimi",
-  "glm-intl": "glm",
-  "glm-code": "glm",
-  "glm-intl-code": "glm",
-  "minimax-cn": "minimax",
 };
 
 function providerKeyGroup(provider: string): string {
@@ -550,25 +569,25 @@ function readModelEntries(config: any): ModelEntryLike[] {
   return out;
 }
 
-function parseModelArgs(args: string): { target: string; apiKey?: string } {
+function parseModelArgs(args: string): { target: string } {
   const tokens = args.trim().split(/\s+/).filter(Boolean);
   const target = tokens[0] ?? "";
   const rest = tokens.slice(1);
-  let apiKey: string | undefined;
-  for (const t of rest) {
-    if (t.startsWith("key=")) {
-      apiKey = t.slice("key=".length);
-      break;
-    }
-    if (t.startsWith("api_key=")) {
-      apiKey = t.slice("api_key=".length);
-      break;
-    }
+  const inlineKeySyntax = rest.some((t) => t.startsWith("key=") || t.startsWith("api_key="));
+  if (inlineKeySyntax || rest.length === 1) {
+    throw new Error(
+      "Inline API keys in `/model` are no longer supported.\n" +
+      "Use `/model` to select the model and follow the prompt to import or paste a key,\n" +
+      "or run 'longeragent init' to configure providers.",
+    );
   }
-  if (!apiKey && rest.length === 1) {
-    apiKey = rest[0];
+  if (rest.length > 0) {
+    throw new Error(
+      "Invalid /model arguments.\n" +
+      "Use a config name or provider:model (for example `openai:gpt-5.4`).",
+    );
   }
-  return { target, apiKey };
+  return { target };
 }
 
 function parseProviderModelTarget(target: string): { provider: string; model: string } | null {
@@ -590,6 +609,17 @@ function getProviderKeySource(
   entries: ModelEntryLike[],
   provider: string,
 ): string | undefined {
+  if (isManagedProvider(provider)) {
+    const fromConfig = entries.find((e) =>
+      e.provider === provider && e.hasResolvedApiKey && e.apiKeyRaw.trim() !== ""
+    );
+    if (fromConfig) return fromConfig.apiKeyRaw;
+
+    const preset = PROVIDER_PRESETS.find((p) => p.id === provider);
+    if (preset && hasEnvApiKey(preset.envVar)) return `\${${preset.envVar}}`;
+    return undefined;
+  }
+
   const group = providerKeyGroup(provider);
   const fromConfig = entries.find((e) =>
     providerKeyGroup(e.provider) === group && e.hasResolvedApiKey && e.apiKeyRaw.trim() !== ""
@@ -634,12 +664,19 @@ function formatPresetSelectedHint(provider: string, presetModel: ProviderPresetM
   return label;
 }
 
+function createCommandPromptAdapter(ctx: CommandContext): CredentialPromptAdapter | null {
+  if (!ctx.promptSelect || !ctx.promptSecret) return null;
+  return {
+    select: (request) => ctx.promptSelect!(request),
+    secret: (request) => ctx.promptSecret!(request),
+  };
+}
+
 export function resolveModelSelection(
   session: any,
   target: string,
-  apiKey?: string,
 ) {
-  return resolveModelSelectionCore(session, target, apiKey);
+  return resolveModelSelectionCore(session, target);
 }
 
 /**
@@ -668,7 +705,9 @@ function buildModelChildren(
     const missingApiKey = !providerHasKey.get(providerKeyGroup(provider));
     const missingHint = provider === "openai-codex"
       ? "not logged in: run longeragent oauth"
-      : "key missing: run longeragent init";
+      : isManagedProvider(provider)
+        ? "key missing: select to configure"
+        : "key missing: run longeragent init";
 
     let label = item.label;
     if (isCurrent && missingApiKey) {
@@ -889,7 +928,7 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
     ctx.showMessage(
       `Current model: ${current}\n` +
       "Use /model to select a new model.\n" +
-      "For models marked 'key missing', run 'longeragent init' (or use /model provider:model key=YOUR_API_KEY).",
+      "For models marked 'key missing', run 'longeragent init' or select the model to import/paste a key.",
     );
     return;
   }
@@ -900,8 +939,28 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
   }
 
   try {
-    const { target, apiKey } = parseModelArgs(trimmed);
-    const resolvedSelection = resolveModelSelection(session, target, apiKey);
+    const { target } = parseModelArgs(trimmed);
+    let resolvedSelection;
+    try {
+      resolvedSelection = resolveModelSelection(session, target);
+    } catch (err) {
+      const parsed = parseProviderModelTarget(target);
+      const adapter = createCommandPromptAdapter(ctx);
+      if (parsed && isManagedProvider(parsed.provider) && adapter) {
+        const result = await ensureManagedProviderCredential(
+          parsed.provider,
+          adapter,
+          { mode: "model", allowReplaceExisting: false },
+        );
+        if (result.status === "skipped") {
+          ctx.showMessage("Model switch cancelled.");
+          return;
+        }
+        resolvedSelection = resolveModelSelection(session, target);
+      } else {
+        throw err;
+      }
+    }
     const { selectedConfigName, selectedHint } = resolvedSelection;
 
     // Save current session before switching
@@ -1003,7 +1062,69 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/cachehit", description: "Prompt caching", handler: cmdCacheHit, options: cacheHitOptions });
   registry.register({ name: "/theme", description: "Change accent color", handler: cmdTheme, options: themeOptions });
   registry.register({ name: "/skills", description: "Manage installed skills", handler: cmdSkills, options: skillsOptions, checkboxMode: true });
+  registry.register({ name: "/mcp", description: "Show MCP server status and tools", handler: cmdMcp });
   return registry;
+}
+
+// ------------------------------------------------------------------
+// /mcp command
+// ------------------------------------------------------------------
+
+async function cmdMcp(ctx: CommandContext): Promise<void> {
+  const session = ctx.session;
+  const mcpManager = session.mcpManager;
+
+  if (!mcpManager) {
+    ctx.showMessage(
+      "No MCP servers configured.\n" +
+      "Add servers to ~/.longeragent/mcp.json to enable MCP tools.",
+    );
+    return;
+  }
+
+  try {
+    if (typeof session.ensureMcpReady === "function") {
+      await session.ensureMcpReady();
+    } else if (typeof mcpManager.connectAll === "function") {
+      await mcpManager.connectAll();
+    }
+  } catch (err) {
+    ctx.showMessage(
+      "Failed to connect MCP servers.\n" +
+      `${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
+
+  const allTools = mcpManager.getAllTools();
+
+  if (allTools.length === 0) {
+    ctx.showMessage(
+      "MCP configured but no tools discovered.\n" +
+      "Make sure your MCP servers are running and exposing tools.",
+    );
+    return;
+  }
+
+  // Group tools by server (parse mcp__server__tool naming)
+  const byServer = new Map<string, string[]>();
+  for (const tool of allTools) {
+    const parts = tool.name.split("__");
+    const server = parts.length >= 3 ? parts[1] : "unknown";
+    if (!byServer.has(server)) byServer.set(server, []);
+    const originalName = parts.length >= 3 ? parts.slice(2).join("__") : tool.name;
+    byServer.get(server)!.push(originalName);
+  }
+
+  const lines: string[] = [`MCP: ${byServer.size} server(s), ${allTools.length} tool(s)\n`];
+  for (const [server, tools] of byServer) {
+    lines.push(`  ${server} (${tools.length} tools)`);
+    for (const t of tools) {
+      lines.push(`    - ${t}`);
+    }
+  }
+
+  ctx.showMessage(lines.join("\n"));
 }
 
 // ------------------------------------------------------------------

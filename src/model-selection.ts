@@ -6,6 +6,7 @@ import {
   findProviderPreset,
   findProviderPresetModel,
 } from "./provider-presets.js";
+import { isManagedProvider } from "./managed-provider-credentials.js";
 
 type ModelEntryLike = {
   name: string;
@@ -68,6 +69,19 @@ function getProviderKeySource(
   entries: ModelEntryLike[],
   provider: string,
 ): string | undefined {
+  if (isManagedProvider(provider)) {
+    const fromConfig = entries.find((entry) =>
+      entry.provider === provider
+        && entry.hasResolvedApiKey
+        && entry.apiKeyRaw.trim() !== "",
+    );
+    if (fromConfig) return fromConfig.apiKeyRaw;
+
+    const preset = findProviderPreset(provider);
+    if (preset && hasEnvApiKey(preset.envVar)) return `\${${preset.envVar}}`;
+    return undefined;
+  }
+
   // Exact provider match in existing config entries.
   const fromConfig = entries.find((entry) =>
     entry.provider === provider
@@ -112,7 +126,6 @@ function runtimeModelName(provider: string, model: string): string {
 export function resolveModelSelection(
   session: any,
   target: string,
-  apiKey?: string,
 ): ResolvedModelSelection {
   const config = session.config;
   let selectedConfigName = target;
@@ -154,16 +167,14 @@ export function resolveModelSelection(
   );
   const exactWithKey = exactEntries.find((entry) => entry.hasResolvedApiKey);
 
-  if (exactWithKey && !apiKey && !presetRequiresDedicatedConfig) {
+  if (exactWithKey && !presetRequiresDedicatedConfig) {
     selectedConfigName = exactWithKey.name;
   } else {
-    const keySource = (apiKey && apiKey.trim() !== "")
-      ? apiKey
-      : getProviderKeySource(entries, parsed.provider)
-        ?? (session.primaryAgent?.modelConfig?.provider === parsed.provider
-          && session.primaryAgent?.modelConfig?.apiKey
-          ? session.primaryAgent.modelConfig.apiKey
-          : undefined);
+    const keySource = getProviderKeySource(entries, parsed.provider)
+      ?? (session.primaryAgent?.modelConfig?.provider === parsed.provider
+        && session.primaryAgent?.modelConfig?.apiKey
+        ? session.primaryAgent.modelConfig.apiKey
+        : undefined);
 
     if (!keySource) {
       if (parsed.provider === "openai-codex") {
@@ -180,7 +191,7 @@ export function resolveModelSelection(
         `Missing API key for provider '${parsed.provider}'${preset ? ` (${preset.name})` : ""}.` +
         envHint +
         `\nOr run 'longeragent init' to configure.` +
-        `\nTip: /model ${parsed.provider}:${parsed.model} key=YOUR_API_KEY (current session only)`,
+        `\nTip: select ${parsed.provider}:${parsed.model} in /model to import or paste a key.`,
       );
     }
 

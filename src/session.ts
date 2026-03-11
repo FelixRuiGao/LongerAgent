@@ -116,7 +116,6 @@ import {
   type PersistedModelSelection,
 } from "./model-selection.js";
 import {
-  type ResolvedSettings,
   type ContextThresholds,
   DEFAULT_THRESHOLDS,
   computeHysteresisThresholds,
@@ -384,8 +383,8 @@ export class Session {
   private _hintResetNone = DEFAULT_THRESHOLDS.summarize_hint_level1 / 100 - 0.20;
   private _hintResetLevel1 = (DEFAULT_THRESHOLDS.summarize_hint_level1 + DEFAULT_THRESHOLDS.summarize_hint_level2) / 200;
 
-  // Global max_output_tokens override from settings.json
-  private _settingsMaxOutputTokens: number | undefined;
+  // Context window multiplier (0.0–1.0). Effective context = contextLength × _contextRatio.
+  private _contextRatio = 1.0;
 
   // Hint compression (two-tier state machine)
   private _hintState: "none" | "level1_sent" | "level2_sent" = "none";
@@ -465,7 +464,7 @@ export class Session {
     mcpManager?: MCPClientManager;
     promptsDirs?: string[];
     store?: any;
-    settings?: ResolvedSettings;
+    contextRatio?: number;
   }) {
     this.primaryAgent = opts.primaryAgent;
     this.config = opts.config;
@@ -476,9 +475,9 @@ export class Session {
     this._mcpManager = opts.mcpManager;
     this._promptsDirs = opts.promptsDirs;
 
-    // Apply user settings (thresholds + max_output_tokens)
-    if (opts.settings) {
-      this._applySettings(opts.settings);
+    // Apply context ratio
+    if (opts.contextRatio !== undefined) {
+      this._contextRatio = Math.max(0.01, Math.min(1.0, opts.contextRatio));
     }
 
     // Attach store if provided (must be set before _initConversation)
@@ -487,10 +486,9 @@ export class Session {
     }
 
     // Resolve path variables
-    const pathOverrides = opts.config.pathOverrides;
-    this._projectRoot = pathOverrides.projectRoot ?? process.cwd();
-    this._sessionArtifactsOverride = pathOverrides.sessionArtifacts ?? "";
-    this._systemData = pathOverrides.systemData ?? "";
+    this._projectRoot = process.cwd();
+    this._sessionArtifactsOverride = "";
+    this._systemData = "";
 
     this._createdAt = new Date().toISOString();
     this._initConversation();
@@ -532,26 +530,10 @@ export class Session {
   }
 
   /**
-   * Apply resolved user settings (thresholds + max_output_tokens).
+   * Effective context length for a given ModelConfig, scaled by context ratio.
    */
-  private _applySettings(s: ResolvedSettings): void {
-    this._thresholds = { ...s.thresholds };
-    const hysteresis = computeHysteresisThresholds(s.thresholds);
-    this._hintResetNone = hysteresis.hintResetNone / 100;
-    this._hintResetLevel1 = hysteresis.hintResetLevel1 / 100;
-    this._settingsMaxOutputTokens = s.maxOutputTokens;
-    // Apply to current primary agent's model config
-    this._applyMaxOutputTokensOverride(this.primaryAgent.modelConfig);
-  }
-
-  /**
-   * Effective maxTokens for a given ModelConfig, taking settings override into account.
-   * Clamps to [4096, modelMaxOutputTokens].
-   */
-  _effectiveMaxTokens(mc: ModelConfig): number {
-    if (this._settingsMaxOutputTokens === undefined) return mc.maxTokens;
-    const modelMax = getModelMaxOutputTokens(mc.model);
-    return Math.max(4096, Math.min(this._settingsMaxOutputTokens, modelMax ?? mc.maxTokens));
+  _effectiveContextLength(mc: ModelConfig): number {
+    return Math.round(mc.contextLength * this._contextRatio);
   }
 
   // ==================================================================
@@ -1044,7 +1026,6 @@ export class Session {
     const restoredCachePreference = meta.cacheHitEnabled ?? true;
 
     this._resetTransientState();
-    this._applyMaxOutputTokensOverride(restoredModelConfig);
     this.primaryAgent.replaceModelConfig(restoredModelConfig);
     this._persistedModelSelection = this._buildPersistedModelSelection({
       modelConfigName: restoredSelection.selectedConfigName,
@@ -1248,6 +1229,14 @@ export class Session {
   /** Read-only access to loaded skills (for command registration). */
   get skills(): ReadonlyMap<string, SkillMeta> {
     return this._skills;
+  }
+
+  get mcpManager(): MCPClientManager | undefined {
+    return this._mcpManager;
+  }
+
+  async ensureMcpReady(): Promise<void> {
+    await this._ensureMcp();
   }
 
   /** Read-only access to disabled skill names. */
@@ -1465,7 +1454,6 @@ export class Session {
    */
   switchModel(modelConfigName: string): void {
     const newModelConfig = this.config.getModel(modelConfigName);
-    this._applyMaxOutputTokensOverride(newModelConfig);
     this.primaryAgent.replaceModelConfig(newModelConfig);
     this._persistedModelSelection = this._buildPersistedModelSelection({
       modelConfigName,
@@ -1478,16 +1466,6 @@ export class Session {
       this._preferredThinkingLevel,
     );
     this._cacheHitEnabled = this._preferredCacheHitEnabled;
-  }
-
-  /**
-   * If settings.json specifies max_output_tokens, clamp the ModelConfig.maxTokens
-   * to [4096, modelMaxOutputTokens]. This mutates the ModelConfig in place.
-   */
-  private _applyMaxOutputTokensOverride(mc: ModelConfig): void {
-    if (this._settingsMaxOutputTokens === undefined) return;
-    const modelMax = getModelMaxOutputTokens(mc.model) ?? mc.maxTokens;
-    (mc as any).maxTokens = Math.max(4096, Math.min(this._settingsMaxOutputTokens, modelMax));
   }
 
   applyGlobalPreferences(preferences: GlobalTuiPreferences): void {
@@ -1602,10 +1580,10 @@ export class Session {
   private _armShowContextAnnotations(): void {
     const mc = this.primaryAgent.modelConfig;
     const provider = (this.primaryAgent as any)._provider;
-    const effectiveMax = this._effectiveMaxTokens(mc);
+    const effectiveMax = mc.maxTokens;
     const budget = provider.budgetCalcMode === "full_context"
-      ? mc.contextLength
-      : mc.contextLength - effectiveMax;
+      ? this._effectiveContextLength(mc)
+      : this._effectiveContextLength(mc) - effectiveMax;
     const result = generateShowContext(this._log, this._lastInputTokens, budget);
     this._showContextRoundsRemaining = 1;
     this._showContextAnnotations = result.annotations;
@@ -2951,9 +2929,9 @@ export class Session {
 
     const mc = this.primaryAgent.modelConfig;
     const provider = (this.primaryAgent as any)._provider;
-    const effectiveMax = this._effectiveMaxTokens(mc);
+    const effectiveMax = mc.maxTokens;
     const budget = provider.budgetCalcMode === "full_context"
-      ? mc.contextLength : mc.contextLength - effectiveMax;
+      ? this._effectiveContextLength(mc) : this._effectiveContextLength(mc) - effectiveMax;
 
     const result = generateShowContext(this._log, this._lastInputTokens, budget);
     this._showContextRoundsRemaining = 1;
@@ -3619,10 +3597,10 @@ export class Session {
 
     const mc = this.primaryAgent.modelConfig;
     const provider = (this.primaryAgent as any)._provider;
-    const effectiveMax = this._effectiveMaxTokens(mc);
+    const effectiveMax = mc.maxTokens;
     const budget = provider.budgetCalcMode === "full_context"
-      ? mc.contextLength
-      : mc.contextLength - effectiveMax;
+      ? this._effectiveContextLength(mc)
+      : this._effectiveContextLength(mc) - effectiveMax;
 
     if (budget <= 0) return undefined;
 
@@ -3802,9 +3780,9 @@ export class Session {
 
     const mc = this.primaryAgent.modelConfig;
     const provider = (this.primaryAgent as any)._provider;
-    const effectiveMax = this._effectiveMaxTokens(mc);
+    const effectiveMax = mc.maxTokens;
     const budget = provider.budgetCalcMode === "full_context"
-      ? mc.contextLength : mc.contextLength - effectiveMax;
+      ? this._effectiveContextLength(mc) : this._effectiveContextLength(mc) - effectiveMax;
     if (budget <= 0) return;
 
     const ratio = this._lastInputTokens / budget;
@@ -3830,9 +3808,9 @@ export class Session {
   private _updateHintStateAfterApiCall(): void {
     const mc = this.primaryAgent.modelConfig;
     const provider = (this.primaryAgent as any)._provider;
-    const effectiveMax = this._effectiveMaxTokens(mc);
+    const effectiveMax = mc.maxTokens;
     const budget = provider.budgetCalcMode === "full_context"
-      ? mc.contextLength : mc.contextLength - effectiveMax;
+      ? this._effectiveContextLength(mc) : this._effectiveContextLength(mc) - effectiveMax;
     if (budget <= 0) return;
 
     const ratio = this._lastInputTokens / budget;
@@ -4847,8 +4825,6 @@ export class Session {
   }
 
   private _getSubAgentModelConfig(): ModelConfig {
-    const name = this.config.subAgentModelName;
-    if (name) return this.config.getModel(name);
     return this.primaryAgent.modelConfig;
   }
 
@@ -5253,10 +5229,10 @@ export class Session {
   private _buildSubAgentCompactCheck(agent: Agent) {
     const mc = agent.modelConfig;
     const provider = (agent as any)._provider;
-    const effectiveMax = this._effectiveMaxTokens(mc);
+    const effectiveMax = mc.maxTokens;
     const budget = provider.budgetCalcMode === "full_context"
-      ? mc.contextLength
-      : mc.contextLength - effectiveMax;
+      ? this._effectiveContextLength(mc)
+      : this._effectiveContextLength(mc) - effectiveMax;
 
     if (budget <= 0) return undefined;
 

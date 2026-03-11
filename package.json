@@ -1,6 +1,7 @@
 {
   "name": "longer-agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
+  "updateNotice": "",
   "description": "A terminal AI coding agent built for long sessions — three-layer context management, persistent memory, and parallel sub-agents",
   "type": "module",
   "license": "MIT",
@@ -23,7 +24,6 @@
     "agent_templates/",
     "prompts/",
     "skills/",
-    "configExample.yaml",
     "LICENSE",
     "README.md"
   ],
@@ -39,7 +39,10 @@
     "terminal"
   ],
   "scripts": {
-    "build": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});\" && tsc -p tsconfig.build.json",
+    "docs:dev": "vitepress dev docs-site",
+    "docs:build": "vitepress build docs-site",
+    "docs:preview": "vitepress preview docs-site",
+    "build": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});\" && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -68,6 +71,7 @@
     "@types/react": "^19.2.14",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "vitepress": "^1.6.4",
     "vitest": "^3.0.0"
   },
   "optionalDependencies": {

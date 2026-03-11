@@ -12,11 +12,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { homedir, platform } from "node:os";
+import { platform } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { confirm, select } from "@inquirer/prompts";
-import { LONGERAGENT_HOME_DIR } from "../config.js";
+import { getLongerAgentHomeDir } from "../home-path.js";
 
 // =============================================================================
 // Constants
@@ -70,7 +70,7 @@ interface AuthStoreData {
 // =============================================================================
 
 function authStorePath(): string {
-  return join(homedir(), LONGERAGENT_HOME_DIR, "auth.json");
+  return join(getLongerAgentHomeDir(), "auth.json");
 }
 
 export function loadAuthStore(): AuthStoreData {
@@ -90,7 +90,7 @@ export function loadAuthStore(): AuthStoreData {
 
 function saveAuthStore(store: AuthStoreData): void {
   const p = authStorePath();
-  const dir = join(homedir(), LONGERAGENT_HOME_DIR);
+  const dir = getLongerAgentHomeDir();
   mkdirSync(dir, { recursive: true });
   writeFileSync(p, JSON.stringify(store, null, 2) + "\n", {
     encoding: "utf-8",
@@ -685,12 +685,8 @@ async function oauthLogin(): Promise<void> {
   console.log(
     "  To use with LongerAgent, run 'longeragent init' and select",
   );
-  console.log("  'OpenAI (ChatGPT Login)', or add to your config.yaml:");
-  console.log();
-  console.log("    my-codex:");
-  console.log("      provider: openai-codex");
-  console.log("      model: gpt-5.3-codex");
-  console.log("      api_key: \"oauth:openai-codex\"");
+  console.log("  'OpenAI (ChatGPT Login)'.");
+  console.log("  If it is already configured, you can switch to it later with '/model'.");
   console.log();
 }
 

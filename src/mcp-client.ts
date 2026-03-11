@@ -16,6 +16,7 @@
 
 import type { MCPServerConfig } from "./config.js";
 import { ToolDef, ToolResult } from "./providers/base.js";
+import { VERSION } from "./version.js";
 import { chmodSync, existsSync, statSync } from "node:fs";
 import * as path from "node:path";
 
@@ -268,7 +269,7 @@ export class MCPClientManager {
     }
 
     const client = new Client(
-      { name: "longeragent", version: "0.1.0" },
+      { name: "longeragent", version: VERSION },
       { capabilities: {} },
     );
     await client.connect(transport);

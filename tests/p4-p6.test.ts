@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { SessionStore } from "../src/persistence.js";
 import { Session } from "../src/session.js";
 import { executeTool } from "../src/tools/basic.js";
 import { ToolResult } from "../src/providers/base.js";
@@ -25,20 +26,17 @@ function makeSession(projectRoot: string): Session {
     },
   } as any;
 
-  const sessionArtifacts = mkdtempSync(join(tmpdir(), "longeragent-test-artifacts-"));
+  const store = new SessionStore({ baseDir: projectRoot, projectPath: projectRoot });
+  store.createSession();
   const config = {
-    pathOverrides: {
-      projectRoot,
-      sessionArtifacts,
-      systemData: sessionArtifacts,
-    },
-    subAgentModelName: undefined,
+    mcpServerConfigs: [],
     getModel: () => ({ model: "test" }),
   } as any;
 
   return new Session({
     primaryAgent,
     config,
+    store,
   });
 }
 
