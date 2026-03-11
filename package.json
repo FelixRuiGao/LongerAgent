@@ -8,7 +8,7 @@
   "author": "Felix Rui Gao",
   "repository": {
     "type": "git",
-    "url": "https://github.com/FelixRuiGao/LongerAgent.git"
+    "url": "git+https://github.com/FelixRuiGao/LongerAgent.git"
   },
   "homepage": "https://github.com/FelixRuiGao/LongerAgent",
   "bugs": {
@@ -17,7 +17,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "longeragent": "./dist/cli.js"
+    "longeragent": "dist/cli.js"
   },
   "files": [
     "dist/",

@@ -32,38 +32,36 @@ If you want a terminal-native agent that can stay productive through a long refa
 
 ## Quick Start
 
+Install globally:
+
 ```bash
-# Install globally
 npm install -g longer-agent
+```
 
-# Run the setup wizard
+Run the setup wizard:
+
+```bash
 longeragent init
+```
 
-# Start
+Start:
+
+```bash
 longeragent
 ```
 
 The setup wizard walks you through provider selection, API key configuration, and model selection. All preferences are saved to `~/.longeragent/tui-preferences.json`. For GLM, Kimi, and MiniMax, LongerAgent stores endpoint-specific keys in its own managed env slots inside `~/.longeragent/.env` and can import detected external env vars during `init` or `/model`. For OpenAI (ChatGPT Login), OAuth tokens are stored in `~/.longeragent/auth.json`; no runtime API-key env var is required.
 
-### First 5 Minutes
-
-Typical first session:
+### Useful Early Commands
 
 ```text
-$ longeragent
-You: audit the auth flow and find dead code
-You: while you do that, also check whether password reset uses the same token path
-You: /summarize keep the final findings and file references
-```
-
-Useful early commands:
-
-```text
- /model       # switch model/provider; can import or paste missing keys
- /mcp         # connect configured MCP servers and list discovered tools
+/model       # switch model/provider; can import or paste missing keys
+/mcp         # connect configured MCP servers and list discovered tools
 /thinking    # raise or lower reasoning depth
 /skills      # enable or disable installed skills
 /resume      # reopen an older session from log
+/summarize   # compress older context to free up space
+/compact     # full context reset with continuation summary
 ```
 
 > **Safety:** LongerAgent does not sandbox shell commands or file edits. Run it in trusted environments and review what it does.

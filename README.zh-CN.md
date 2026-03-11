@@ -32,31 +32,27 @@
 
 ## 快速开始
 
+全局安装：
+
 ```bash
-# 全局安装
 npm install -g longer-agent
+```
 
-# 运行配置向导
+运行配置向导：
+
+```bash
 longeragent init
+```
 
-# 启动
+启动：
+
+```bash
 longeragent
 ```
 
 初始化向导会引导你完成 provider 选择、API key 配置和模型选择。所有配置保存在 `~/.longeragent/tui-preferences.json`。对 GLM、Kimi、MiniMax，LongerAgent 会把 endpoint 独立的 key 存进自己管理的 `~/.longeragent/.env` 槽位里，并在 `init` 或 `/model` 时导入检测到的外部环境变量。对 OpenAI（ChatGPT Login），OAuth token 保存在 `~/.longeragent/auth.json`，运行时不需要 API key 环境变量。
 
-### 前 5 分钟
-
-一个典型的首次会话会是这样：
-
-```text
-$ longeragent
-你：检查一下认证流程，顺便找出死代码
-你：另外也看看 password reset 是否复用了同一条 token 路径
-你：/summarize 保留最终结论和文件引用
-```
-
-前期最常用的几个命令：
+### 前期最常用的几个命令
 
 ```text
 /model       # 切换模型/provider；缺 key 时可直接导入或粘贴
@@ -64,6 +60,8 @@ $ longeragent
 /thinking    # 调高或调低推理深度
 /skills      # 启用或禁用已安装技能
 /resume      # 从日志恢复旧会话
+/summarize   # 压缩较早的上下文以释放空间
+/compact     # 全量上下文重置，附带延续摘要
 ```
 
 > **安全提示：** LongerAgent 不会对 shell 命令或文件编辑做沙箱隔离。请只在可信环境中使用，并留意它的实际操作。
