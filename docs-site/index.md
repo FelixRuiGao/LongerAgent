@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: LongerAgent
-  text: Built to work longer.
-  tagline: A coding CLI that can manage its own context and work longer.
+  text: Exploring agent autonomy.
+  tagline: A TUI demo that gives the coding agent tools to manage its own context and workflow.
   actions:
     - theme: brand
       text: Get Started
@@ -14,16 +14,16 @@ hero:
       link: https://github.com/FelixRuiGao/LongerAgent
 
 features:
-  - title: Long-Running Sessions
-    details: The agent can summarize older context on its own, and you can also /summarize manually to surgically compress while preserving key decisions. Keep working instead of restarting from scratch.
+  - title: Agent-Driven Context
+    details: The agent can inspect its own context distribution and proactively compress selected blocks to keep the session productive over long tasks.
   - title: Parallel Sub-Agents
-    details: Spawn explorer and executor agents that run concurrently within the same session and report back when done.
-  - title: Async Messaging
-    details: The agent proactively checks for new messages between steps. Type at any time, even while it is mid-task, and it will pick up what you said.
-  - title: 10 Providers
+    details: Spawn explorer and executor agents that run concurrently within the same session, each with their own context window, and report back when done.
+  - title: Interruptible Execution
+    details: Type messages at any time — even mid-task. Messages are queued and delivered at the next activation boundary. No need to wait, no need to restart.
+  - title: Multi-Provider Support
     details: Anthropic, OpenAI, Kimi, MiniMax, GLM, Ollama, oMLX, LM Studio, and OpenRouter. Cloud or local, your choice.
-  - title: Skills System
+  - title: Extensible Skills
     details: Install, manage, and create reusable skill packages. The built-in skill-manager teaches the agent to find and install new skills autonomously.
-  - title: Project Memory
-    details: AGENTS.md files and the Important Log survive across sessions and context compactions. The agent remembers what matters.
+  - title: Persistent Memory
+    details: AGENTS.md files and the Important Log survive across sessions and context resets. The agent remembers what matters.
 ---
