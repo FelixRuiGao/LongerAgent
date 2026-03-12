@@ -1,6 +1,6 @@
 {
   "name": "longer-agent",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "updateNotice": "",
   "description": "A terminal AI coding agent built for long sessions — three-layer context management, persistent memory, and parallel sub-agents",
   "type": "module",
