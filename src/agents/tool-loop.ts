@@ -386,6 +386,9 @@ export async function asyncRunToolLoop(
     let resp: ProviderResponse;
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      if (signal?.aborted) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
       try {
         resp = await provider.asyncSendMessage(
           getMessages() as any,
@@ -404,6 +407,9 @@ export async function asyncRunToolLoop(
         }
         break;
       } catch (netErr) {
+        if ((netErr as any)?.name === "AbortError" || signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
         if (!isRetryableNetworkError(netErr) || networkRetryCount >= MAX_NETWORK_RETRIES) {
           if (isRetryableNetworkError(netErr)) {
             const errMsg = netErr instanceof Error ? netErr.message : String(netErr);

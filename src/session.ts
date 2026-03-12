@@ -134,13 +134,13 @@ const COMPACT_PROMPT_OUTPUT = `Distill this conversation into a continuation pro
 
 **Before writing the continuation prompt**, update your important log with any key discoveries, decisions, or insights from this session that aren't already recorded there. The important log survives compaction and will be visible to the new instance — this is your last chance to persist valuable knowledge.
 
-**What the new instance will already have:** your system prompt, the important log, AGENTS.md persistent memory, and the active plan file (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state. If you've discovered stable, long-term knowledge during this session, consider persisting it to the project AGENTS.md before compaction.
+**What the new instance will already have:** your system prompt, the important log, AGENTS.md persistent memory, and the active plan (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state. If you've discovered stable, long-term knowledge during this session, consider persisting it to the project AGENTS.md before compaction.
 
 Your summary should capture everything that matters and nothing that doesn't. Use whatever structure best fits the actual content — there is no fixed template. But as you write, pressure-test yourself against these questions:
 
 - **What are we trying to do?** The user's intent, goals, and any constraints or preferences they've expressed — stated or implied.
 - **What do we know now that we didn't at the start?** Key discoveries, failed approaches, edge cases encountered, decisions made and *why*. (Skip anything already in your important log.)
-- **Where exactly are we?** What's done, what's in progress, what's next. Be specific enough that work won't be repeated or skipped. (Skip anything already in your plan file.)
+- **Where exactly are we?** What's done, what's in progress, what's next. Be specific enough that work won't be repeated or skipped. (Skip anything already tracked in your plan.)
 - **What artifacts exist?** Files read, created, or modified — with enough context about each to be actionable (not just a path list).
 - **What tone/style/working relationship has been established?** If the user has shown preferences for how they like to collaborate, note them.
 - **What explicit rules has the user stated?** Direct instructions about how to work, what not to do, approval requirements, or behavioral constraints the user has explicitly communicated (e.g., "don't modify code until I approve", "always run tests before committing"). Preserve these verbatim — they are binding rules, not suggestions.
@@ -156,14 +156,14 @@ You just made a tool call and received its result above. That result is real and
 
 **Before writing the continuation prompt**, update your important log with any key discoveries, decisions, or insights from this session that aren't already recorded there. The important log survives compaction and will be visible to the new instance — this is your last chance to persist valuable knowledge.
 
-**What the new instance will already have:** your system prompt, the important log, AGENTS.md persistent memory, and the active plan file (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state. If you've discovered stable, long-term knowledge during this session, consider persisting it to the project AGENTS.md before compaction.
+**What the new instance will already have:** your system prompt, the important log, AGENTS.md persistent memory, and the active plan (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state. If you've discovered stable, long-term knowledge during this session, consider persisting it to the project AGENTS.md before compaction.
 
 Write in natural prose. Use structure where it aids clarity, not for its own sake. As you write, pressure-test yourself against these questions:
 
 - **What are we trying to do?** The user's intent, goals, constraints, and preferences — stated or implied.
 - **What do we know now that we didn't at the start?** Key discoveries, failed approaches, edge cases encountered, decisions made and why. (Skip anything already in your important log.)
 - **Where exactly did we stop?** Be precise: what was the last tool call, what did it return, and what was supposed to happen next? The new instance must be able to pick up mid-step without repeating or skipping anything.
-- **What's done, what's in progress, what remains?** Give a clear picture of overall progress, not just the interrupted step. (Skip anything already in your plan file.)
+- **What's done, what's in progress, what remains?** Give a clear picture of overall progress, not just the interrupted step. (Skip anything already tracked in your plan.)
 - **What artifacts exist?** Files read, created, or modified — with enough context about each to be actionable.
 - **What working style has the user shown?** Communication preferences, collaboration patterns, or explicit instructions about how they like to work.
 - **What explicit rules has the user stated?** Direct instructions about how to work, what not to do, approval requirements, or behavioral constraints (e.g., "don't modify code until I approve", "always run tests before committing"). Preserve these verbatim — they are binding rules, not suggestions.
@@ -393,8 +393,7 @@ export class Session {
   private _showContextRoundsRemaining = 0;
   private _showContextAnnotations: Map<string, string> | null = null;
 
-  // Plan tracking
-  private _activePlanFile: string | null = null;
+  // Plan tracking (inline-only, no plan file)
   private _activePlanCheckpoints: string[] = [];
   private _activePlanChecked: boolean[] = [];
 
@@ -987,7 +986,6 @@ export class Session {
     this._shellCounter = 0;
     this._showContextRoundsRemaining = 0;
     this._showContextAnnotations = null;
-    this._activePlanFile = null;
     this._activePlanCheckpoints = [];
     this._activePlanChecked = [];
   }
@@ -1071,18 +1069,9 @@ export class Session {
     this._restoreAskStateFromLog(entries);
 
     // Restore active plan from meta
-    if (meta.activePlanFile) {
-      try {
-        const content = readFileSync(meta.activePlanFile, "utf-8");
-        const { checkpoints, checked } = this._parsePlanCheckpoints(content);
-        if (checkpoints.length > 0) {
-          this._activePlanFile = meta.activePlanFile;
-          this._activePlanCheckpoints = checkpoints;
-          this._activePlanChecked = checked;
-        }
-      } catch {
-        // Plan file no longer exists — skip restoration
-      }
+    if (meta.activePlanCheckpoints && meta.activePlanCheckpoints.length > 0) {
+      this._activePlanCheckpoints = meta.activePlanCheckpoints;
+      this._activePlanChecked = meta.activePlanChecked ?? meta.activePlanCheckpoints.map(() => false);
     }
 
     // Rebuild ask history from ask_resolution entries
@@ -1122,7 +1111,8 @@ export class Session {
         thinkingLevel: this._thinkingLevel,
         cacheHitEnabled: this._cacheHitEnabled,
         summary: this._generateSummary(),
-        activePlanFile: this._activePlanFile ?? undefined,
+        activePlanCheckpoints: this._activePlanCheckpoints.length > 0 ? this._activePlanCheckpoints : undefined,
+        activePlanChecked: this._activePlanChecked.length > 0 ? this._activePlanChecked : undefined,
       }),
       entries: this._log,
     };
@@ -2579,27 +2569,12 @@ export class Session {
         ? this._showContextAnnotations ?? undefined
         : undefined;
       let importantLog = this._readImportantLog();
-      // Inject active plan content alongside important log
-      if (this._activePlanFile) {
-        try {
-          const planContent = readFileSync(this._activePlanFile, "utf-8");
-          if (planContent) {
-            importantLog += `\n\n---\n## Active Plan\n${planContent}`;
-            // Detect checkpoint changes from file edits and emit update
-            const { checkpoints, checked } = this._parsePlanCheckpoints(planContent);
-            if (
-              checkpoints.length !== this._activePlanCheckpoints.length ||
-              checkpoints.some((t, i) => t !== this._activePlanCheckpoints[i]) ||
-              checked.some((c, i) => c !== this._activePlanChecked[i])
-            ) {
-              this._activePlanCheckpoints = checkpoints;
-              this._activePlanChecked = checked;
-              this._emitPlanProgress("plan_update");
-            }
-          }
-        } catch {
-          // Plan file may have been deleted externally — ignore
-        }
+      // Inject active plan alongside important log
+      if (this._activePlanCheckpoints.length > 0) {
+        const lines = this._activePlanCheckpoints.map((text, i) =>
+          `- [${this._activePlanChecked[i] ? "x" : " "}] ${text}`
+        );
+        importantLog += `\n\n---\n## Active Plan\n${lines.join("\n")}`;
       }
       const agentsMd = this._readAgentsMd();
       return projectToApiMessages(this._log, {
@@ -3023,64 +2998,25 @@ export class Session {
 
   private _execPlan(args: Record<string, unknown>): ToolResult {
     const action = args["action"];
-    if (typeof action !== "string" || !["submit", "check", "finish"].includes(action)) {
-      return this._toolArgError("plan", "'action' must be one of: submit, check, finish.");
+    if (typeof action !== "string" || !["submit", "check", "dismiss"].includes(action)) {
+      return this._toolArgError("plan", "'action' must be one of: submit, check, dismiss.");
     }
 
     if (action === "submit") {
-      const fileArg = this._argRequiredString("plan", args, "file", { nonEmpty: true });
-      if (fileArg instanceof ToolResult) return fileArg;
-      const fileRel = fileArg.trim();
-
-      const artifactsDir = this._resolveSessionArtifacts();
-      let filePath: string;
-      try {
-        filePath = safePath({
-          baseDir: artifactsDir,
-          requestedPath: fileRel,
-          cwd: artifactsDir,
-          mustExist: true,
-          expectFile: true,
-          accessKind: "read",
-        }).safePath!;
-      } catch (e) {
-        if (e instanceof SafePathError) {
-          if (e.code === "PATH_NOT_FOUND" || e.code === "PATH_NOT_FILE") {
-            const candidatePath = e.details.resolvedPath || join(artifactsDir, fileRel);
-            return new ToolResult({
-              content:
-                `Error: plan file not found at ${candidatePath}\n` +
-                `The 'file' parameter is resolved relative to SESSION_ARTIFACTS (${artifactsDir}).\n` +
-                `Make sure you wrote the plan file to this directory using write_file(path="${join(artifactsDir, fileRel)}").`,
-            });
-          }
-          return new ToolResult({ content: `Error: invalid plan file path: ${e.message}` });
-        }
-        throw e;
+      const raw = args["checkpoints"];
+      if (!Array.isArray(raw) || raw.length === 0) {
+        return this._toolArgError(
+          "plan",
+          "'checkpoints' must be a non-empty array of strings.",
+        );
       }
-
-      let content: string;
-      try {
-        content = readFileSync(filePath, "utf-8");
-      } catch (e) {
-        return new ToolResult({
-          content: `Error: could not read plan file: ${e instanceof Error ? e.message : String(e)}`,
-        });
-      }
-
-      const { checkpoints, checked } = this._parsePlanCheckpoints(content);
-
+      const checkpoints = raw.map((c) => String(c).trim()).filter(Boolean);
       if (checkpoints.length === 0) {
-        return new ToolResult({
-          content:
-            "Error: no checkpoints found in plan file. " +
-            "Expected a '## Checkpoints' section with items like '- [ ] Do something'.",
-        });
+        return this._toolArgError("plan", "'checkpoints' items must not be empty.");
       }
 
-      this._activePlanFile = filePath;
       this._activePlanCheckpoints = checkpoints;
-      this._activePlanChecked = checked;
+      this._activePlanChecked = checkpoints.map(() => false);
       this._emitPlanProgress("plan_submit");
 
       return new ToolResult({
@@ -3089,94 +3025,58 @@ export class Session {
     }
 
     if (action === "check") {
-      if (!this._activePlanFile) {
+      if (this._activePlanCheckpoints.length === 0) {
         return new ToolResult({ content: "Error: no active plan. Use action='submit' first." });
       }
       const item = args["item"];
       if (typeof item !== "number" || !Number.isInteger(item)) {
-        return this._toolArgError("plan", "'item' must be an integer index.");
+        return this._toolArgError("plan", "'item' must be an integer index (1-based).");
       }
 
-      // Re-parse checkpoints from file to handle edits since submit
-      let currentContent: string;
-      try {
-        currentContent = readFileSync(this._activePlanFile, "utf-8");
-      } catch {
-        return new ToolResult({ content: "Error: could not read plan file." });
-      }
-      const { checkpoints, checked } = this._parsePlanCheckpoints(currentContent);
-      if (checkpoints.length === 0) {
-        return new ToolResult({ content: "Error: no checkpoints found in plan file." });
-      }
-      this._activePlanCheckpoints = checkpoints;
-      this._activePlanChecked = checked;
+      // Convert 1-based user index to 0-based internal index
+      const idx = item - 1;
 
-      if (item < 0 || item >= checkpoints.length) {
+      if (idx < 0 || idx >= this._activePlanCheckpoints.length) {
         return new ToolResult({
-          content: `Error: 'item' index ${item} is out of range (0..${checkpoints.length - 1}).`,
+          content: `Error: 'item' ${item} is out of range (1..${this._activePlanCheckpoints.length}).`,
         });
       }
 
-      this._activePlanChecked[item] = true;
+      const checkpointText = this._activePlanCheckpoints[idx];
+      this._activePlanChecked[idx] = true;
 
-      // Update the file on disk: replace the matching unchecked item with checked
-      try {
-        const lines = currentContent.split("\n");
-        let checkpointIndex = 0;
-        let inCheckpointsSection = false;
-        for (let i = 0; i < lines.length; i++) {
-          if (/^## Checkpoints\b/.test(lines[i])) {
-            inCheckpointsSection = true;
-            continue;
-          }
-          if (inCheckpointsSection && /^## /.test(lines[i])) break;
-          if (inCheckpointsSection && /^- \[[ x]\] .+$/.test(lines[i])) {
-            if (checkpointIndex === item) {
-              lines[i] = lines[i].replace(/^- \[ \]/, "- [x]");
-              break;
-            }
-            checkpointIndex++;
-          }
-        }
-        writeFileSync(this._activePlanFile, lines.join("\n"), "utf-8");
-      } catch {
-        // File write failure is non-fatal — in-memory state is still updated
+      // Check if all checkpoints are now complete → auto-finish
+      const allDone = this._activePlanChecked.every(Boolean);
+
+      if (allDone) {
+        // Clear state immediately (so persistence sees no plan on interrupt)
+        // but delay TUI panel dismissal so the user sees the all-checked state
+        this._emitPlanProgress("plan_update");
+        this._activePlanCheckpoints = [];
+        this._activePlanChecked = [];
+        setTimeout(() => {
+          this._emitPlanProgress("plan_finish");
+        }, 5000);
+
+        return new ToolResult({
+          content:
+            `✓ Checkpoint ${item} done: ${checkpointText}\n` +
+            `All checkpoints complete. Plan closed.`,
+        });
       }
 
       this._emitPlanProgress("plan_update");
 
       return new ToolResult({
-        content: `Checkpoint ${item} marked as done: ${checkpoints[item]}`,
+        content: `✓ Checkpoint ${item} done: ${checkpointText}`,
       });
     }
 
-    // action === "finish"
-    this._activePlanFile = null;
+    // action === "dismiss"
     this._activePlanCheckpoints = [];
     this._activePlanChecked = [];
     this._emitPlanProgress("plan_finish");
-    return new ToolResult({ content: "Plan finished and dismissed." });
-  }
-
-  private _parsePlanCheckpoints(content: string): { checkpoints: string[]; checked: boolean[] } {
-    const checkpoints: string[] = [];
-    const checked: boolean[] = [];
-    let inCheckpointsSection = false;
-    for (const line of content.split("\n")) {
-      if (/^## Checkpoints\b/.test(line)) {
-        inCheckpointsSection = true;
-        continue;
-      }
-      if (inCheckpointsSection && /^## /.test(line)) break;
-      if (inCheckpointsSection) {
-        const match = line.match(/^- \[([x ])\] (.+)$/);
-        if (match) {
-          checkpoints.push(match[2]);
-          checked.push(match[1] === "x");
-        }
-      }
-    }
-    return { checkpoints, checked };
+    return new ToolResult({ content: "Plan dismissed." });
   }
 
   private _emitPlanProgress(action: "plan_submit" | "plan_update" | "plan_finish"): void {

@@ -254,6 +254,30 @@ function CheckboxPickerView({ picker }: { picker: CheckboxPickerState }): React.
   );
 }
 
+function ShortcutHintSegment(
+  { command, description }: { command: string; description: string },
+): React.ReactElement {
+  return (
+    <>
+      <Text dimColor>[</Text>
+      <Text>{command}</Text>
+      <Text dimColor>{` ${description}]`}</Text>
+    </>
+  );
+}
+
+function DefaultShortcutHintView(): React.ReactElement {
+  return (
+    <Text>
+      <ShortcutHintSegment command="Option+Enter" description="Newline" />
+      <Text dimColor>{" | "}</Text>
+      <ShortcutHintSegment command="Ctrl+G" description="Raw Markdown" />
+      <Text dimColor>{" | "}</Text>
+      <ShortcutHintSegment command="Ctrl+C" description="Cancel/Quit" />
+    </Text>
+  );
+}
+
 // ------------------------------------------------------------------
 // InputPanel
 // ------------------------------------------------------------------
@@ -951,13 +975,13 @@ export const InputPanel = React.forwardRef<InputPanelHandle, InputPanelProps>(
           </Box>
         </Box>
         <Box paddingX={1}>
-          <Text color="gray">
-            {pickerHint
-              ? pickerHint
-              : hint
-              ? `  ${hint}`
-              : "  Opt+Enter/^N newline · ^G Markdown raw · ^C Cancel/Quit"}
-          </Text>
+          {pickerHint ? (
+            <Text color="gray">{pickerHint}</Text>
+          ) : hint ? (
+            <Text color="gray">{`  ${hint}`}</Text>
+          ) : (
+            <DefaultShortcutHintView />
+          )}
         </Box>
       </Box>
     );

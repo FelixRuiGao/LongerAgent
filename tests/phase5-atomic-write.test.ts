@@ -65,7 +65,7 @@ describe("Phase 5 file write safety", () => {
         { projectRoot: root },
       );
 
-      expect(result.content).toBe("OK: File edited successfully.");
+      expect(result.content).toContain("OK: File edited successfully.");
       expect(readFileSync(file, "utf-8")).toContain("world");
       expect(modeBits(file)).toBe(0o755);
     } finally {

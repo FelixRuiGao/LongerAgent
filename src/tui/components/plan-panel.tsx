@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
 
 export interface PlanCheckpointUi {
@@ -8,11 +8,26 @@ export interface PlanCheckpointUi {
 
 export interface PlanPanelProps {
   checkpoints: PlanCheckpointUi[];
+  /** When false the pulse animation stops (model idle). */
+  active?: boolean;
 }
 
-export function PlanPanel({ checkpoints }: PlanPanelProps): React.ReactElement {
+export function PlanPanel({ checkpoints, active = true }: PlanPanelProps): React.ReactElement {
   const done = checkpoints.filter((c) => c.checked).length;
   const total = checkpoints.length;
+
+  // Animate the first unchecked checkpoint: alternate ○/● every 1s,
+  // but only while the model is actively working.
+  const [pulse, setPulse] = useState(false);
+  const firstUncheckedIdx = checkpoints.findIndex((c) => !c.checked);
+  useEffect(() => {
+    if (!active || firstUncheckedIdx < 0) {
+      setPulse(false);
+      return;
+    }
+    const timer = setInterval(() => setPulse((p) => !p), 1000);
+    return () => clearInterval(timer);
+  }, [firstUncheckedIdx, active]);
 
   return (
     <Box
@@ -26,7 +41,7 @@ export function PlanPanel({ checkpoints }: PlanPanelProps): React.ReactElement {
       </Text>
       {checkpoints.map((cp, i) => (
         <Text key={i} dimColor={cp.checked}>
-          {cp.checked ? "  ✓ " : "  ○ "}
+          {cp.checked ? "  ✓ " : i === firstUncheckedIdx && pulse ? "  ● " : "  ○ "}
           {cp.text}
         </Text>
       ))}

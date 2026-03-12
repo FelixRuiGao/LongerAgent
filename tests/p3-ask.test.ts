@@ -250,6 +250,50 @@ describe("P3 tool-loop ask propagation", () => {
       },
     })).rejects.toBeInstanceOf(AskPendingError);
   });
+
+  it("stops retry flow immediately when aborted before a retryable error is handled", async () => {
+    let startedResolve: (() => void) | null = null;
+    const started = new Promise<void>((resolve) => {
+      startedResolve = resolve;
+    });
+    let releaseProvider: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+
+    class DelayedRetryableProvider extends BaseProvider {
+      async sendMessage(): Promise<ProviderResponse> {
+        startedResolve?.();
+        await gate;
+        const err = Object.assign(new Error("Too Many Requests"), { status: 429 });
+        throw err;
+      }
+    }
+
+    const ac = new AbortController();
+    const runtime = createEphemeralLogState([]);
+    const retryAttempts: number[] = [];
+    const runPromise = asyncRunToolLoop({
+      provider: new DelayedRetryableProvider(),
+      getMessages: runtime.getMessages,
+      appendEntry: runtime.appendEntry,
+      allocId: runtime.allocId,
+      turnIndex: 0,
+      toolExecutors: {},
+      maxRounds: 1,
+      signal: ac.signal,
+      onRetryAttempt: (attempt) => {
+        retryAttempts.push(attempt);
+      },
+    });
+
+    await started;
+    ac.abort();
+    releaseProvider?.();
+
+    await expect(runPromise).rejects.toMatchObject({ name: "AbortError" });
+    expect(retryAttempts).toEqual([]);
+  });
 });
 
 describe("P3 log-native session listing", () => {

@@ -189,25 +189,26 @@ export const PLAN_TOOL: ToolDef = {
   name: "plan",
   description:
     "Manage an execution plan with tracked checkpoints. " +
-    "Submit a plan file, check off completed items, or finish the plan.",
+    "Submit checkpoints, check off completed items, or dismiss the plan.",
   parameters: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["submit", "check", "finish"],
+        enum: ["submit", "check", "dismiss"],
         description:
-          "Action to perform: 'submit' to activate a plan, 'check' to mark a checkpoint done, 'finish' to dismiss.",
+          "Action to perform: 'submit' to activate a plan, 'check' to mark a checkpoint done, 'dismiss' to abandon the plan.",
       },
-      file: {
-        type: "string",
+      checkpoints: {
+        type: "array",
+        items: { type: "string" },
         description:
-          "Path to the .md plan file (required for 'submit'). Resolved relative to session artifacts directory.",
+          "List of checkpoint descriptions (required for 'submit').",
       },
       item: {
         type: "number",
         description:
-          "0-based index of the checkpoint to mark as done (required for 'check').",
+          "1-based index of the checkpoint to mark as done (required for 'check').",
       },
     },
     required: ["action"],

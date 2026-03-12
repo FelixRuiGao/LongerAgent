@@ -86,7 +86,7 @@ describe("slash command chain", () => {
     expect(store.clearSession).toHaveBeenCalledTimes(1);
     expect(session.resetForNewSession).toHaveBeenCalledTimes(1);
     expect(session.resetForNewSession).toHaveBeenCalledWith(store);
-    expect(ctx.showMessage as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("--- New session started ---");
+    expect(ctx.showMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
   it("/new keeps current store when clearSession fails", async () => {
@@ -112,8 +112,7 @@ describe("slash command chain", () => {
     expect(store.clearSession).toHaveBeenCalledTimes(1);
     expect(session.resetForNewSession).toHaveBeenCalledTimes(1);
     expect(session.resetForNewSession).toHaveBeenCalledWith(store);
-    const calls = (ctx.showMessage as ReturnType<typeof vi.fn>).mock.calls.map((x) => String(x[0]));
-    expect(calls.some((line) => line.includes("--- New session started ---"))).toBe(true);
+    expect(ctx.showMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
   it("/quit delegates to ctx.exit when provided (graceful path)", async () => {

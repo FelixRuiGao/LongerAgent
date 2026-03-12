@@ -623,7 +623,22 @@ describe("projectToApiMessages", () => {
     expect(msgs).toHaveLength(3);
     expect((msgs[1].content as string)).toContain("[IMPORTANT LOG]");
     expect((msgs[1].content as string)).toContain("Remember: use TypeScript");
+    expect((msgs[1].content as string)).toContain("[User Message]\nHello");
     expect((msgs[1].content as string)).toContain("Hello");
+  });
+
+  it("injects agents and important log with a single user-message boundary", () => {
+    const entries = basicLog();
+    const msgs = projectToApiMessages(entries, {
+      importantLog: "(empty file)",
+      agentsMd: "## Global Memory (~/AGENTS.md)\n\n(empty file)\n\n---\n\n## Project Memory (AGENTS.md)\n\n(empty file)",
+    });
+    expect(msgs).toHaveLength(3);
+    const content = msgs[1].content as string;
+    expect(content).toContain("[AGENTS.MD — PERSISTENT MEMORY]");
+    expect(content).toContain("[IMPORTANT LOG]");
+    expect(content).toContain("[User Message]\nHello");
+    expect(content.match(/\[User Message\]\n/g)?.length ?? 0).toBe(1);
   });
 
   it("multiple rounds in same turn", () => {

@@ -105,7 +105,7 @@ Preserves the decision and reasoning; drops the exploration steps, Redis config 
 
 **Example D — Summarizing within a plan workflow:**
 
-You're executing a plan. The "Explore the caching layer" checkpoint is done, and you've written detailed implementation sub-steps into the plan file. The next checkpoint is "Implement LRU cache". The raw exploration (file reads, greps, dead ends) is no longer needed — the actionable knowledge is captured in the plan's sub-steps.
+You're executing a plan. The "Explore the caching layer" checkpoint is done. The next checkpoint is "Implement LRU cache". The raw exploration (file reads, greps, dead ends) is no longer needed — the actionable knowledge is captured in the summary below.
 
 > Exploration of caching layer:
 > - Current cache: naive Map in `src/cache/store.ts`, no eviction, no TTL. Grows unbounded.

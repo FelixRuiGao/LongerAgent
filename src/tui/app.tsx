@@ -65,8 +65,8 @@ import type { ProgressEvent, ProgressCallback } from "../progress.js";
 import { saveLog } from "../persistence.js";
 import type { SessionStore } from "../persistence.js";
 import { isCommandExitSignal } from "../commands.js";
-import { formatDisplayModelName } from "../config.js";
 import { projectToTuiEntries } from "../log-projection.js";
+import { formatStatusBarModelName } from "./status-bar-model-name.js";
 import type {
   PendingAskUi,
   AgentQuestionAnswer,
@@ -90,6 +90,7 @@ const GOODBYE_MESSAGES = [
 
 const CUSTOM_EMPTY_HINT =
   'Custom answer is empty. Please enter an answer first, or choose "Discuss further" instead.';
+const ACTIVITY_DETAIL_FALLBACK_MS = 3000;
 
 // ------------------------------------------------------------------
 // Clipboard helper
@@ -198,6 +199,8 @@ export function App({
   const inputPanelRef = useRef<InputPanelHandle>(null);
   const shortcutParserRef = useRef(new InputProtocolParser());
   const shortcutDecoderRef = useRef(new StringDecoder("utf8"));
+  const activityFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activityFallbackSeqRef = useRef(0);
   const inputHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markdownModeInitializedRef = useRef(false);
   const runTurnRef = useRef<((input: string) => void) | null>(null);
@@ -287,12 +290,43 @@ export function App({
 
   useEffect(() => {
     return () => {
+      if (activityFallbackTimerRef.current) {
+        clearTimeout(activityFallbackTimerRef.current);
+        activityFallbackTimerRef.current = null;
+      }
       if (inputHintTimerRef.current) {
         clearTimeout(inputHintTimerRef.current);
         inputHintTimerRef.current = null;
       }
     };
   }, []);
+
+  const clearActivityFallback = useCallback(() => {
+    activityFallbackSeqRef.current += 1;
+    if (activityFallbackTimerRef.current) {
+      clearTimeout(activityFallbackTimerRef.current);
+      activityFallbackTimerRef.current = null;
+    }
+  }, []);
+
+  const setStableActivity = useCallback((phase: "idle" | "working" | "waiting") => {
+    clearActivityFallback();
+    setActivityPhase(phase);
+    setActivityToolName(undefined);
+  }, [clearActivityFallback]);
+
+  const setTransientActivity = useCallback((phase: "thinking" | "generating") => {
+    clearActivityFallback();
+    const seq = activityFallbackSeqRef.current;
+    setActivityPhase(phase);
+    setActivityToolName(undefined);
+    activityFallbackTimerRef.current = setTimeout(() => {
+      if (activityFallbackSeqRef.current !== seq) return;
+      activityFallbackTimerRef.current = null;
+      setActivityPhase("working");
+      setActivityToolName(undefined);
+    }, ACTIVITY_DETAIL_FALLBACK_MS);
+  }, [clearActivityFallback]);
 
   useEffect(() => {
     if (!markdownModeInitializedRef.current) {
@@ -383,8 +417,7 @@ export function App({
       const controller = new AbortController();
       abortControllerRef.current = controller;
       setProcessing(true);
-      setActivityPhase("working");
-      setActivityToolName(undefined);
+      setStableActivity("working");
       setStatusError(false);
 
       try {
@@ -393,8 +426,7 @@ export function App({
           autoSave();
           return;
         }
-        setActivityPhase("idle");
-        setActivityToolName(undefined);
+        setStableActivity("idle");
         setContextTokens(session.lastInputTokens);
         setCacheReadTokens(session.lastCacheReadTokens ?? 0);
         setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -406,6 +438,7 @@ export function App({
         }
         const msg = err instanceof Error ? err.message : String(err);
         session.appendErrorMessage?.(msg, "resume_pending_turn");
+        clearActivityFallback();
         setStatusError(true);
       } finally {
         abortControllerRef.current = null;
@@ -415,7 +448,7 @@ export function App({
         }
       }
     },
-    [session, autoSave],
+    [session, autoSave, setStableActivity, clearActivityFallback],
   );
 
   // Wire incremental save callback into Session
@@ -467,12 +500,12 @@ export function App({
         // Reset token count on /new
         setContextTokens(0);
         setCacheReadTokens(0);
-        setActivityPhase("idle");
-        setActivityToolName(undefined);
+        setStableActivity("idle");
         setStatusError(false);
         setPendingAsk(null);
         setAskError(null);
         setHideProgress(false);
+        setPlanCheckpoints(null);
       },
       exit: performExit,
       onTurnRequested: (content: string) => {
@@ -487,7 +520,7 @@ export function App({
       promptSelect,
       promptSecret,
     };
-  }, [session, store, commandRegistry, autoSave, performExit, showInputHint, promptSelect, promptSecret]);
+  }, [session, store, commandRegistry, autoSave, performExit, showInputHint, promptSelect, promptSecret, setStableActivity]);
 
   // ------------------------------------------------------------------
   // Progress callback (streaming)
@@ -503,20 +536,16 @@ export function App({
       if (!hasSubAgentId) {
         switch (event.action) {
           case "reasoning_chunk":
-            setActivityPhase("thinking");
-            setActivityToolName(undefined);
+            setTransientActivity("thinking");
             break;
           case "text_chunk":
-            setActivityPhase("generating");
-            setActivityToolName(undefined);
+            setTransientActivity("generating");
             break;
           case "tool_call":
-            setActivityPhase("tool_calling");
-            setActivityToolName(event.extra?.["tool"] as string ?? undefined);
+            setStableActivity("working");
             break;
           case "agent_no_reply":
-            setActivityPhase("waiting");
-            setActivityToolName(undefined);
+            setStableActivity("waiting");
             break;
           case "agent_end":
             setContextTokens(session.lastInputTokens);
@@ -535,8 +564,7 @@ export function App({
         const ask = (event.extra?.["ask"] as PendingAskUi | undefined) ?? session.getPendingAsk?.() ?? null;
         setPendingAsk(ask);
         setAskError(null);
-        setActivityPhase("waiting");
-        setActivityToolName(undefined);
+        setStableActivity("waiting");
         return;
       }
       if (event.action === "ask_resolved") {
@@ -556,7 +584,7 @@ export function App({
         return;
       }
     },
-    [session],
+    [session, setStableActivity, setTransientActivity],
   );
 
   // Register progress callback on mount
@@ -576,8 +604,7 @@ export function App({
       abortControllerRef.current = controller;
 
       setProcessing(true);
-      setActivityPhase("working");
-      setActivityToolName(undefined);
+      setStableActivity("working");
       setStatusError(false);
 
       try {
@@ -588,8 +615,7 @@ export function App({
           return;
         }
 
-        setActivityPhase("idle");
-        setActivityToolName(undefined);
+        setStableActivity("idle");
         setContextTokens(session.lastInputTokens);
         setCacheReadTokens(session.lastCacheReadTokens ?? 0);
         setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -601,6 +627,7 @@ export function App({
         }
         const msg = err instanceof Error ? err.message : String(err);
         session.appendErrorMessage?.(msg, "turn");
+        clearActivityFallback();
         setStatusError(true);
         setPendingAsk(session.getPendingAsk?.() ?? null);
       } finally {
@@ -611,7 +638,7 @@ export function App({
         }
       }
     },
-    [session, autoSave],
+    [session, autoSave, setStableActivity, clearActivityFallback],
   );
   runTurnRef.current = runTurn;
 
@@ -626,8 +653,7 @@ export function App({
       const controller = new AbortController();
       abortControllerRef.current = controller;
       setProcessing(true);
-      setActivityPhase("working");
-      setActivityToolName(undefined);
+      setStableActivity("working");
       setStatusError(false);
 
       try {
@@ -636,8 +662,7 @@ export function App({
           autoSave();
           return;
         }
-        setActivityPhase("idle");
-        setActivityToolName(undefined);
+        setStableActivity("idle");
         setContextTokens(session.lastInputTokens);
         setCacheReadTokens(session.lastCacheReadTokens ?? 0);
         setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -649,6 +674,7 @@ export function App({
         }
         const msg = err instanceof Error ? err.message : String(err);
         session.appendErrorMessage?.(msg, "manual_summarize");
+        clearActivityFallback();
         setStatusError(true);
       } finally {
         abortControllerRef.current = null;
@@ -658,7 +684,7 @@ export function App({
         }
       }
     },
-    [session, autoSave],
+    [session, autoSave, setStableActivity, clearActivityFallback],
   );
   runManualSummarizeRef.current = runManualSummarize;
 
@@ -673,8 +699,7 @@ export function App({
       const controller = new AbortController();
       abortControllerRef.current = controller;
       setProcessing(true);
-      setActivityPhase("working");
-      setActivityToolName(undefined);
+      setStableActivity("working");
       setStatusError(false);
 
       try {
@@ -683,8 +708,7 @@ export function App({
           autoSave();
           return;
         }
-        setActivityPhase("idle");
-        setActivityToolName(undefined);
+        setStableActivity("idle");
         setContextTokens(session.lastInputTokens);
         setCacheReadTokens(session.lastCacheReadTokens ?? 0);
         setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -696,6 +720,7 @@ export function App({
         }
         const msg = err instanceof Error ? err.message : String(err);
         session.appendErrorMessage?.(msg, "manual_compact");
+        clearActivityFallback();
         setStatusError(true);
       } finally {
         abortControllerRef.current = null;
@@ -705,7 +730,7 @@ export function App({
         }
       }
     },
-    [session, autoSave],
+    [session, autoSave, setStableActivity, clearActivityFallback],
   );
   runManualCompactRef.current = runManualCompact;
 
@@ -990,8 +1015,7 @@ export function App({
       cancelledRef.current = true;
       abortControllerRef.current?.abort();
       setProcessing(false);
-      setActivityPhase("idle");
-      setActivityToolName(undefined);
+      setStableActivity("idle");
       clearInputHint();
     } else {
       showInputHint("Press Ctrl+C again to exit");
@@ -1003,6 +1027,7 @@ export function App({
     clearInputHint,
     showInputHint,
     performExit,
+    setStableActivity,
   ]);
 
   const handleCtrlL = useCallback(() => {
@@ -1302,7 +1327,7 @@ export function App({
         markdownMode={markdownMode}
         streamingAssistantEntryId={null}
       />
-      {planCheckpoints ? <PlanPanel checkpoints={planCheckpoints} /> : null}
+      {planCheckpoints ? <PlanPanel checkpoints={planCheckpoints} active={activityPhase !== "idle"} /> : null}
       {pendingAsk ? (
         <AskPanel
           ask={pendingAsk}
@@ -1338,7 +1363,7 @@ export function App({
         phase={activityPhase}
         toolName={activityToolName}
         error={statusError}
-        modelName={formatDisplayModelName(
+        modelName={formatStatusBarModelName(
           session.primaryAgent.modelConfig?.provider,
           session.primaryAgent.modelConfig?.model,
         )}

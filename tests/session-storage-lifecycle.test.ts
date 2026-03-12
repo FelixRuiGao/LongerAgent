@@ -466,30 +466,18 @@ describe("session storage lifecycle", () => {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
       const sessionDir = store.createSession();
-      const artifactsDir = store.artifactsDir!;
-      const planPath = join(artifactsDir, "plan.md");
 
-      writeFileSync(
-        planPath,
-        [
-          "## Checkpoints",
-          "- [ ] Explore auth flow",
-          "- [ ] Implement fix",
-          "",
-          "## Implement fix",
-          "1. Patch the auth guard",
-        ].join("\n"),
-        "utf-8",
-      );
-
-      const submit = session._execPlan({ action: "submit", file: "plan.md" });
+      const submit = session._execPlan({
+        action: "submit",
+        checkpoints: ["Explore auth flow", "Implement fix"],
+      });
       expect(submit.content).toContain("Plan submitted with 2 checkpoints.");
 
       const persisted = session.getLogForPersistence();
       saveLog(sessionDir, persisted.meta, [...persisted.entries]);
 
       const loaded = loadLog(sessionDir);
-      expect(loaded.meta.activePlanFile).toBe(planPath);
+      expect(loaded.meta.activePlanCheckpoints).toEqual(["Explore auth flow", "Implement fix"]);
 
       const restoredStore = new SessionStore({ baseDir, projectPath: projectRoot });
       restoredStore.sessionDir = sessionDir;
@@ -502,7 +490,6 @@ describe("session storage lifecycle", () => {
         const messages = getMessages();
         const injected = messages.find((msg) => String(msg.content ?? "").includes("## Active Plan"));
         expect(injected).toBeTruthy();
-        expect(String(injected?.content ?? "")).toContain("## Checkpoints");
         expect(String(injected?.content ?? "")).toContain("Explore auth flow");
         return {
           text: "",

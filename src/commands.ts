@@ -224,8 +224,6 @@ async function cmdNew(ctx: CommandContext, _args: string): Promise<void> {
   // Full session reset — store is updated, then conversation re-initialized
   // with correct paths. Equivalent to constructing a fresh Session.
   ctx.session.resetForNewSession(ctx.store);
-
-  ctx.showMessage("--- New session started ---");
 }
 
 async function cmdSummarize(ctx: CommandContext, args: string): Promise<void> {

@@ -7,6 +7,7 @@ tools:
   - list_dir
   - grep
   - glob
+  - time
   - web_search
   - web_fetch
 prompt_sections: [important_log, agents_md]

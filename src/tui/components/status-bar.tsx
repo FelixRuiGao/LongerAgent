@@ -13,6 +13,7 @@ import { theme } from "../theme.js";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL = 80;
+const STATUS_DURATION_MS = 5000;
 
 // ------------------------------------------------------------------
 // Types
@@ -45,6 +46,10 @@ function formatTokens(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+function formatContextPercentage(contextTokens: number, contextLimit: number): string {
+  return `${((contextTokens / contextLimit) * 100).toFixed(1)}%`;
+}
+
 // ------------------------------------------------------------------
 // Component
 // ------------------------------------------------------------------
@@ -59,7 +64,9 @@ export function StatusBar({
   cacheReadTokens,
 }: StatusBarProps): React.ReactElement {
   const [frame, setFrame] = useState(0);
+  const [phaseStartedAt, setPhaseStartedAt] = useState(() => Date.now());
   const isActive = phase !== "idle" && !error;
+  const displayKey = error ? "error" : phase;
 
   useEffect(() => {
     if (!isActive) return;
@@ -68,6 +75,10 @@ export function StatusBar({
     }, SPINNER_INTERVAL);
     return () => clearInterval(timer);
   }, [isActive]);
+
+  useEffect(() => {
+    setPhaseStartedAt(Date.now());
+  }, [displayKey]);
 
   // --- Build activity label ---
   let label: string;
@@ -87,7 +98,7 @@ export function StatusBar({
         color = theme.accent;
         break;
       case "tool_calling":
-        label = toolName ?? "tool";
+        label = "Working";
         color = theme.accent;
         break;
       case "generating":
@@ -105,6 +116,12 @@ export function StatusBar({
     }
   }
 
+  const elapsedMs = isActive ? Date.now() - phaseStartedAt : 0;
+  const elapsedSuffix =
+    !error && phase !== "idle" && elapsedMs >= STATUS_DURATION_MS
+      ? ` (${(elapsedMs / 1000).toFixed(1)}s)`
+      : null;
+
   // --- Token display ---
   const cacheSuffix =
     cacheReadTokens && cacheReadTokens > 0
@@ -112,9 +129,9 @@ export function StatusBar({
       : "";
   const tokenStr =
     contextTokens != null && contextLimit != null && contextLimit > 0
-      ? `Occupied Context: ${formatTokens(contextTokens)} / ${formatTokens(contextLimit)}${cacheSuffix}`
+      ? `Context: ${formatContextPercentage(contextTokens, contextLimit)}  ${formatTokens(contextTokens)} / ${formatTokens(contextLimit)}${cacheSuffix}`
       : contextTokens != null && contextTokens > 0
-        ? `Occupied Context: ${formatTokens(contextTokens)}${cacheSuffix}`
+        ? `Context: ${formatTokens(contextTokens)}${cacheSuffix}`
         : null;
 
   return (
@@ -125,7 +142,10 @@ export function StatusBar({
       ) : (
         <Text color={color}>{"● "}</Text>
       )}
-      <Text color={color}>{label}</Text>
+      <Text color={color}>
+        {label}
+        {elapsedSuffix ? <Text color="gray">{elapsedSuffix}</Text> : null}
+      </Text>
 
       {/* Model name */}
       {modelName && (

@@ -44,6 +44,19 @@ describe("Phase 2 tool validation and grep limits", () => {
     }
   });
 
+  it("returns current local time with timezone and UTC offset", async () => {
+    const root = makeTempDir("longeragent-phase2-time-tool-");
+    try {
+      const result = await executeTool("time", {}, { projectRoot: root });
+      expect(result.content).toContain("Current local time:");
+      expect(result.content).toContain("Timezone:");
+      expect(result.content).toContain("ISO 8601:");
+      expect(result.content).toMatch(/UTC[+-]\d{2}:\d{2}/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects risky/overlong regex patterns before grep execution", async () => {
     const root = makeTempDir("longeragent-phase2-search-regex-");
     try {

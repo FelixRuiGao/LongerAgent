@@ -1,8 +1,8 @@
 # Tools Reference
 
-LongerAgent comes with 15 built-in tools and 8 orchestration tools. Additional tools can be added through the [Skills](/guide/skills) system and [MCP integration](/guide/mcp).
+LongerAgent comes with 16 built-in tools and 8 orchestration tools. Additional tools can be added through the [Skills](/guide/skills) system and [MCP integration](/guide/mcp).
 
-## Built-in Tools (15)
+## Built-in Tools (16)
 
 These tools are available to the agent in every session.
 
@@ -33,6 +33,7 @@ These tools are available to the agent in every session.
 | Tool | Description |
 |------|-------------|
 | `test` | Run the project's test suite or a specific test file. |
+| `time` | Return the current local time, timezone, and UTC offset. |
 
 ### Web
 
@@ -66,7 +67,7 @@ These tools manage sub-agents, context, and user interaction.
 | Tool | Description |
 |------|-------------|
 | `ask` | Ask the user 1-4 structured questions with 1-4 options each. Used when the agent needs a decision before proceeding. |
-| `plan` | Present a plan to the user for review before executing. |
+| `plan` | Manage an execution plan with tracked checkpoints. |
 
 ## Skills Tool
 

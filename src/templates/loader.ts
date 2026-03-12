@@ -63,6 +63,7 @@ export const TOOL_PROMPT_ORDER: string[] = [
   "bash_output",
   "kill_shell",
   "test",
+  "time",
   // Web
   "web_search",
   "web_fetch",
@@ -110,6 +111,7 @@ export const EXECUTOR_DEFAULT_TOOLS: string[] = [
   "bash_output",
   "kill_shell",
   "test",
+  "time",
   "web_search",
   "web_fetch",
 ];

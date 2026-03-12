@@ -225,6 +225,10 @@ function projectTuiWindow(entries: LogEntry[]): ConversationEntry[] {
       const turnIndex = entry.turnIndex;
       const roundIndex = entry.roundIndex;
 
+      // Collect all entries in this round first, then reorder so that each
+      // tool_result appears right after its corresponding tool_call.
+      const roundEntries: LogEntry[] = [];
+
       while (i < entries.length) {
         const candidate = entries[i];
 
@@ -244,12 +248,55 @@ function projectTuiWindow(entries: LogEntry[]): ConversationEntry[] {
           candidate.roundIndex === roundIndex &&
           PRIMARY_ROUND_ENTRY_TYPES.has(candidate.type)
         ) {
-          result.push(...toConversationEntries(candidate, toolElapsedMap));
+          roundEntries.push(candidate);
           i++;
           continue;
         }
 
         break;
+      }
+
+      // Pair tool_call entries with their matching tool_result entries.
+      // Non-tool entries (assistant_text, reasoning) go first in their
+      // original order, then each tool_call is immediately followed by
+      // its tool_result (if visible).
+      const nonToolEntries: LogEntry[] = [];
+      const toolCalls: LogEntry[] = [];
+      const toolResultByCallId = new Map<string, LogEntry>();
+
+      for (const re of roundEntries) {
+        if (re.type === "tool_call") {
+          toolCalls.push(re);
+        } else if (re.type === "tool_result") {
+          const callId = re.meta["toolCallId"];
+          if (typeof callId === "string") {
+            toolResultByCallId.set(callId, re);
+          } else {
+            // Orphan result — append after all paired entries
+            nonToolEntries.push(re);
+          }
+        } else {
+          nonToolEntries.push(re);
+        }
+      }
+
+      for (const ne of nonToolEntries) {
+        result.push(...toConversationEntries(ne, toolElapsedMap));
+      }
+      for (const tc of toolCalls) {
+        result.push(...toConversationEntries(tc, toolElapsedMap));
+        const callId = tc.meta["toolCallId"];
+        if (typeof callId === "string") {
+          const tr = toolResultByCallId.get(callId);
+          if (tr) {
+            result.push(...toConversationEntries(tr, toolElapsedMap));
+            toolResultByCallId.delete(callId);
+          }
+        }
+      }
+      // Flush any unmatched tool_results (shouldn't happen, but be safe)
+      for (const tr of toolResultByCallId.values()) {
+        result.push(...toConversationEntries(tr, toolElapsedMap));
       }
 
       if (pendingSubAgentCalls.length > 0) {
@@ -363,6 +410,8 @@ export interface ApiProjectionOptions {
    */
   showContextAnnotations?: Map<string, string>;
 }
+
+const USER_MESSAGE_HEADER = "[User Message]";
 
 /**
  * Project log entries into InternalMessage[] for provider consumption.
@@ -547,13 +596,15 @@ export function projectToApiMessages(
   }
 
   // Inject important log if provided
-  if (options?.importantLog?.trim()) {
-    injectImportantLog(messages, options.importantLog);
+  const importantLog = options?.importantLog?.trim();
+  if (importantLog) {
+    injectImportantLog(messages, importantLog);
   }
 
   // Inject AGENTS.md content if provided
-  if (options?.agentsMd?.trim()) {
-    injectAgentsMd(messages, options.agentsMd);
+  const agentsMd = options?.agentsMd?.trim();
+  if (agentsMd) {
+    injectAgentsMd(messages, agentsMd, { ensureUserBoundary: !importantLog });
   }
 
   let projected = options?.truncateSummarizeToolArgs === false
@@ -707,7 +758,7 @@ function injectImportantLog(
     const first = messages[insertIdx];
     messages[insertIdx] = {
       ...first,
-      content: mergeMessageContent(fullContent, first.content),
+      content: mergeMessageContent(fullContent, first.content, { ensureUserBoundary: true }),
     };
   } else {
     // Insert standalone user message
@@ -722,6 +773,7 @@ function injectImportantLog(
 function injectAgentsMd(
   messages: InternalMessage[],
   agentsMdContent: string,
+  opts?: { ensureUserBoundary?: boolean },
 ): void {
   const header =
     "[AGENTS.MD — PERSISTENT MEMORY]\n" +
@@ -739,7 +791,7 @@ function injectAgentsMd(
     const first = messages[insertIdx];
     messages[insertIdx] = {
       ...first,
-      content: mergeMessageContent(fullContent, first.content),
+      content: mergeMessageContent(fullContent, first.content, { ensureUserBoundary: opts?.ensureUserBoundary === true }),
     };
   } else {
     // Insert standalone user message
@@ -800,15 +852,26 @@ function truncateSummarizeToolArgs(
 function mergeMessageContent(
   prefix: string,
   existing: unknown,
+  opts?: { ensureUserBoundary?: boolean },
 ): string | Array<Record<string, unknown>> {
+  const appendBoundary = (text: string): string => {
+    if (opts?.ensureUserBoundary !== true) return text;
+    const startsWithBoundary = text.startsWith(`${USER_MESSAGE_HEADER}\n`);
+    return startsWithBoundary ? text : `${USER_MESSAGE_HEADER}\n${text}`;
+  };
+
   if (typeof existing === "string") {
-    return `${prefix}\n\n${existing}`;
+    return `${prefix}\n\n${appendBoundary(existing)}`;
   }
   if (Array.isArray(existing)) {
+    const blocks: Array<Record<string, unknown>> = [{ type: "text", text: prefix }];
+    if (opts?.ensureUserBoundary === true) {
+      blocks.push({ type: "text", text: `${USER_MESSAGE_HEADER}\n` });
+    }
     return [
-      { type: "text", text: prefix },
+      ...blocks,
       ...existing as Array<Record<string, unknown>>,
     ];
   }
-  return `${prefix}\n\n${String(existing ?? "")}`;
+  return `${prefix}\n\n${appendBoundary(String(existing ?? ""))}`;
 }

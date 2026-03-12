@@ -1,9 +1,9 @@
 /**
  * Built-in tool definitions and executors.
  *
- * 15 tools: read_file, list_dir, glob, grep, edit_file, write_file,
+ * 16 tools: read_file, list_dir, glob, grep, edit_file, write_file,
  * apply_patch, bash, bash_background, bash_output, kill_shell,
- * diff, test, web_search, web_fetch.
+ * diff, test, time, web_search, web_fetch.
  */
 
 import fs from "node:fs/promises";
@@ -291,6 +291,18 @@ const TEST: ToolDef = {
   summaryTemplate: "{agent} is running tests",
 };
 
+const TIME: ToolDef = {
+  name: "time",
+  description:
+    "Return the current local time of the runtime environment, including timezone and UTC offset.",
+  parameters: {
+    type: "object",
+    properties: {},
+    required: [],
+  },
+  summaryTemplate: "{agent} is checking current time",
+};
+
 // ------------------------------------------------------------------
 // Glob tool
 // ------------------------------------------------------------------
@@ -477,6 +489,7 @@ export const BASIC_TOOLS: ToolDef[] = [
   KILL_SHELL_TOOL,
   DIFF,
   TEST,
+  TIME,
   WEB_SEARCH,
   WEB_FETCH,
 ];
@@ -746,11 +759,8 @@ function validateExpectedMtime(
   current: FileVersionSnapshot,
 ): void {
   if (expectedMtimeMs == null) return;
-  if (!current.exists) {
-    throw new FileVersionConflictError(
-      `File changed since last read (mtime conflict): ${filePath} (file does not exist).`,
-    );
-  }
+  if (!current.exists) return; // new file — mtime guard is meaningless
+  if (current.size === 0) return; // empty file — nothing to protect
   if (current.mtimeMs !== expectedMtimeMs) {
     throw new FileVersionConflictError(
       `File changed since last read (mtime conflict): ${filePath} ` +
@@ -845,8 +855,9 @@ async function toolEditFile(
       return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
     }
 
+    const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
     return new ToolResult({
-      content: "OK: File edited successfully.",
+      content: `OK: File edited successfully. [mtime_ms=${newMtimeMs}]`,
       metadata: {
         path: filePath,
         tui_preview: {
@@ -891,8 +902,9 @@ async function toolWriteFile(
 
       await atomicWriteTextFile(filePath, content, mode, initialVersion);
 
+      const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
       return new ToolResult({
-        content: `OK: Wrote ${content.length} characters to ${filePath}`,
+        content: `OK: Wrote ${content.length} characters to ${filePath} [mtime_ms=${newMtimeMs}]`,
         metadata: {
           path: filePath,
           tui_preview: {
@@ -1670,6 +1682,33 @@ function toolTest(command = "python -m pytest", timeout = 60): string {
   return toolBash(command, timeout);
 }
 
+function formatUtcOffset(date: Date): string {
+  // getTimezoneOffset returns minutes behind UTC; invert for UTC±HH:MM.
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMinutes);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  return `${sign}${hh}:${mm}`;
+}
+
+function toolTime(): string {
+  const now = new Date();
+  const tzIana = Intl.DateTimeFormat().resolvedOptions().timeZone || "Unknown";
+  const tzName =
+    new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+      .formatToParts(now)
+      .find((p) => p.type === "timeZoneName")?.value || "Unknown";
+  const offset = formatUtcOffset(now);
+  const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+  const iso = `${local.replace(" ", "T")}${offset}`;
+  return [
+    `Current local time: ${local}`,
+    `Timezone: ${tzIana} (${tzName}, UTC${offset})`,
+    `ISO 8601: ${iso}`,
+  ].join("\n");
+}
+
 // ======================================================================
 // Dispatcher
 // ======================================================================
@@ -2379,6 +2418,14 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         return toolTest(command, timeout ?? 60);
       } catch (e) {
         return formatToolError("test", e);
+      }
+    },
+    time: (args) => {
+      try {
+        expectArgsObject("time", args);
+        return toolTime();
+      } catch (e) {
+        return formatToolError("time", e);
       }
     },
     glob: (args) => {

@@ -373,7 +373,8 @@ export interface LogSessionMeta {
   compactCount: number;
   thinkingLevel: string;
   cacheHitEnabled: boolean;
-  activePlanFile?: string;
+  activePlanCheckpoints?: string[];
+  activePlanChecked?: boolean[];
 }
 
 /** Local inference server config (oMLX, LM Studio, etc.) */
@@ -512,7 +513,8 @@ export function saveLog(
     compact_count: meta.compactCount,
     thinking_level: meta.thinkingLevel,
     cache_hit_enabled: meta.cacheHitEnabled,
-    active_plan_file: meta.activePlanFile ?? null,
+    active_plan_checkpoints: meta.activePlanCheckpoints ?? null,
+    active_plan_checked: meta.activePlanChecked ?? null,
     entries: entries.map(entryToSnake),
   };
 
@@ -547,7 +549,8 @@ export function loadLog(dir: string): LoadLogResult {
     compactCount: raw.compact_count ?? 0,
     thinkingLevel: raw.thinking_level ?? "default",
     cacheHitEnabled: raw.cache_hit_enabled ?? false,
-    activePlanFile: raw.active_plan_file ?? undefined,
+    activePlanCheckpoints: Array.isArray(raw.active_plan_checkpoints) ? raw.active_plan_checkpoints as string[] : undefined,
+    activePlanChecked: Array.isArray(raw.active_plan_checked) ? raw.active_plan_checked as boolean[] : undefined,
   };
 
   const rawEntries = (raw.entries ?? []) as Array<Record<string, unknown>>;
