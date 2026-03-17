@@ -47,7 +47,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm build && pnpm test"
+    "prepublishOnly": "pnpm build && pnpm test",
+    "gui:install": "cd gui && pnpm install",
+    "gui:build": "cd gui && pnpm build",
+    "gui:dev": "cd gui && pnpm dev",
+    "gui:start": "cd gui && pnpm start"
   },
   "engines": {
     "node": ">=18.0.0"

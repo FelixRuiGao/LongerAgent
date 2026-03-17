@@ -21,7 +21,7 @@ import { Agent } from "./agents/agent.js";
 import { Session } from "./session.js";
 import { loadTemplates } from "./templates/loader.js";
 import { loadSkillsMulti } from "./skills/loader.js";
-import { SessionStore } from "./persistence.js";
+import { SessionStore, fixStorage } from "./persistence.js";
 import { loadMcpServers } from "./mcp-config.js";
 import { loadDotenv } from "./dotenv.js";
 import { getLongerAgentHomeDir } from "./home-path.js";
@@ -94,6 +94,30 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       ranSubcommand = true;
       const { oauthCommand } = await import("./auth/openai-oauth.js");
       await oauthCommand(action);
+    });
+
+  program
+    .command("fix")
+    .description("Check and repair session storage (missing project.json / meta.json)")
+    .action(() => {
+      ranSubcommand = true;
+      console.log("Checking session storage...\n");
+      const result = fixStorage();
+      console.log(`Projects checked: ${result.projectsChecked}`);
+      console.log(`Projects fixed:   ${result.projectsFixed}`);
+      console.log(`Sessions checked: ${result.sessionsChecked}`);
+      console.log(`Sessions fixed:   ${result.sessionsFixed}`);
+      if (result.warnings.length > 0) {
+        console.log(`\nWarnings:`);
+        for (const w of result.warnings) {
+          console.log(`  - ${w}`);
+        }
+      }
+      if (result.projectsFixed === 0 && result.sessionsFixed === 0) {
+        console.log("\nAll good — no repairs needed.");
+      } else {
+        console.log(`\nDone — repaired ${result.projectsFixed + result.sessionsFixed} items.`);
+      }
     });
 
   // Default action — prevents Commander from showing help and exiting

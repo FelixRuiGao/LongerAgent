@@ -88,6 +88,7 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
   "kimi-k2-instruct": 128_000,
   // GLM (Zhipu AI)
   "glm-5": 200_000,
+  "glm-5-turbo": 200_000,
   "glm-4.7": 200_000,
   "glm-4.7-flash": 200_000,
   // MiniMax
@@ -125,7 +126,7 @@ export const KNOWN_THINKING_MODELS: Set<string> = new Set([
   // Kimi
   "kimi-k2.5", "kimi-k2-thinking",
   // GLM
-  "glm-5", "glm-4.7", "glm-4.7-flash",
+  "glm-5", "glm-5-turbo", "glm-4.7", "glm-4.7-flash",
   // MiniMax
   "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.1",
   "MiniMax-M1-40k", "MiniMax-M1-80k",
@@ -168,6 +169,7 @@ export const KNOWN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "kimi-k2-instruct": 65_536,
   // GLM (Zhipu AI)
   "glm-5": 128_000,
+  "glm-5-turbo": 128_000,
   "glm-4.7": 128_000,
   "glm-4.7-flash": 128_000,
   // MiniMax
@@ -211,7 +213,7 @@ export const KNOWN_THINKING_LEVELS: Record<string, string[]> = {
   "claude-haiku-4.5": ["off", "low", "medium", "high"],
   "claude-opus-4-5-20251101":   ["off", "low", "medium", "high"],
   // GLM
-  "glm-5": ["off", "on"], "glm-4.7": ["off", "on"], "glm-4.7-flash": ["off", "on"],
+  "glm-5": ["off", "on"], "glm-5-turbo": ["off", "on"], "glm-4.7": ["off", "on"], "glm-4.7-flash": ["off", "on"],
   // Kimi
   "kimi-k2.5": ["off", "on"], "kimi-k2-thinking": ["off", "on"],
   // MiniMax (not configurable)
@@ -584,7 +586,7 @@ export class Config {
       this._rawModels[name] = {
         provider: providerId,
         model: local.model,
-        api_key: "local",
+        api_key: local.apiKey ?? "local",
         base_url: local.baseUrl,
         context_length: local.contextLength,
         supports_web_search: false,

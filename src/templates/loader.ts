@@ -231,19 +231,26 @@ export function loadTemplates(
     throw new Error(`Bundled templates root not found: ${bundledRoot}`);
   }
 
-  // Discover template dirs: bundled first, user overrides on top
+  // Discover template dirs: bundled first, then user-only additions.
+  // User templates whose name collides with a bundled template are
+  // silently skipped — bundled templates are authoritative and their
+  // prompt assembly pipeline assumes a specific system_prompt format.
   const templateDirs: Record<string, string> = {};
+  const bundledNames = new Set<string>();
   for (const child of readdirSync(bundledRoot).sort()) {
     const childPath = join(bundledRoot, child);
     if (isTemplateDir(childPath)) {
       templateDirs[child] = childPath;
+      bundledNames.add(child);
     }
   }
   if (userRoot && existsSync(userRoot) && statSync(userRoot).isDirectory()) {
     for (const child of readdirSync(userRoot).sort()) {
+      if (bundledNames.has(child)) continue; // never override bundled templates
+      if (child.startsWith("_")) continue; // _-prefixed dirs are examples, not loaded
       const childPath = join(userRoot, child);
       if (isTemplateDir(childPath)) {
-        templateDirs[child] = childPath; // override bundled
+        templateDirs[child] = childPath;
       }
     }
   }

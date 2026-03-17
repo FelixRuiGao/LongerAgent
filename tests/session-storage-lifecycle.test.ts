@@ -704,7 +704,7 @@ describe("session storage lifecycle", () => {
       const tuiEntries = projectToTuiEntries(log);
       expect(tuiEntries.some((entry) => entry.text.includes("Last turn was interrupted by the user."))).toBe(false);
       expect(tuiEntries).toEqual([
-        { kind: "tool_call", text: "edit_file src/a.ts", id: "tc-001", startedAt: expect.any(Number), elapsedMs: expect.any(Number) },
+        { kind: "tool_call", text: "edit_file src/a.ts", id: "tc-001", startedAt: expect.any(Number), elapsedMs: expect.any(Number), meta: { toolName: "edit_file", toolArgs: { path: "src/a.ts" } } },
         { kind: "assistant", text: "partial", id: "as-001" },
         { kind: "interrupted_marker", text: "[Interrupted here.]", id: "as-001:interrupt" },
       ]);

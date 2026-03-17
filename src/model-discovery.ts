@@ -21,13 +21,14 @@ export interface DiscoveredModel {
 export async function fetchModelsFromServer(
   baseUrl: string,
   timeoutMs = 5000,
+  apiKey = "local",
 ): Promise<DiscoveredModel[]> {
   const url = `${baseUrl.replace(/\/+$/, "")}/models`;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const resp = await fetch(url, {
-      headers: { Authorization: "Bearer local" },
+      headers: { Authorization: `Bearer ${apiKey}` },
       signal: controller.signal,
     });
     clearTimeout(timer);

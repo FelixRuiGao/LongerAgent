@@ -280,8 +280,19 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       default: provider.defaultBaseUrl,
     });
 
+    // Try without key first; if no models found, ask for API key and retry
     console.log(`  Connecting to ${baseUrl} ...`);
-    const discovered = await fetchModelsFromServer(baseUrl);
+    let apiKey = "local";
+    let discovered = await fetchModelsFromServer(baseUrl, 5000, apiKey);
+    if (discovered.length === 0) {
+      const keyInput = await input({
+        message: `${provider.name}: API key (Enter to skip if none required)`,
+      });
+      if (keyInput.trim()) {
+        apiKey = keyInput.trim();
+        discovered = await fetchModelsFromServer(baseUrl, 5000, apiKey);
+      }
+    }
 
     let modelId: string;
     let contextLength: number | undefined;
@@ -316,9 +327,12 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       contextLength = parseInt(ctxInput, 10) || 32768;
     }
 
+    const localProvider: LocalProviderConfig = { baseUrl, model: modelId, contextLength };
+    if (apiKey !== "local") localProvider.apiKey = apiKey;
+
     return {
       providerId: provider.id,
-      localProvider: { baseUrl, model: modelId, contextLength },
+      localProvider,
       defaultModelConfigName: `${provider.id}:${modelId}`,
     };
   }
@@ -568,9 +582,13 @@ export async function runInitWizard(): Promise<WizardResult> {
   // Save preferences
   savePreferences(homeDir, prefs);
 
-  // Ensure user override directories
+  // Ensure user override directories and global memory file
   mkdirSync(join(homeDir, "agent_templates"), { recursive: true });
   mkdirSync(join(homeDir, "skills"), { recursive: true });
+  const globalAgentsMd = join(homeDir, "AGENTS.md");
+  if (!existsSync(globalAgentsMd)) {
+    writeFileSync(globalAgentsMd, "");
+  }
 
   // Summary
   console.log();

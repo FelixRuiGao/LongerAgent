@@ -8,7 +8,7 @@ import {
 } from "./provider-presets.js";
 import { isManagedProvider } from "./managed-provider-credentials.js";
 
-type ModelEntryLike = {
+export type ModelEntryLike = {
   name: string;
   provider: string;
   model: string;
@@ -31,7 +31,7 @@ export interface ResolvedModelSelection {
   modelId: string;
 }
 
-function readModelEntries(config: any): ModelEntryLike[] {
+export function readModelEntries(config: any): ModelEntryLike[] {
   if (typeof config?.listModelEntries === "function") {
     try {
       const entries = config.listModelEntries();
@@ -59,7 +59,7 @@ function readModelEntries(config: any): ModelEntryLike[] {
   return out;
 }
 
-function hasEnvApiKey(envVar: string | undefined): boolean {
+export function hasEnvApiKey(envVar: string | undefined): boolean {
   if (!envVar) return false;
   const raw = process.env[envVar];
   return typeof raw === "string" && raw.trim() !== "";
@@ -69,6 +69,15 @@ function getProviderKeySource(
   entries: ModelEntryLike[],
   provider: string,
 ): string | undefined {
+  // Local servers: use stored key from existing config entry, or default "local".
+  const presetForKey = findProviderPreset(provider);
+  if (presetForKey?.localServer) {
+    const localEntry = entries.find((e) =>
+      e.provider === provider && e.hasResolvedApiKey && e.apiKeyRaw.trim() !== "",
+    );
+    return localEntry?.apiKeyRaw ?? "local";
+  }
+
   if (isManagedProvider(provider)) {
     const fromConfig = entries.find((entry) =>
       entry.provider === provider
@@ -105,7 +114,7 @@ function getProviderKeySource(
   return undefined;
 }
 
-function parseProviderModelTarget(target: string): { provider: string; model: string } | null {
+export function parseProviderModelTarget(target: string): { provider: string; model: string } | null {
   const idx = target.indexOf(":");
   if (idx <= 0 || idx >= target.length - 1) return null;
   return {
@@ -114,7 +123,7 @@ function parseProviderModelTarget(target: string): { provider: string; model: st
   };
 }
 
-function runtimeModelName(provider: string, model: string): string {
+export function runtimeModelName(provider: string, model: string): string {
   const slug = (s: string) =>
     s
       .toLowerCase()

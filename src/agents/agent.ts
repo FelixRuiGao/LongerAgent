@@ -106,6 +106,21 @@ export class Agent {
   }
 
   /**
+   * Create an independent copy of this agent with its own modelConfig
+   * and provider instance. Used for multi-session concurrency.
+   */
+  clone(): Agent {
+    return new Agent({
+      name: this.name,
+      description: this.description,
+      modelConfig: { ...this.modelConfig },
+      systemPrompt: this.systemPrompt,
+      tools: [...this.tools],
+      maxToolRounds: this.maxToolRounds,
+    });
+  }
+
+  /**
    * Replace this agent's model config and recreate the provider.
    * Used for runtime model switching (e.g., /model command).
    * Only safe to call between turns (not while a turn is in progress).

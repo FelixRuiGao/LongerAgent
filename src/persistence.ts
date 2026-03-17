@@ -26,7 +26,7 @@ import {
 } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { getLongerAgentHomeDir } from "./home-path.js";
 import { LogIdAllocator, type LogEntry, type LogEntryType, type TuiDisplayKind } from "./log-entry.js";
 
@@ -146,12 +146,14 @@ export class SessionStore {
   private _ensureProjectMetadata(projectDir: string): void {
     const projectJson = join(projectDir, "project.json");
     if (existsSync(projectJson)) return;
+    const now = nowTimestamps().utcIso;
     writeFileSync(
       projectJson,
       JSON.stringify(
         {
           original_path: this._projectPath ?? "",
-          created_at: nowTimestamps().utcIso,
+          created_at: now,
+          last_active_at: now,
         },
         null,
         2,
@@ -204,6 +206,12 @@ export class SessionStore {
         this._ensureProjectMetadata(projectDir);
         const sessionDir = SessionStore._createUniqueSessionDir(projectDir);
         mkdirSync(join(sessionDir, "artifacts"), { recursive: true });
+
+        // Ensure global AGENTS.md exists (fallback for users who skipped init wizard)
+        const globalAgentsMd = join(baseDir, "AGENTS.md");
+        if (!existsSync(globalAgentsMd)) {
+          try { writeFileSync(globalAgentsMd, ""); } catch { /* non-critical */ }
+        }
 
         this._activeBaseDir = baseDir;
         this._projectDir = projectDir;
@@ -295,10 +303,10 @@ export class SessionStore {
     throw new Error(`Unable to save TUI preferences. Tried: ${detail}`);
   }
 
-  listSessions(): Array<{ path: string; created: string; summary: string; turns: number }> {
+  listSessions(): Array<{ path: string; created: string; lastActiveAt: string; summary: string; title?: string; turns: number }> {
     if (!existsSync(this._projectDir)) return [];
 
-    const sessions: Array<{ path: string; created: string; summary: string; turns: number }> = [];
+    const sessions: Array<{ path: string; created: string; lastActiveAt: string; summary: string; title?: string; turns: number }> = [];
     const entries = readdirSync(this._projectDir).sort().reverse();
 
     for (const name of entries) {
@@ -309,20 +317,107 @@ export class SessionStore {
       } catch {
         continue;
       }
+
+      // Prefer meta.json for fast listing
+      const metaFile = join(d, "meta.json");
+      if (existsSync(metaFile)) {
+        try {
+          const raw = JSON.parse(readFileSync(metaFile, "utf-8"));
+          const createdUtc = (raw.created_at as string) ?? "";
+          const created = toLocalIsoFromUtc(createdUtc) || createdUtc;
+          const lastActiveUtc = (raw.last_active_at as string) ?? createdUtc;
+          const lastActiveAt = toLocalIsoFromUtc(lastActiveUtc) || lastActiveUtc;
+          const summary = raw.summary ?? "";
+          const title = raw.title ?? undefined;
+          const turns = raw.turn_count ?? 0;
+          // Skip empty sessions (0 turns) and archived sessions
+          if (turns === 0) continue;
+          if (raw.archived) continue;
+          sessions.push({ path: d, created, lastActiveAt, summary, title, turns });
+          continue;
+        } catch {
+          // Fall through to log.json
+        }
+      }
+
+      // Fallback to log.json
       const logFile = join(d, "log.json");
       if (!existsSync(logFile)) continue;
       try {
         const raw = JSON.parse(readFileSync(logFile, "utf-8"));
         const createdUtc = (raw["created_at"] as string) ?? "";
         const created = toLocalIsoFromUtc(createdUtc) || createdUtc;
+        const lastActiveUtc = (raw["updated_at"] as string) ?? createdUtc;
+        const lastActiveAt = toLocalIsoFromUtc(lastActiveUtc) || lastActiveUtc;
         const summary = raw["summary"] ?? "";
+        const title = raw["title"] ?? undefined;
         const turns = raw["turn_count"] ?? 0;
-        sessions.push({ path: d, created, summary, turns });
+        // Skip empty sessions (0 turns) and archived sessions
+        if (turns === 0) continue;
+        if (raw.archived) continue;
+        sessions.push({ path: d, created, lastActiveAt, summary, title, turns });
       } catch {
         continue;
       }
     }
+
+    // Sort by lastActiveAt descending (most recently active first)
+    sessions.sort((a, b) => {
+      if (!a.lastActiveAt && !b.lastActiveAt) return 0;
+      if (!a.lastActiveAt) return 1;
+      if (!b.lastActiveAt) return -1;
+      return b.lastActiveAt.localeCompare(a.lastActiveAt);
+    });
+
     return sessions;
+  }
+
+  /** List all projects across the storage directory, sorted by last_active_at descending. */
+  listProjects(): Array<{
+    slug: string;
+    originalPath: string;
+    createdAt: string;
+    lastActiveAt: string;
+  }> {
+    const projectsDir = join(this._preferredBaseDir, "projects");
+    if (!existsSync(projectsDir)) return [];
+
+    const result: Array<{
+      slug: string;
+      originalPath: string;
+      createdAt: string;
+      lastActiveAt: string;
+    }> = [];
+
+    for (const name of readdirSync(projectsDir)) {
+      const d = join(projectsDir, name);
+      try {
+        if (!statSync(d).isDirectory()) continue;
+      } catch { continue; }
+
+      const projectJson = join(d, "project.json");
+      if (!existsSync(projectJson)) continue;
+
+      try {
+        const raw = JSON.parse(readFileSync(projectJson, "utf-8"));
+        result.push({
+          slug: name,
+          originalPath: raw.original_path ?? "",
+          createdAt: raw.created_at ?? "",
+          lastActiveAt: raw.last_active_at ?? "",
+        });
+      } catch { continue; }
+    }
+
+    // Sort by last_active_at descending
+    result.sort((a, b) => {
+      if (!a.lastActiveAt && !b.lastActiveAt) return 0;
+      if (!a.lastActiveAt) return 1;
+      if (!b.lastActiveAt) return -1;
+      return b.lastActiveAt.localeCompare(a.lastActiveAt);
+    });
+
+    return result;
   }
 
   get projectDir(): string {
@@ -369,6 +464,7 @@ export interface LogSessionMeta {
   modelSelectionKey?: string;
   modelId?: string;
   summary: string;
+  title?: string;
   turnCount: number;
   compactCount: number;
   thinkingLevel: string;
@@ -382,6 +478,8 @@ export interface LocalProviderConfig {
   baseUrl: string;
   model: string;
   contextLength: number;
+  /** API key for servers that require authentication (e.g. oMLX). Defaults to "local" if omitted. */
+  apiKey?: string;
 }
 
 export interface GlobalTuiPreferences {
@@ -431,6 +529,7 @@ export function createLogSessionMeta(
     modelSelectionKey: undefined,
     modelId: undefined,
     summary: "",
+    title: undefined,
     turnCount: 0,
     compactCount: 0,
     thinkingLevel: "default",
@@ -485,6 +584,55 @@ function entryFromSnake(obj: Record<string, unknown>): LogEntry {
 }
 
 // ------------------------------------------------------------------
+// Session meta.json (lightweight summary for fast listing)
+// ------------------------------------------------------------------
+
+export interface SessionMetaSummary {
+  created_at: string;
+  last_active_at: string;
+  summary: string;
+  title?: string;
+  turn_count: number;
+  archived?: boolean;
+}
+
+export function saveSessionMeta(sessionDir: string, meta: LogSessionMeta): void {
+  const metaFile = join(sessionDir, "meta.json");
+  const tmp = metaFile + ".tmp";
+  // Preserve fields set externally (e.g. "archived") by merging with existing meta
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(metaFile)) {
+      existing = JSON.parse(readFileSync(metaFile, "utf-8"));
+    }
+  } catch { /* ignore */ }
+  const payload: Record<string, unknown> = {
+    ...existing,
+    created_at: meta.createdAt,
+    last_active_at: meta.updatedAt,
+    summary: meta.summary,
+    title: meta.title,
+    turn_count: meta.turnCount,
+  };
+  writeFileSync(tmp, JSON.stringify(payload, null, 2));
+  renameSync(tmp, metaFile);
+}
+
+function updateProjectLastActive(projectDir: string, lastActiveAt: string): void {
+  const projectJson = join(projectDir, "project.json");
+  if (!existsSync(projectJson)) return;
+  try {
+    const raw = JSON.parse(readFileSync(projectJson, "utf-8"));
+    raw.last_active_at = lastActiveAt;
+    const tmp = projectJson + ".tmp";
+    writeFileSync(tmp, JSON.stringify(raw, null, 2));
+    renameSync(tmp, projectJson);
+  } catch {
+    // Best-effort update
+  }
+}
+
+// ------------------------------------------------------------------
 // saveLog / loadLog
 // ------------------------------------------------------------------
 
@@ -509,6 +657,7 @@ export function saveLog(
     model_selection_key: meta.modelSelectionKey ?? null,
     model_id: meta.modelId ?? null,
     summary: meta.summary,
+    title: meta.title ?? null,
     turn_count: meta.turnCount,
     compact_count: meta.compactCount,
     thinking_level: meta.thinkingLevel,
@@ -522,6 +671,20 @@ export function saveLog(
   const tmp = logFile + ".tmp";
   writeFileSync(tmp, JSON.stringify(payload, null, 2));
   renameSync(tmp, logFile);
+
+  // Write lightweight meta.json alongside log.json
+  try {
+    saveSessionMeta(dir, meta);
+  } catch {
+    // Best-effort
+  }
+
+  // Update project.json last_active_at
+  try {
+    updateProjectLastActive(dirname(dir), meta.updatedAt);
+  } catch {
+    // Best-effort
+  }
 }
 
 export interface LoadLogResult {
@@ -545,6 +708,7 @@ export function loadLog(dir: string): LoadLogResult {
     modelSelectionKey: raw.model_selection_key ?? undefined,
     modelId: raw.model_id ?? undefined,
     summary: raw.summary ?? "",
+    title: raw.title ?? undefined,
     turnCount: raw.turn_count ?? 0,
     compactCount: raw.compact_count ?? 0,
     thinkingLevel: raw.thinking_level ?? "default",
@@ -797,4 +961,125 @@ export function restoreArchiveToEntries(
       e.content = contentMap.get(e.id)!;
     }
   }
+}
+
+// ------------------------------------------------------------------
+// fixStorage — repair missing project.json and meta.json
+// ------------------------------------------------------------------
+
+export interface FixStorageResult {
+  projectsChecked: number;
+  projectsFixed: number;
+  sessionsChecked: number;
+  sessionsFixed: number;
+  warnings: string[];
+}
+
+export function fixStorage(baseDir?: string): FixStorageResult {
+  const resolvedBase = resolvePreferredBaseDir(baseDir);
+  const projectsDir = join(resolvedBase, "projects");
+
+  const result: FixStorageResult = {
+    projectsChecked: 0,
+    projectsFixed: 0,
+    sessionsChecked: 0,
+    sessionsFixed: 0,
+    warnings: [],
+  };
+
+  if (!existsSync(projectsDir)) return result;
+
+  for (const projectName of readdirSync(projectsDir)) {
+    const projectDir = join(projectsDir, projectName);
+    try {
+      if (!statSync(projectDir).isDirectory()) continue;
+    } catch { continue; }
+
+    result.projectsChecked++;
+
+    // Check / create project.json
+    const projectJson = join(projectDir, "project.json");
+    let projectData: Record<string, unknown>;
+    if (!existsSync(projectJson)) {
+      projectData = {
+        original_path: "",
+        created_at: nowTimestamps().utcIso,
+        last_active_at: "",
+      };
+      writeFileSync(projectJson, JSON.stringify(projectData, null, 2));
+      result.projectsFixed++;
+      result.warnings.push(`Created missing project.json for ${projectName} (original_path unknown)`);
+    } else {
+      try {
+        projectData = JSON.parse(readFileSync(projectJson, "utf-8"));
+      } catch {
+        result.warnings.push(`Could not parse project.json for ${projectName}`);
+        continue;
+      }
+    }
+
+    // Scan sessions and fix meta.json
+    let latestActiveAt = "";
+    for (const sessionName of readdirSync(projectDir)) {
+      if (!sessionName.endsWith("_chat")) continue;
+      const sessionDir = join(projectDir, sessionName);
+      try {
+        if (!statSync(sessionDir).isDirectory()) continue;
+      } catch { continue; }
+
+      result.sessionsChecked++;
+
+      const metaFile = join(sessionDir, "meta.json");
+      const logFile = join(sessionDir, "log.json");
+
+      if (!existsSync(metaFile)) {
+        if (existsSync(logFile)) {
+          try {
+            const raw = JSON.parse(readFileSync(logFile, "utf-8"));
+            const payload: SessionMetaSummary = {
+              created_at: raw.created_at ?? "",
+              last_active_at: raw.updated_at ?? "",
+              summary: raw.summary ?? "",
+              title: raw.title ?? undefined,
+              turn_count: raw.turn_count ?? 0,
+            };
+            const tmp = metaFile + ".tmp";
+            writeFileSync(tmp, JSON.stringify(payload, null, 2));
+            renameSync(tmp, metaFile);
+            result.sessionsFixed++;
+
+            if (payload.last_active_at > latestActiveAt) {
+              latestActiveAt = payload.last_active_at;
+            }
+          } catch {
+            result.warnings.push(`Could not parse log.json for ${projectName}/${sessionName}`);
+          }
+        } else {
+          result.warnings.push(`No log.json or meta.json for ${projectName}/${sessionName}`);
+        }
+      } else {
+        // meta.json exists — track latest for project-level update
+        try {
+          const raw = JSON.parse(readFileSync(metaFile, "utf-8"));
+          const activeAt = raw.last_active_at ?? "";
+          if (activeAt > latestActiveAt) {
+            latestActiveAt = activeAt;
+          }
+        } catch { /* skip */ }
+      }
+    }
+
+    // Update project.json last_active_at if missing or stale
+    if (latestActiveAt && projectData.last_active_at !== latestActiveAt) {
+      projectData.last_active_at = latestActiveAt;
+      try {
+        const tmp = projectJson + ".tmp";
+        writeFileSync(tmp, JSON.stringify(projectData, null, 2));
+        renameSync(tmp, projectJson);
+        result.projectsFixed++;
+      } catch { /* skip */ }
+    }
+  }
+
+  return result;
 }

@@ -227,9 +227,10 @@ export class OpenAIChatProvider extends BaseProvider {
       );
     }
 
-    // Capture reasoning_content if present (Kimi thinking mode)
+    // Capture reasoning_content if present (Kimi: reasoning_content, Ollama: reasoning)
+    const msgRecord = message as unknown as Record<string, unknown>;
     const reasoning =
-      (message as unknown as Record<string, unknown>)["reasoning_content"] as string || "";
+      (msgRecord["reasoning_content"] as string) || (msgRecord["reasoning"] as string) || "";
 
     // Extract web search citations from annotations (url_citation)
     const annotations =
@@ -398,8 +399,12 @@ export class OpenAIChatProvider extends BaseProvider {
       );
     let hasVendorReasoningSplit = requestedReasoningSplit;
     // Track <think> tag extraction for APIs that embed reasoning in content
-    // (e.g. MiniMax sends <think>...</think> in delta.content instead of reasoning_details)
+    // (e.g. MiniMax sends <think>...</think> in delta.content instead of reasoning_details,
+    //  or LM Studio which outputs <think> tags as plain text in content)
     let thinkTagEmittedLen = 0;
+    // Detect <think> in content for servers without vendor reasoning split (e.g. LM Studio).
+    // null = first content delta not yet seen; then true/false.
+    let contentHasInlineThink: boolean | null = null;
 
     function normalizeReasoningDetails(details: unknown): { text: string; state: unknown } | null {
       const collectText = (value: unknown): string => {
@@ -509,10 +514,12 @@ export class OpenAIChatProvider extends BaseProvider {
         }
       }
 
-      // Reasoning / thinking content (Kimi)
-      const reasoning = (delta as Record<string, unknown>)[
+      // Reasoning / thinking content (Kimi: reasoning_content, Ollama: reasoning)
+      const reasoning = ((delta as Record<string, unknown>)[
         "reasoning_content"
-      ] as string | undefined;
+      ] ?? (delta as Record<string, unknown>)[
+        "reasoning"
+      ]) as string | undefined;
       if (reasoning) {
         reasoningSoFar = appendMaybeCumulative(
           reasoning,
@@ -566,7 +573,36 @@ export class OpenAIChatProvider extends BaseProvider {
           textSoFar = appendMaybeCumulative(visible, visibleTextSoFar, textParts, onTextChunk);
           visibleTextSoFar = textSoFar;
         } else {
-          textSoFar = appendMaybeCumulative(delta.content, textSoFar, textParts, onTextChunk);
+          // Detect <think> tags on first content delta (LM Studio, local LLMs).
+          // <think> is a single special token in Qwen/DeepSeek, so the first chunk
+          // is always the complete "<think>" string.
+          if (contentHasInlineThink === null) {
+            contentHasInlineThink = delta.content.replace(/^\s*/, "").startsWith("<think>");
+          }
+
+          if (contentHasInlineThink) {
+            rawTextSoFar = reconcileMaybeCumulative(delta.content, rawTextSoFar);
+            const trimmed = rawTextSoFar.replace(/^\s*/, "");
+            if (trimmed.startsWith("<think>")) {
+              const tagStart = rawTextSoFar.indexOf("<think>") + "<think>".length;
+              const closeIdx = rawTextSoFar.indexOf("</think>", tagStart);
+              const thinkContent = closeIdx >= 0
+                ? rawTextSoFar.slice(tagStart, closeIdx)
+                : rawTextSoFar.slice(tagStart);
+              const newPart = thinkContent.slice(thinkTagEmittedLen);
+              if (newPart) {
+                thinkTagEmittedLen = thinkContent.length;
+                reasoningParts.push(newPart);
+                reasoningSoFar += newPart;
+                if (onReasoningChunk) onReasoningChunk(newPart);
+              }
+            }
+            const visible = stripLeadingThinkBlock(rawTextSoFar);
+            textSoFar = appendMaybeCumulative(visible, visibleTextSoFar, textParts, onTextChunk);
+            visibleTextSoFar = textSoFar;
+          } else {
+            textSoFar = appendMaybeCumulative(delta.content, textSoFar, textParts, onTextChunk);
+          }
         }
       }
 

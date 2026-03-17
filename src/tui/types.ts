@@ -130,6 +130,8 @@ export interface ConversationEntry {
   queued?: boolean;
   /** When true, TUI renders this entry in dim/gray style. */
   dim?: boolean;
+  /** Extra metadata for GUI rendering (e.g. toolName, toolArgs). */
+  meta?: Record<string, unknown>;
 }
 
 // ------------------------------------------------------------------

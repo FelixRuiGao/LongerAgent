@@ -12,8 +12,9 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { SessionStore } from "./persistence.js";
+import type { SessionStore, LocalProviderConfig } from "./persistence.js";
 import { loadLog, validateAndRepairLog } from "./persistence.js";
+import { fetchModelsFromServer } from "./model-discovery.js";
 import {
   formatDisplayModelName,
   formatScopedModelName,
@@ -21,9 +22,17 @@ import {
 } from "./config.js";
 import {
   PROVIDER_PRESETS,
+  findProviderPreset,
   type ProviderPresetModel,
 } from "./provider-presets.js";
-import { resolveModelSelection as resolveModelSelectionCore } from "./model-selection.js";
+import {
+  resolveModelSelection as resolveModelSelectionCore,
+  type ModelEntryLike,
+  readModelEntries,
+  hasEnvApiKey,
+  parseProviderModelTarget,
+  runtimeModelName,
+} from "./model-selection.js";
 import {
   isManagedProvider,
 } from "./managed-provider-credentials.js";
@@ -265,8 +274,8 @@ async function cmdResume(ctx: CommandContext, args: string): Promise<void> {
       const created = s.created
         ? s.created.slice(0, 19).replace("T", " ")
         : "?";
-      const summary = truncateDisplayText(s.summary || "(empty)", 25);
-      lines.push(`  ${i + 1}  ${created}  ${s.turns}t  ${summary}`);
+      const displayName = truncateDisplayText(s.title || s.summary || "(empty)", 25);
+      lines.push(`  ${i + 1}  ${created}  ${s.turns}t  ${displayName}`);
     }
     lines.push("");
     lines.push("Use /resume <number> to load a session.");
@@ -353,7 +362,7 @@ function resumeOptions(ctx: CommandOptionsContext): CommandOption[] {
   if (!store) return [];
   const sessions = store.listSessions();
   return sessions.map((s, i) => ({
-    label: buildResumeOptionLabel(i, s.created, s.turns, s.summary),
+    label: buildResumeOptionLabel(i, s.created, s.turns, s.title || s.summary),
     value: String(i + 1),
   }));
 }
@@ -510,63 +519,6 @@ async function cmdCacheHit(ctx: CommandContext, args: string): Promise<void> {
 // /model command
 // ------------------------------------------------------------------
 
-interface ModelEntryLike {
-  name: string;
-  provider: string;
-  model: string;
-  apiKeyRaw: string;
-  hasResolvedApiKey: boolean;
-}
-
-const PROVIDER_KEY_GROUP_ALIASES: Record<string, string> = {
-  "openai-chat": "openai",
-  "openai-responses": "openai",
-  "openai-codex": "openai-codex", // Separate group — uses OAuth, not shared API key
-  "kimi-ai": "kimi",
-};
-
-function providerKeyGroup(provider: string): string {
-  return PROVIDER_KEY_GROUP_ALIASES[provider] ?? provider;
-}
-
-const PROVIDER_ENV_VARS = (() => {
-  const map = new Map<string, string>();
-  for (const p of PROVIDER_PRESETS) {
-    const group = providerKeyGroup(p.id);
-    if (!map.has(group)) map.set(group, p.envVar);
-  }
-  return map;
-})();
-
-function readModelEntries(config: any): ModelEntryLike[] {
-  if (typeof config?.listModelEntries === "function") {
-    try {
-      const entries = config.listModelEntries();
-      if (Array.isArray(entries)) return entries as ModelEntryLike[];
-    } catch {
-      // Fall through to compatibility mode.
-    }
-  }
-
-  // Compatibility for old/partial config stubs (best-effort only).
-  const out: ModelEntryLike[] = [];
-  for (const name of (config?.modelNames as string[]) ?? []) {
-    try {
-      const mc = config.getModel(name);
-      out.push({
-        name,
-        provider: String(mc.provider ?? ""),
-        model: String(mc.model ?? ""),
-        apiKeyRaw: String(mc.apiKey ?? ""),
-        hasResolvedApiKey: Boolean(mc.apiKey),
-      });
-    } catch {
-      // Ignore invalid entries.
-    }
-  }
-  return out;
-}
-
 function parseModelArgs(args: string): { target: string } {
   const tokens = args.trim().split(/\s+/).filter(Boolean);
   const target = tokens[0] ?? "";
@@ -586,64 +538,6 @@ function parseModelArgs(args: string): { target: string } {
     );
   }
   return { target };
-}
-
-function parseProviderModelTarget(target: string): { provider: string; model: string } | null {
-  const idx = target.indexOf(":");
-  if (idx <= 0 || idx >= target.length - 1) return null;
-  return {
-    provider: target.slice(0, idx),
-    model: target.slice(idx + 1),
-  };
-}
-
-function hasEnvApiKey(envVar: string | undefined): boolean {
-  if (!envVar) return false;
-  const raw = process.env[envVar];
-  return typeof raw === "string" && raw.trim() !== "";
-}
-
-function getProviderKeySource(
-  entries: ModelEntryLike[],
-  provider: string,
-): string | undefined {
-  if (isManagedProvider(provider)) {
-    const fromConfig = entries.find((e) =>
-      e.provider === provider && e.hasResolvedApiKey && e.apiKeyRaw.trim() !== ""
-    );
-    if (fromConfig) return fromConfig.apiKeyRaw;
-
-    const preset = PROVIDER_PRESETS.find((p) => p.id === provider);
-    if (preset && hasEnvApiKey(preset.envVar)) return `\${${preset.envVar}}`;
-    return undefined;
-  }
-
-  const group = providerKeyGroup(provider);
-  const fromConfig = entries.find((e) =>
-    providerKeyGroup(e.provider) === group && e.hasResolvedApiKey && e.apiKeyRaw.trim() !== ""
-  );
-  if (fromConfig) return fromConfig.apiKeyRaw;
-
-  const envVar = PROVIDER_ENV_VARS.get(group);
-  if (hasEnvApiKey(envVar)) return `\${${envVar}}`;
-
-  // OAuth fallback for openai-codex
-  if (provider === "openai-codex") {
-    try {
-      if (hasOAuthTokens()) return "oauth:openai-codex";
-    } catch { /* ignore */ }
-  }
-
-  return undefined;
-}
-
-function runtimeModelName(provider: string, model: string): string {
-  const slug = (s: string) =>
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-  return `runtime-${slug(provider)}-${slug(model)}`;
 }
 
 function formatPresetPickerLabel(provider: string, presetModel: ProviderPresetModel): string {
@@ -700,7 +594,7 @@ function buildModelChildren(
         && provider === currentProvider
         && item.model === currentModel
       );
-    const missingApiKey = !providerHasKey.get(providerKeyGroup(provider));
+    const missingApiKey = !providerHasKey.get(provider);
     const missingHint = provider === "openai-codex"
       ? "not logged in: run longeragent oauth"
       : isManagedProvider(provider)
@@ -785,19 +679,21 @@ function modelOptions(ctx: CommandOptionsContext): CommandOption[] {
   const providerHasKey = new Map<string, boolean>();
   for (const e of entries) {
     if (e.hasResolvedApiKey) {
-      providerHasKey.set(providerKeyGroup(e.provider), true);
+      providerHasKey.set(e.provider, true);
     }
   }
-  for (const [group, envVar] of PROVIDER_ENV_VARS) {
-    if (hasEnvApiKey(envVar)) providerHasKey.set(group, true);
+  for (const preset of PROVIDER_PRESETS) {
+    if (preset.localServer) continue;
+    if (hasEnvApiKey(preset.envVar)) {
+      providerHasKey.set(preset.id, true);
+    }
   }
   // OAuth: check token store for openai-codex (sync, no HTTP)
   try {
     if (hasOAuthTokens()) providerHasKey.set("openai-codex", true);
   } catch { /* auth module not available */ }
-  const currentProviderGroup = providerKeyGroup(currentProvider);
-  if (session.primaryAgent?.modelConfig?.apiKey) {
-    providerHasKey.set(currentProviderGroup, true);
+  if (currentProvider && session.primaryAgent?.modelConfig?.apiKey) {
+    providerHasKey.set(currentProvider, true);
   }
 
   // Build a lookup from provider id → preset (for group metadata).
@@ -894,6 +790,24 @@ function modelOptions(ctx: CommandOptionsContext): CommandOption[] {
       continue;
     }
 
+    // ── Local inference servers: append "Discover models..." entry ──
+    if (preset?.localServer) {
+      const children = buildModelChildren(
+        provider, byProvider, providerHasKey, session, currentProvider, currentModel,
+      );
+      children.push({
+        label: "Discover models...",
+        value: `${provider}:__discover__`,
+      });
+      const hasCurrent = children.some((c) => c.label.includes("(current)"));
+      options.push({
+        label: hasCurrent ? `${provider}  (current)` : provider,
+        value: provider,
+        children,
+      });
+      continue;
+    }
+
     // ── Two-level: ungrouped providers (anthropic, openai, user-defined) ──
     const children = buildModelChildren(
       provider, byProvider, providerHasKey, session, currentProvider, currentModel,
@@ -903,6 +817,19 @@ function modelOptions(ctx: CommandOptionsContext): CommandOption[] {
       label: hasCurrent ? `${provider}  (current)` : provider,
       value: provider,
       children,
+    });
+  }
+
+  // Ensure local providers appear even if no models are configured yet.
+  for (const preset of PROVIDER_PRESETS) {
+    if (!preset.localServer || processed.has(preset.id)) continue;
+    options.push({
+      label: preset.id,
+      value: preset.id,
+      children: [{
+        label: "Discover models...",
+        value: `${preset.id}:__discover__`,
+      }],
     });
   }
 
@@ -938,6 +865,13 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
 
   try {
     const { target } = parseModelArgs(trimmed);
+
+    // ── Local provider discovery: "ollama:__discover__" ──
+    if (target.endsWith(":__discover__")) {
+      await cmdModelLocalDiscover(ctx, target.split(":")[0]);
+      return;
+    }
+
     let resolvedSelection;
     try {
       resolvedSelection = resolveModelSelection(session, target);
@@ -993,6 +927,154 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
   }
 }
 
+/**
+ * Local provider discovery sub-flow for /model.
+ * Scans the server, lets user pick a model, registers it, and switches.
+ */
+async function cmdModelLocalDiscover(ctx: CommandContext, providerId: string): Promise<void> {
+  const session = ctx.session;
+  const preset = findProviderPreset(providerId);
+  if (!preset?.localServer) {
+    ctx.showMessage(`'${providerId}' is not a local provider.`);
+    return;
+  }
+  if (!ctx.promptSelect) {
+    ctx.showMessage("Interactive model discovery is not available in this UI.");
+    return;
+  }
+
+  const defaultUrl = preset.defaultBaseUrl ?? "http://localhost:11434/v1";
+
+  // Let user confirm or change the URL
+  const urlChoice = await ctx.promptSelect({
+    message: `${preset.name}: Server URL`,
+    options: [
+      { label: `Use default (${defaultUrl})`, value: defaultUrl },
+      { label: "Enter custom URL...", value: "__custom__" },
+    ],
+  });
+  if (!urlChoice) return;
+
+  let baseUrl = urlChoice;
+  if (urlChoice === "__custom__") {
+    const custom = await ctx.promptSecret?.({
+      message: `${preset.name}: Enter server URL`,
+    });
+    if (!custom?.trim()) return;
+    baseUrl = custom.trim();
+  }
+
+  // Discover models — try without key first, then ask if needed
+  ctx.showMessage(`Scanning ${baseUrl} ...`);
+  let apiKey = "local";
+  let discovered = await fetchModelsFromServer(baseUrl, 5000, apiKey);
+  if (discovered.length === 0) {
+    // May be an auth issue — ask for API key
+    const keyInput = await ctx.promptSecret?.({
+      message: `${preset.name}: API key (Enter to skip if none required)`,
+      allowEmpty: true,
+    });
+    if (keyInput?.trim()) {
+      apiKey = keyInput.trim();
+      discovered = await fetchModelsFromServer(baseUrl, 5000, apiKey);
+    }
+  }
+  if (discovered.length === 0) {
+    ctx.showMessage(
+      `No models found at ${baseUrl}.\n` +
+      "Make sure the server is running and has at least one model loaded.",
+    );
+    return;
+  }
+
+  // Let user pick a model
+  const modelChoice = await ctx.promptSelect({
+    message: `${preset.name}: ${discovered.length} model(s) found`,
+    options: discovered.map((m) => ({
+      label: m.contextLength
+        ? `${m.id} (${Math.round(m.contextLength / 1024)}K ctx)`
+        : m.id,
+      value: m.id,
+    })),
+  });
+  if (!modelChoice) return;
+
+  let contextLength = discovered.find((m) => m.id === modelChoice)?.contextLength;
+  if (!contextLength) {
+    // Most local servers don't report context length via /v1/models.
+    // Prompt the user to specify it (same as init wizard).
+    const ctxChoice = await ctx.promptSelect({
+      message: `${preset.name}: Context length not reported by server`,
+      options: [
+        { label: "8K", value: "8192" },
+        { label: "32K", value: "32768" },
+        { label: "64K", value: "65536" },
+        { label: "128K", value: "131072" },
+        { label: "Enter custom...", value: "__custom__" },
+      ],
+    });
+    if (!ctxChoice) return;
+    if (ctxChoice === "__custom__") {
+      const ctxInput = await ctx.promptSecret?.({
+        message: `${preset.name}: Context length (tokens)`,
+      });
+      contextLength = parseInt(ctxInput ?? "", 10) || 32768;
+    } else {
+      contextLength = parseInt(ctxChoice, 10);
+    }
+  }
+
+  // Register the model in config
+  const config = session.config;
+  const rtName = runtimeModelName(providerId, modelChoice);
+  config.upsertModelRaw(rtName, {
+    provider: providerId,
+    model: modelChoice,
+    api_key: apiKey,
+    base_url: baseUrl,
+    context_length: contextLength,
+    supports_web_search: false,
+  });
+
+  // Persist localProvider config so it survives restarts
+  if (ctx.store && typeof ctx.store.loadGlobalPreferences === "function") {
+    const existing = ctx.store.loadGlobalPreferences();
+    const localCfg: LocalProviderConfig = { baseUrl, model: modelChoice, contextLength };
+    if (apiKey !== "local") localCfg.apiKey = apiKey;
+    const localProviders: Record<string, LocalProviderConfig> = {
+      ...(existing?.localProviders ?? {}),
+      [providerId]: localCfg,
+    };
+    ctx.store.saveGlobalPreferences({
+      ...existing,
+      localProviders,
+    });
+  }
+
+  // Switch to the new model
+  ctx.resetUiState();
+  ctx.autoSave();
+  if (ctx.store) {
+    ctx.store.clearSession();
+  }
+
+  session.switchModel(rtName);
+  session.setPersistedModelSelection?.({
+    modelConfigName: rtName,
+    modelProvider: providerId,
+    modelSelectionKey: modelChoice,
+    modelId: modelChoice,
+  });
+  session.resetForNewSession(ctx.store);
+  persistGlobalPreferences(ctx);
+
+  ctx.showMessage(
+    `--- New session with ${preset.name} / ${modelChoice} ---\n` +
+    `  URL: ${baseUrl}\n` +
+    `  Context: ${contextLength.toLocaleString()} tokens`,
+  );
+}
+
 // ------------------------------------------------------------------
 // /theme command
 // ------------------------------------------------------------------
@@ -1040,6 +1122,48 @@ async function cmdTheme(ctx: CommandContext, args: string): Promise<void> {
 }
 
 // ------------------------------------------------------------------
+// /rename — set a custom session title
+// ------------------------------------------------------------------
+
+async function cmdRename(ctx: CommandContext, args: string): Promise<void> {
+  const session = ctx.session;
+  if (!session || (session._turnCount ?? 0) === 0) {
+    ctx.showMessage("Start a conversation first before renaming.");
+    return;
+  }
+
+  const trimmed = args.trim();
+  if (trimmed) {
+    session.setTitle?.(trimmed);
+    ctx.autoSave();
+    ctx.showMessage(`Session renamed to: ${trimmed}`);
+    return;
+  }
+
+  // Interactive: prompt for new title
+  if (!ctx.promptSecret) {
+    ctx.showMessage("Usage: /rename <new title>");
+    return;
+  }
+  const currentName = session.getDisplayName?.() || "";
+  const input = await ctx.promptSecret({
+    message: `Rename session (current: ${currentName}):`,
+    allowEmpty: true,
+  });
+  if (input === undefined) return; // cancelled
+  const value = input.trim();
+  if (value) {
+    session.setTitle?.(value);
+    ctx.autoSave();
+    ctx.showMessage(`Session renamed to: ${value}`);
+  } else {
+    session.setTitle?.("");
+    ctx.autoSave();
+    ctx.showMessage("Session title cleared (using auto-generated name).");
+  }
+}
+
+// ------------------------------------------------------------------
 // Registry builder
 // ------------------------------------------------------------------
 
@@ -1061,6 +1185,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/theme", description: "Change accent color", handler: cmdTheme, options: themeOptions });
   registry.register({ name: "/skills", description: "Manage installed skills", handler: cmdSkills, options: skillsOptions, checkboxMode: true });
   registry.register({ name: "/mcp", description: "Show MCP server status and tools", handler: cmdMcp });
+  registry.register({ name: "/rename", description: "Rename current session", handler: cmdRename });
   return registry;
 }
 

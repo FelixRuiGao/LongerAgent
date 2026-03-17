@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { getLongerAgentHomeDir } from "./home-path.js";
 import { join, dirname, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as yaml from "js-yaml";
@@ -364,6 +365,8 @@ export class Session {
   private _mcpConnected = false;
 
   private _createdAt: string;
+  private _title: string | undefined;
+  private _cachedSummary: string | undefined;
 
   // Structured log (v2 architecture — dual-array transition)
   private _log: LogEntry[] = [];
@@ -464,6 +467,7 @@ export class Session {
     promptsDirs?: string[];
     store?: any;
     contextRatio?: number;
+    projectRoot?: string;
   }) {
     this.primaryAgent = opts.primaryAgent;
     this.config = opts.config;
@@ -485,7 +489,7 @@ export class Session {
     }
 
     // Resolve path variables
-    this._projectRoot = process.cwd();
+    this._projectRoot = opts.projectRoot ?? process.cwd();
     this._sessionArtifactsOverride = "";
     this._systemData = "";
 
@@ -519,6 +523,8 @@ export class Session {
 
   private _initConversation(): void {
     this._createdAt = new Date().toISOString();
+    this._title = undefined;
+    this._cachedSummary = undefined;
     const systemPrompt = this._renderSystemPrompt(this.primaryAgent.systemPrompt);
     this._log = [];
     this._idAllocator = new LogIdAllocator();
@@ -1047,6 +1053,8 @@ export class Session {
     );
     this._cacheHitEnabled = restoredCachePreference;
     this._createdAt = meta.createdAt || this._createdAt;
+    this._title = meta.title;
+    this._cachedSummary = meta.summary || undefined;
 
     // Rebuild usedContextIds from entries
     this._usedContextIds = new Set<string>();
@@ -1110,6 +1118,7 @@ export class Session {
         compactCount: this._compactCount,
         thinkingLevel: this._thinkingLevel,
         cacheHitEnabled: this._cacheHitEnabled,
+        title: this._title,
         summary: this._generateSummary(),
         activePlanCheckpoints: this._activePlanCheckpoints.length > 0 ? this._activePlanCheckpoints : undefined,
         activePlanChecked: this._activePlanChecked.length > 0 ? this._activePlanChecked : undefined,
@@ -1393,6 +1402,24 @@ export class Session {
         `Skill directory: ${skill.dir}\n\n` +
         content,
     });
+  }
+
+  // ==================================================================
+  // Session title
+  // ==================================================================
+
+  setTitle(title: string): void {
+    this._title = title || undefined;
+    // No onSaveRequest — renaming should not update last_active_at.
+    // The caller (store:renameSession) writes title to disk directly.
+  }
+
+  getTitle(): string | undefined {
+    return this._title;
+  }
+
+  getDisplayName(): string {
+    return this._title || this._generateSummary();
   }
 
   // ==================================================================
@@ -3341,15 +3368,15 @@ export class Session {
   private _readAgentsMd(): string {
     const parts: string[] = [];
 
-    // 1. Global: ~/AGENTS.md
-    const globalPath = join(homedir(), "AGENTS.md");
+    // 1. Global: ~/.longeragent/AGENTS.md
+    const globalPath = join(getLongerAgentHomeDir(), "AGENTS.md");
     if (existsSync(globalPath)) {
       try {
         const content = readFileSync(globalPath, "utf-8").trim();
         parts.push(
           content
-            ? `## Global Memory (~/AGENTS.md)\n\n${content}`
-            : `## Global Memory (~/AGENTS.md)\n\n(empty file)`,
+            ? `## Global Memory\n\n${content}`
+            : `## Global Memory\n\n(empty file)`,
         );
       } catch {
         // Ignore read errors
@@ -3363,8 +3390,8 @@ export class Session {
         const content = readFileSync(projectPath, "utf-8").trim();
         parts.push(
           content
-            ? `## Project Memory (AGENTS.md)\n\n${content}`
-            : `## Project Memory (AGENTS.md)\n\n(empty file)`,
+            ? `## Project Memory\n\n${content}`
+            : `## Project Memory\n\n(empty file)`,
         );
       } catch {
         // Ignore read errors
@@ -5572,13 +5599,15 @@ export class Session {
   // All persistence is now via getLogForPersistence() / restoreFromLog().
 
   private _generateSummary(): string {
+    if (this._cachedSummary !== undefined) return this._cachedSummary;
     for (const entry of this._log) {
       if (entry.type !== "user_message") continue;
       if (entry.discarded) continue;
       const display = entry.display;
       if (!display) continue;
       if (SYSTEM_PREFIXES.some((prefix) => display.startsWith(prefix))) continue;
-      return stripContextTags(display).slice(0, 100).trim();
+      this._cachedSummary = stripContextTags(display).slice(0, 100).trim();
+      return this._cachedSummary;
     }
     return "New session";
   }

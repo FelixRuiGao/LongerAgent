@@ -88,12 +88,21 @@ function toConversationEntry(
   };
   if (entry.meta["tuiDim"]) ce.dim = true;
 
-  // Attach timing info for tool_call entries
+  // Attach timing info and meta for tool_call entries
   if (entry.type === "tool_call") {
     ce.startedAt = entry.timestamp;
     const toolCallId = entry.meta["toolCallId"];
     if (typeof toolCallId === "string" && toolElapsedMap?.has(toolCallId)) {
       ce.elapsedMs = toolElapsedMap.get(toolCallId);
+    }
+    // Expose tool metadata for richer GUI rendering
+    const toolName = entry.meta["toolName"];
+    const content = entry.content as { arguments?: Record<string, unknown> } | undefined;
+    const toolArgs = content?.arguments;
+    if (toolName || toolArgs) {
+      ce.meta = {};
+      if (typeof toolName === "string") ce.meta.toolName = toolName;
+      if (toolArgs && typeof toolArgs === "object") ce.meta.toolArgs = toolArgs;
     }
   }
 
