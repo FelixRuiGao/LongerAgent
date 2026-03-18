@@ -44,6 +44,7 @@
     "docs:preview": "vitepress preview docs-site",
     "build": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});\" && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "dev": "tsx src/cli.ts",
+    "opentui:dev": "bun run opentui-src/main.tsx",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -59,15 +60,23 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.61.0",
     "@inquirer/prompts": "^8.3.0",
+    "@opentui/core": "^0.1.88",
+    "@opentui/core-darwin-arm64": "0.1.88",
+    "@opentui/react": "^0.1.88",
+    "bun-ffi-structs": "^0.1.2",
     "commander": "^12.0.0",
+    "diff": "^8.0.3",
     "gpt-tokenizer": "^3.4.0",
     "ink": "^6.8.0",
+    "jimp": "^1.6.0",
     "js-yaml": "^4.1.0",
     "marked": "^15.0.0",
     "marked-terminal": "^7.0.0",
     "markitdown-ts": "^0.0.10",
     "openai": "^4.90.0",
-    "react": "^19.2.4"
+    "react": "^19.2.4",
+    "web-tree-sitter": "^0.26.7",
+    "yoga-layout": "^3.2.1"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
