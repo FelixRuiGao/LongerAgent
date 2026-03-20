@@ -14,6 +14,8 @@ import { saveLog } from "../src/persistence.js";
 import { projectToTuiEntries } from "../src/log-projection.js";
 import { isCommandExitSignal } from "../src/commands.js";
 import { ProgressReporter, type ProgressEvent } from "../src/progress.js";
+import { scanCandidates } from "../src/file-attach.js";
+import { classifyPastedText, TurnPasteCounter } from "../src/tui/input/paste.js";
 import type {
   PendingAskUi,
   AgentQuestionAnswer,
@@ -57,6 +59,19 @@ import {
 } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import "./forked/patch-opentui-markdown.js";
+import { getCurrentModelDescriptor, type ModelDescriptor } from "../src/model-presentation.js";
+import {
+  buildFileReferenceLabel,
+  createComposerTokenVisuals,
+  displayWidthWithNewlines,
+  ensureComposerTokenType,
+  findFileReferenceQuery,
+  getTextDiffRange,
+  patchComposerExtmarksForDisplayWidth,
+  replaceRangeWithComposerToken,
+  serializeComposerText,
+  type ComposerTokenVisuals,
+} from "./composer-tokens.js";
 
 type ActivityPhase =
   | "idle"
@@ -64,6 +79,7 @@ type ActivityPhase =
   | "thinking"
   | "generating"
   | "waiting"
+  | "closing"
   | "error";
 
 export interface OpenTuiAppProps {
@@ -71,38 +87,102 @@ export interface OpenTuiAppProps {
   commandRegistry: CommandRegistry;
   store: SessionStore | null;
   verbose?: boolean;
-  onExit: () => Promise<void> | void;
+  onExit: (farewell?: string) => Promise<void> | void;
 }
 
-const COLORS = {
+type OpenTuiThemeMode = "dark" | "light";
+
+const BASE_COLORS = {
   background: "transparent",
   panel: "transparent",
   border: "#4b5567",
-  accent: "#55a2ff",
+  accent: "#f4c95d",
   dim: "#97a2b5",
   text: "#ecf2ff",
-  yellow: "#f4c95d",
-  red: "#ff6b6b",
-  green: "#65d08f",
-  cyan: "#72d6ff",
+  yellow: "#f5e1b4",
+  red: "#e1a9b2",
+  green: "#9fd89f",
+  cyan: "#93d7cf",
+  orange: "#ffb347",
+  thinking: "#b0b8c6",
+  muted: "#778093",
+  readyStatus: "#a0e6a0",
+  thinkingStatus: "#7dcfff",
+  workingStatus: "#bb9af7",
+  generatingStatus: "#f4c95d",
+  waitingStatus: "#ff9e64",
+  closingStatus: "#7a8490",
+  errorStatus: "#f7768e",
 } as const;
 
-type OpenTuiPalette = typeof COLORS;
+const SEMANTIC_PALETTES: Record<OpenTuiThemeMode, typeof BASE_COLORS> = {
+  dark: {
+    ...BASE_COLORS,
+    yellow: "#f5e1b4",
+    red: "#e1a9b2",
+    green: "#9fd89f",
+    cyan: "#93d7cf",
+    readyStatus: "#a0e6a0",
+    thinkingStatus: "#7dcfff",
+    workingStatus: "#bb9af7",
+    generatingStatus: "#f4c95d",
+    waitingStatus: "#ff9e64",
+    closingStatus: "#7a8490",
+    errorStatus: "#f7768e",
+    muted: "#778093",
+  },
+  light: {
+    ...BASE_COLORS,
+    accent: "#d8aa38",
+    yellow: "#eca030",
+    red: "#d02848",
+    green: "#22b858",
+    cyan: "#18b0a0",
+    readyStatus: "#1ca850",
+    thinkingStatus: "#1a88d0",
+    workingStatus: "#8240de",
+    generatingStatus: "#d88808",
+    waitingStatus: "#e06418",
+    closingStatus: "#606870",
+    errorStatus: "#dc3838",
+    muted: "#707880",
+  },
+};
+
+type OpenTuiPalette = typeof BASE_COLORS;
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
 const TERMINAL_PALETTE_REFRESH_MS = 30_000;
+const CTRL_C_EXIT_WINDOW_MS = 2000;
+const FIXED_CLOSE_DELAY_MS = 1500;
 const INPUT_MAX_VISIBLE_LINES = 10;
 const COMMAND_PICKER_MAX_VISIBLE = 10;
 const CHECKBOX_PICKER_MAX_VISIBLE = 15;
 const PROMPT_SELECT_MAX_VISIBLE = 10;
-const SIDEBAR_WIDTH = 34;
-const MIN_TERMINAL_WIDTH_FOR_SIDEBAR = 120;
+const SIDEBAR_MIN_WIDTH = 30;
+const SIDEBAR_MAX_WIDTH = 48;
+const MIN_TERMINAL_WIDTH_FOR_SIDEBAR = 90;
 const MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER = 72;
 const MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER = 28;
 const APP_VERSION = "v0.1.3";
+const CONTEXT_PRIMARY_NEUTRAL = "#738399";
+const CONTEXT_SECONDARY_NEUTRAL = "#c0cad8";
 const CUSTOM_EMPTY_HINT =
   'Custom answer is empty. Please enter an answer first, or choose "Discuss further" instead.';
+const GOODBYE_MESSAGES = [
+  "Bye!",
+  "Goodbye!",
+  "See you later!",
+  "Until next time!",
+  "Take care!",
+  "Happy coding!",
+  "Catch you later!",
+  "Peace out!",
+  "So long!",
+  "Off I go!",
+  "Later, gator!",
+] as const;
 
 const MARKDOWN_TREE_SITTER_CLIENT = getTreeSitterClient();
 
@@ -122,6 +202,7 @@ const COMPOSER_KEY_BINDINGS: KeyBinding[] = [
 ];
 
 interface CommandOverlayState {
+  mode: "command" | "file";
   visible: boolean;
   items: string[];
   values: string[];
@@ -129,16 +210,75 @@ interface CommandOverlayState {
 }
 
 interface OpenTuiTheme {
+  mode: OpenTuiThemeMode;
   colors: OpenTuiPalette;
   markdownStyle: SyntaxStyle;
   defaultForeground: string | null;
   defaultBackground: string | null;
 }
 
+const DARK_PROVIDER_MODEL_COLORS: Record<string, string> = {
+  openai: "#10a37f",
+  "openai-codex": "#10a37f",
+  kimi: "#38bdf8",
+  "kimi-cn": "#38bdf8",
+  "kimi-code": "#38bdf8",
+  minimax: "#f472b6",
+  "minimax-cn": "#f472b6",
+  glm: "#818cf8",
+  "glm-intl": "#818cf8",
+  "glm-code": "#818cf8",
+  "glm-intl-code": "#818cf8",
+  openrouter: "#c084fc",
+  lmstudio: "#9ca3af",
+  omlx: "#9ca3af",
+  ollama: "#9ca3af",
+  anthropic: "#e6c3a5",
+};
+
+const LIGHT_PROVIDER_MODEL_COLORS: Record<string, string> = {
+  openai: "#109870",
+  "openai-codex": "#109870",
+  kimi: "#1a88d0",
+  "kimi-cn": "#1a88d0",
+  "kimi-code": "#1a88d0",
+  minimax: "#d83078",
+  "minimax-cn": "#d83078",
+  glm: "#5448d8",
+  "glm-intl": "#5448d8",
+  "glm-code": "#5448d8",
+  "glm-intl-code": "#5448d8",
+  openrouter: "#9238d8",
+  lmstudio: "#545c68",
+  omlx: "#545c68",
+  ollama: "#545c68",
+  anthropic: "#b86018",
+};
+
 function normalizeHexColor(hex: string | null | undefined): string | null {
   if (!hex) return null;
   const normalized = hex.trim().toLowerCase();
   return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : null;
+}
+
+function resolveModelNameColor(
+  themeMode: OpenTuiThemeMode,
+  descriptor: ModelDescriptor | null,
+  colors: OpenTuiPalette,
+): string {
+  if (!descriptor) {
+    return colors.accent;
+  }
+
+  const providerColors = themeMode === "light" ? LIGHT_PROVIDER_MODEL_COLORS : DARK_PROVIDER_MODEL_COLORS;
+
+  const exact = providerColors[descriptor.providerId];
+  if (exact) return exact;
+
+  const brand = providerColors[descriptor.brandKey];
+  if (brand) return brand;
+
+  return colors.accent;
 }
 
 function hexToRgb(hex: string): [number, number, number] | null {
@@ -187,24 +327,30 @@ function buildMarkdownStyle(colors: OpenTuiPalette): SyntaxStyle {
     "markup.link": { fg: RGBA.fromHex(colors.cyan) },
     "markup.link.label": { fg: RGBA.fromHex(colors.text), underline: true },
     "markup.link.url": { fg: RGBA.fromHex(colors.cyan), underline: true },
-    "markup.quote": { fg: RGBA.fromHex(colors.dim), italic: true },
+    "markup.quote": { fg: RGBA.fromHex(colors.muted), italic: true },
     "markup.list": { fg: RGBA.fromHex(colors.text) },
   });
 }
 
-function buildTheme(defaultForeground: string | null, defaultBackground: string | null): OpenTuiTheme {
-  const text = normalizeHexColor(defaultForeground) ?? COLORS.text;
+function buildTheme(
+  mode: OpenTuiThemeMode,
+  defaultForeground: string | null,
+  defaultBackground: string | null,
+): OpenTuiTheme {
+  const semantic = SEMANTIC_PALETTES[mode];
+  const text = normalizeHexColor(defaultForeground) ?? semantic.text;
   const background = normalizeHexColor(defaultBackground) ?? "#000000";
-  const dim = mixHexColors(text, background, 0.35) ?? COLORS.dim;
-  const border = mixHexColors(text, background, 0.62) ?? COLORS.border;
+  const dim = mixHexColors(text, background, 0.35) ?? semantic.dim;
+  const border = mixHexColors(text, background, 0.62) ?? semantic.border;
   const colors: OpenTuiPalette = {
-    ...COLORS,
+    ...semantic,
     text,
     dim,
     border,
   };
 
   return {
+    mode,
     colors,
     markdownStyle: buildMarkdownStyle(colors),
     defaultForeground: normalizeHexColor(defaultForeground),
@@ -241,6 +387,7 @@ interface QuestionAnswerState {
 }
 
 const EMPTY_COMMAND_OVERLAY: CommandOverlayState = {
+  mode: "command",
   visible: false,
   items: [],
   values: [],
@@ -253,6 +400,14 @@ function clamp(value: number, min: number, max: number): number {
   return value;
 }
 
+function getSidebarWidth(terminalWidth: number): number {
+  return clamp(
+    Math.floor(terminalWidth * 0.20),
+    SIDEBAR_MIN_WIDTH,
+    SIDEBAR_MAX_WIDTH,
+  );
+}
+
 function getVisibleWindow(count: number, selected: number, maxVisible: number): { start: number; end: number } {
   if (count <= 0) return { start: 0, end: 0 };
   if (count <= maxVisible) return { start: 0, end: count };
@@ -263,6 +418,15 @@ function getVisibleWindow(count: number, selected: number, maxVisible: number): 
     start = safeSelected - safeMaxVisible + 1;
   }
   return { start, end: Math.min(count, start + safeMaxVisible) };
+}
+
+function countWrappedDisplayLines(text: string, contentWidth: number): number {
+  const safeWidth = Math.max(1, contentWidth);
+  const lines = text.split("\n");
+  return lines.reduce((sum, line) => {
+    const width = Math.max(1, displayWidthWithNewlines(line || " "));
+    return sum + Math.max(1, Math.ceil(width / safeWidth));
+  }, 0);
 }
 
 function isDeleteToVisualLineStartShortcut(
@@ -285,8 +449,17 @@ function isCommandOverlayEligible(value: string): boolean {
   return !value.slice(1).includes(" ");
 }
 
+function isFileOverlayEligible(value: string, cursorOffset: number): boolean {
+  return findFileReferenceQuery(value, cursorOffset) !== null;
+}
+
 function formatTokens(value: number | undefined): string {
   return (value ?? 0).toLocaleString("en-US");
+}
+
+function shortenPath(fullPath: string): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return home && fullPath.startsWith(home) ? "~" + fullPath.slice(home.length) : fullPath;
 }
 
 function formatContext(contextTokens: number, contextLimit?: number, cacheReadTokens?: number): string {
@@ -296,6 +469,29 @@ function formatContext(contextTokens: number, contextLimit?: number, cacheReadTo
     return `${pct}%  ${formatTokens(contextTokens)} / ${formatTokens(contextLimit)}${cache}`;
   }
   return formatTokens(contextTokens);
+}
+
+function formatContextParts(
+  contextTokens: number,
+  contextLimit?: number,
+  cacheReadTokens?: number,
+): {
+  primary: string;
+  secondary: string;
+} {
+  if (contextLimit && contextLimit > 0) {
+    const primary = `${((contextTokens / contextLimit) * 100).toFixed(1)}%  ${formatTokens(contextTokens)}`;
+    const cache = cacheReadTokens ? ` (${formatTokens(cacheReadTokens)} cached)` : "";
+    return {
+      primary,
+      secondary: ` / ${formatTokens(contextLimit)}${cache}`,
+    };
+  }
+
+  return {
+    primary: formatTokens(contextTokens),
+    secondary: "",
+  };
 }
 
 function formatCompactTokens(value: number | undefined): string {
@@ -318,12 +514,34 @@ function formatUsagePercent(contextTokens: number, contextLimit?: number): strin
   return `${((contextTokens / contextLimit) * 100).toFixed(1)}%`;
 }
 
-function getUsageBarSegments(ratio: number, width: number): { filled: string; partial: string; empty: string } {
-  const safeRatio = Math.max(0, Math.min(1, ratio));
-  const filledCells = Math.round(safeRatio * width);
-  const filled = "▰".repeat(Math.max(0, Math.min(width, filledCells)));
-  const empty = "▱".repeat(Math.max(0, width - filled.length));
-  return { filled, partial: "", empty };
+function getUsageBlockSize(contextLimit?: number): number {
+  if (!contextLimit || contextLimit <= 0) return 5_000;
+  return contextLimit >= 400_000 ? 20_000 : 5_000;
+}
+
+function getUsageBarRows(
+  contextTokens: number,
+  contextLimit?: number,
+  blocksPerRow = 20,
+): Array<{ filled: string; empty: string }> {
+  const safeBlocksPerRow = Math.max(1, blocksPerRow);
+  const blockSize = getUsageBlockSize(contextLimit);
+  const totalBlocks = contextLimit && contextLimit > 0
+    ? Math.max(1, Math.ceil(contextLimit / blockSize))
+    : safeBlocksPerRow;
+  const filledBlocks = Math.max(0, Math.min(totalBlocks, Math.round((contextTokens ?? 0) / blockSize)));
+  const rowCount = Math.max(1, Math.ceil(totalBlocks / safeBlocksPerRow));
+
+  return Array.from({ length: rowCount }, (_, rowIndex) => {
+    const rowStart = rowIndex * safeBlocksPerRow;
+    const rowTotal = Math.min(safeBlocksPerRow, totalBlocks - rowStart);
+    const rowFilled = Math.max(0, Math.min(rowTotal, filledBlocks - rowStart));
+    const emptyCount = Math.max(0, rowTotal - rowFilled);
+    return {
+      filled: Array.from({ length: rowFilled }, () => "▆").join(" "),
+      empty: Array.from({ length: emptyCount }, () => "▆").join(" "),
+    };
+  });
 }
 
 function copyToClipboard(text: string, rendererCopy: (text: string) => boolean): boolean {
@@ -380,13 +598,12 @@ function PlanPanelView(
         <box key={`plan-${index}`} flexDirection="row" width="100%">
           <text
             fg={checkpoint.checked ? colors.dim : index === firstUncheckedIndex ? colors.cyan : colors.text}
-            content={`  ${
-              checkpoint.checked
-                ? "✓"
-                : index === firstUncheckedIndex && pulse
+            content={`  ${checkpoint.checked
+              ? "✓"
+              : index === firstUncheckedIndex && pulse
                 ? "●"
                 : "○"
-            } `}
+              } `}
           />
           <text
             fg={checkpoint.checked ? colors.dim : colors.text}
@@ -401,52 +618,58 @@ function PlanPanelView(
   );
 }
 
+const LOGO_LINES = [
+  "░██    ░██ ░██████  ░██████  ░██████░██         ",
+  "░██    ░██   ░██   ░██   ░██   ░██  ░██         ",
+  "░██    ░██   ░██  ░██          ░██  ░██         ",
+  "░██    ░██   ░██  ░██  █████   ░██  ░██         ",
+  " ░██  ░██    ░██  ░██     ██   ░██  ░██         ",
+  "  ░██░██     ░██   ░██  ░███   ░██  ░██         ",
+  "   ░███    ░██████  ░█████░█ ░██████░██████████ ",
+];
+const LOGO_GRADIENT_DARK = ["#ffb703", "#fb8500", "#f05030", "#e81860", "#d01080", "#a010a0", "#5a0c92"];
+const LOGO_GRADIENT_LIGHT = ["#e64a19", "#df333c", "#d81b60", "#ab1e85", "#8e24aa", "#5e35b1", "#1e88e5"];
+
 function HeaderView(
   {
     colors,
     directory,
     useCompact,
+    themeMode,
   }: {
     colors: OpenTuiPalette;
     directory: string;
     useCompact: boolean;
+    themeMode: OpenTuiThemeMode;
   },
 ): React.ReactElement {
   if (useCompact) {
     return (
       <box
-        border
-        borderStyle="rounded"
-        borderColor={colors.border}
-        title=" LONGERAGENT "
         paddingLeft={1}
         paddingRight={1}
         flexDirection="column"
         width="100%"
         flexShrink={0}
       >
-        <text fg={colors.dim} content={`Version:   ${APP_VERSION}`} />
-        <text fg={colors.dim} content={`Directory: ${directory}`} wrapMode="truncate" />
+        <text fg={colors.accent} bold content="VIGIL" />
+        <text fg={colors.dim} content={`${APP_VERSION}  ${shortenPath(directory)}`} wrapMode="truncate" />
       </box>
     );
   }
 
   return (
     <box
-      border
-      borderStyle="rounded"
-      borderColor={colors.border}
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
       width="100%"
       flexShrink={0}
     >
-      <text fg={colors.accent} content="╦  ╔═╗╔╗╔╔═╗╔═╗╦═╗  ╔═╗╔═╗╔═╗╔╗╔╔╦╗" />
-      <text fg={colors.accent} content="║  ║ ║║║║║ ╦║╣ ╠╦╝  ╠═╣║ ╦║╣ ║║║ ║ " />
-      <text fg={colors.accent} content="╩═╝╚═╝╝╚╝╚═╝╚═╝╩╚═  ╩ ╩╚═╝╚═╝╝╚╝ ╩ " />
-      <text fg={colors.dim} content={`Version:   ${APP_VERSION}`} />
-      <text fg={colors.dim} content={`Directory: ${directory}`} wrapMode="truncate" />
+      {LOGO_LINES.map((line, i) => {
+        const gradient = themeMode === "light" ? LOGO_GRADIENT_LIGHT : LOGO_GRADIENT_DARK;
+        return <text key={`logo-${i}`} fg={gradient[i]} content={line} />;
+      })}
     </box>
   );
 }
@@ -464,12 +687,14 @@ function ConversationEntryView(
   {
     entry,
     streaming,
+    markdownMode,
     colors,
     markdownStyle,
     needsSpacing,
   }: {
     entry: ConversationEntry;
     streaming: boolean;
+    markdownMode: "rendered" | "raw";
     colors: OpenTuiPalette;
     markdownStyle: SyntaxStyle;
     needsSpacing?: boolean;
@@ -478,7 +703,7 @@ function ConversationEntryView(
   switch (entry.kind) {
     case "user":
       return (
-        <box flexDirection="row" paddingTop={1}>
+        <box flexDirection="row" paddingTop={1} paddingBottom={1}>
           <text fg={colors.accent} content="> " />
           <text fg={colors.text} content={entry.text} />
           {entry.queued ? <text fg={colors.yellow} content=" (Queued)" /> : null}
@@ -487,27 +712,31 @@ function ConversationEntryView(
     case "assistant":
       return (
         <box paddingLeft={1}>
-          <markdown
-            content={entry.text}
-            syntaxStyle={markdownStyle}
-            treeSitterClient={MARKDOWN_TREE_SITTER_CLIENT}
-            streaming={streaming}
-            conceal={true}
-            concealCode={false}
-            width="100%"
-            tableOptions={{
-              borders: false,
-              outerBorder: false,
-              wrapMode: "word",
-              selectable: true,
-            }}
-          />
+          {markdownMode === "raw" ? (
+            <text fg={colors.text} content={entry.text} />
+          ) : (
+            <markdown
+              content={entry.text}
+              syntaxStyle={markdownStyle}
+              treeSitterClient={MARKDOWN_TREE_SITTER_CLIENT}
+              streaming={streaming}
+              conceal={true}
+              concealCode={false}
+              width="100%"
+              tableOptions={{
+                borders: true,
+                outerBorder: true,
+                wrapMode: "word",
+                selectable: true,
+              }}
+            />
+          )}
         </box>
       );
     case "reasoning":
       return (
         <box paddingLeft={needsSpacing ? 1 : 0} paddingTop={needsSpacing ? 1 : 0}>
-          <text fg={colors.dim} content={entry.text} />
+          <text fg={colors.muted} content={entry.text} />
         </box>
       );
     case "tool_call":
@@ -522,10 +751,10 @@ function ConversationEntryView(
         return (
           <box flexDirection="row" width="100%">
             <text fg={colors.cyan} content={`- ${toolName}`} flexShrink={0} />
-            {timeDisplay ? <text fg={colors.dim} content={` (${timeDisplay}) `} flexShrink={0} /> : null}
+            {timeDisplay ? <text fg={colors.muted} content={` (${timeDisplay}) `} flexShrink={0} /> : null}
             {rest ? (
               <text
-                fg={colors.dim}
+                fg={colors.muted}
                 content={rest}
                 wrapMode="none"
                 truncate
@@ -551,7 +780,7 @@ function ConversationEntryView(
     case "progress":
       return (
         <box>
-          <text fg={colors.dim} content={entry.text} />
+          <text fg={colors.muted} content={entry.text} />
         </box>
       );
     case "status":
@@ -594,6 +823,8 @@ function ConversationEntryView(
 function StatusStrip(
   {
     modelName,
+    modelColor,
+    themeMode,
     phase,
     contextTokens,
     contextLimit,
@@ -603,6 +834,8 @@ function StatusStrip(
     colors,
   }: {
     modelName: string;
+    modelColor: string;
+    themeMode: OpenTuiThemeMode;
     phase: ActivityPhase;
     contextTokens: number;
     contextLimit?: number;
@@ -615,30 +848,58 @@ function StatusStrip(
   const [frame, setFrame] = useState(0);
 
   useEffect(() => {
-    if (phase === "idle" || phase === "error") return;
+    if (phase === "idle" || phase === "error" || phase === "closing") return;
     const timer = setInterval(() => {
       setFrame((current) => (current + 1) % SPINNER_FRAMES.length);
     }, SPINNER_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [phase]);
 
-  const indicator = phase === "idle" ? "●" : phase === "error" ? "●" : SPINNER_FRAMES[frame]!;
-  const color = phase === "error" ? colors.red : phase === "waiting" ? colors.yellow : colors.accent;
-  const label = phase === "idle"
-    ? "READY"
-    : phase === "error"
-    ? "ERROR"
-    : phase.toUpperCase();
-  const contextSummary = showContext ? `  |  Context ${formatContext(contextTokens, contextLimit, cacheReadTokens)}` : "";
+  const phaseVisual = (() => {
+    switch (phase) {
+      case "idle":
+        return { indicator: "●", color: colors.readyStatus, label: "READY" };
+      case "thinking":
+        return { indicator: SPINNER_FRAMES[frame]!, color: colors.thinkingStatus, label: "THINKING" };
+      case "working":
+        return { indicator: SPINNER_FRAMES[frame]!, color: colors.workingStatus, label: "WORKING" };
+      case "generating":
+        return { indicator: SPINNER_FRAMES[frame]!, color: colors.generatingStatus, label: "GENERATING" };
+      case "waiting":
+        return { indicator: SPINNER_FRAMES[frame]!, color: colors.waitingStatus, label: "WAITING" };
+      case "closing":
+        return { indicator: "●", color: colors.closingStatus, label: "CLOSING" };
+      case "error":
+        return { indicator: "●", color: colors.errorStatus, label: "ERROR" };
+      default:
+        return { indicator: "●", color: colors.readyStatus, label: phase.toUpperCase() };
+    }
+  })();
+  const separatorColor = colors.border;
+  const contextParts = formatContextParts(contextTokens, contextLimit, cacheReadTokens);
+  const contextSecondaryTextColor = themeMode === "dark" ? "#64748b" : CONTEXT_SECONDARY_NEUTRAL;
 
   return (
     <box paddingLeft={1} paddingRight={1} flexDirection="column" gap={0} width="100%">
       <box flexDirection="column">
-        <box>
-          <text
-            fg={color}
-            content={`${indicator} ${label}  |  ${modelName}${contextSummary}`}
-          />
+        <box flexDirection="row">
+          <text fg={phaseVisual.color} content={`${phaseVisual.indicator} ${phaseVisual.label}`} />
+          <text fg={separatorColor} content="  |  " />
+          {phase === "closing" ? (
+            <text fg={colors.dim} content="Shutting down..." />
+          ) : (
+            <>
+              <text fg={modelColor} content={modelName} />
+              {showContext ? (
+                <>
+                  <text fg={separatorColor} content="  |  " />
+                  <text fg={contextSecondaryTextColor} content="Context " />
+                  <text fg={colors.text} content={contextParts.primary} />
+                  {contextParts.secondary ? <text fg={contextSecondaryTextColor} content={contextParts.secondary} /> : null}
+                </>
+              ) : null}
+            </>
+          )}
         </box>
         {hint ? <text fg={colors.dim} content={hint} /> : null}
       </box>
@@ -648,11 +909,13 @@ function StatusStrip(
 
 function ContextUsageCard(
   {
+    themeMode,
     contextTokens,
     contextLimit,
     cacheReadTokens,
     colors,
   }: {
+    themeMode: OpenTuiThemeMode;
     contextTokens: number;
     contextLimit?: number;
     cacheReadTokens?: number;
@@ -660,9 +923,14 @@ function ContextUsageCard(
   },
 ): React.ReactElement {
   const percentText = formatUsagePercent(contextTokens, contextLimit);
-  const usageRatio = contextLimit && contextLimit > 0 ? contextTokens / contextLimit : 0;
-  const bar = getUsageBarSegments(usageRatio, 16);
-  const limitText = contextLimit ? formatCompactTokens(contextLimit) : "0";
+  const barWidth = 22;
+  const limit = contextLimit && contextLimit > 0 ? contextLimit : 1;
+  const filledBlocks = Math.max(0, Math.min(barWidth, Math.round((contextTokens / limit) * barWidth)));
+  const emptyBlocks = Math.max(0, barWidth - filledBlocks);
+
+  const gradient = themeMode === "light" ? LOGO_GRADIENT_LIGHT : LOGO_GRADIENT_DARK;
+  // Pick a color from the middle of the logo gradient for the filled bar
+  const filledColor = gradient[Math.floor(gradient.length / 2)];
 
   return (
     <box
@@ -670,18 +938,17 @@ function ContextUsageCard(
       width="100%"
       gap={0}
     >
-      <text fg={colors.text} bold content="Context" />
+      <text fg={colors.text} bold content="CONTEXT" />
       <text content=" " />
-      <box flexDirection="row" gap={1}>
-        <text fg={colors.accent} content={percentText} />
-        <box flexDirection="row">
-          {bar.filled ? <text fg={colors.accent} content={bar.filled} /> : null}
-          {bar.empty ? <text fg={colors.dim} content={bar.empty} /> : null}
-        </box>
+      <box flexDirection="row">
+        {filledBlocks > 0 ? <text fg={filledColor} content={"█".repeat(filledBlocks)} /> : null}
+        {emptyBlocks > 0 ? <text fg={colors.dim} content={"░".repeat(emptyBlocks)} /> : null}
+        <text fg={colors.text} content={` ${percentText}`} />
       </box>
+      <text content=" " />
       <box flexDirection="row">
         <text fg={colors.text} content={formatCompactTokens(contextTokens)} />
-        <text fg={colors.dim} content={` / ${limitText} Tokens`} />
+        <text fg={colors.dim} content={` / ${contextLimit ? formatCompactTokens(contextLimit) : "0"} Tokens`} />
       </box>
       <text fg={colors.green} content={`╰─ ⚡ ${formatCompactTokens(cacheReadTokens)} Cached`} />
     </box>
@@ -714,14 +981,33 @@ function PlanCard(
   );
 }
 
+function SidebarTitle({ themeMode, colors }: { themeMode: OpenTuiThemeMode; colors: OpenTuiPalette }): React.ReactElement {
+  const gradient = themeMode === "light" ? LOGO_GRADIENT_LIGHT : LOGO_GRADIENT_DARK;
+  const name = "VIGIL";
+  // Sample 5 colors evenly from the 7-color gradient
+  const indices = [0, 1, 3, 5, 6];
+  return (
+    <box flexDirection="row">
+      {name.split("").map((ch, i) => (
+        <text key={`sidebar-title-${i}`} fg={gradient[indices[i]]} bold content={ch} />
+      ))}
+      <text fg={colors.dim} content={` ${APP_VERSION}`} />
+    </box>
+  );
+}
+
 function SidebarView(
   {
+    themeMode,
+    width,
     contextTokens,
     contextLimit,
     cacheReadTokens,
     checkpoints,
     colors,
   }: {
+    themeMode: OpenTuiThemeMode;
+    width: number;
     contextTokens: number;
     contextLimit?: number;
     cacheReadTokens?: number;
@@ -732,21 +1018,23 @@ function SidebarView(
   const safeCheckpoints = checkpoints ?? [];
 
   return (
-    <box width={SIDEBAR_WIDTH} minWidth={SIDEBAR_WIDTH} maxWidth={SIDEBAR_WIDTH} flexDirection="column">
+    <box width={width} minWidth={width} maxWidth={width} flexDirection="column">
       <scrollbox
         flexGrow={1}
         viewportOptions={{ paddingRight: 1 }}
+        autoHideScrollbars={1500}
         verticalScrollbarOptions={{
-          visible: true,
           paddingLeft: 1,
           trackOptions: {
-            backgroundColor: colors.background,
-            foregroundColor: colors.border,
+            backgroundColor: "transparent",
+            foregroundColor: colors.border + "66",
           },
         }}
       >
         <box flexDirection="column" gap={1} width="100%" paddingLeft={2}>
+          <SidebarTitle themeMode={themeMode} colors={colors} />
           <ContextUsageCard
+            themeMode={themeMode}
             contextTokens={contextTokens}
             contextLimit={contextLimit}
             cacheReadTokens={cacheReadTokens}
@@ -760,9 +1048,20 @@ function SidebarView(
 }
 
 function CommandOverlayView(
-  { overlay, colors }: { overlay: CommandOverlayState; colors: OpenTuiPalette },
+  {
+    overlay,
+    colors,
+    availableWidth,
+  }: {
+    overlay: CommandOverlayState;
+    colors: OpenTuiPalette;
+    availableWidth: number;
+  },
 ): React.ReactElement | null {
   if (!overlay.visible || overlay.items.length === 0) return null;
+  const contentWidth = Math.max(8, availableWidth - 4);
+  const overlayHeight = overlay.items.reduce((sum, item, index) =>
+    sum + countWrappedDisplayLines(`${index === overlay.selected ? "> " : "  "}${item}`, contentWidth), 0) + 2;
 
   return (
     <box
@@ -771,13 +1070,16 @@ function CommandOverlayView(
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
-      height={overlay.items.length + 2}
+      width="100%"
+      height={overlayHeight}
+      flexShrink={0}
     >
       {overlay.items.map((item, index) => (
         <text
           key={`overlay-${index}`}
           fg={index === overlay.selected ? colors.accent : colors.dim}
           content={`${index === overlay.selected ? "> " : "  "}${item}`}
+          wrapMode="word"
         />
       ))}
     </box>
@@ -785,7 +1087,15 @@ function CommandOverlayView(
 }
 
 function CommandPickerView(
-  { picker, colors }: { picker: CommandPickerState | null; colors: OpenTuiPalette },
+  {
+    picker,
+    colors,
+    availableWidth,
+  }: {
+    picker: CommandPickerState | null;
+    colors: OpenTuiPalette;
+    availableWidth: number;
+  },
 ): React.ReactElement | null {
   if (!isCommandPickerActive(picker)) return null;
 
@@ -793,7 +1103,16 @@ function CommandPickerView(
   const path = getCommandPickerPath(picker);
   const { start, end } = getCommandPickerVisibleRange(picker);
   const visibleOptions = level.options.slice(start, end);
-  const pickerHeight = 1 + path.length + visibleOptions.length + 2;
+  const contentWidth = Math.max(8, availableWidth - 4);
+  const titleHeight = countWrappedDisplayLines(picker.commandName, contentWidth);
+  const pathHeight = path.length > 0
+    ? countWrappedDisplayLines(`  ${path.join(" · ")}`, contentWidth)
+    : 0;
+  const optionsHeight = visibleOptions.reduce((sum, item, index) => {
+    const actualIndex = start + index;
+    return sum + countWrappedDisplayLines(`${actualIndex === level.selected ? "> " : "  "}${item.label}`, contentWidth);
+  }, 0);
+  const pickerHeight = titleHeight + pathHeight + optionsHeight + 2;
 
   return (
     <box
@@ -802,11 +1121,13 @@ function CommandPickerView(
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
+      width="100%"
       height={pickerHeight}
+      flexShrink={0}
     >
-      <text fg={colors.accent} content={picker.commandName} />
+      <text fg={colors.accent} content={picker.commandName} wrapMode="word" />
       {path.length > 0 ? (
-        <text fg={colors.dim} content={`  ${path.join(" · ")}`} />
+        <text fg={colors.dim} content={`  ${path.join(" · ")}`} wrapMode="word" />
       ) : null}
       {visibleOptions.map((item, index) => {
         const actualIndex = start + index;
@@ -815,6 +1136,7 @@ function CommandPickerView(
             key={`picker-${actualIndex}`}
             fg={actualIndex === level.selected ? colors.accent : colors.dim}
             content={`${actualIndex === level.selected ? "> " : "  "}${item.label}`}
+            wrapMode="word"
           />
         );
       })}
@@ -823,13 +1145,29 @@ function CommandPickerView(
 }
 
 function CheckboxPickerView(
-  { picker, colors }: { picker: CheckboxPickerState | null; colors: OpenTuiPalette },
+  {
+    picker,
+    colors,
+    availableWidth,
+  }: {
+    picker: CheckboxPickerState | null;
+    colors: OpenTuiPalette;
+    availableWidth: number;
+  },
 ): React.ReactElement | null {
   if (!isCheckboxPickerActive(picker)) return null;
 
   const { start, end } = getCheckboxPickerVisibleRange(picker);
   const visibleItems = picker.items.slice(start, end);
-  const pickerHeight = 1 + visibleItems.length + 1 + 2;
+  const contentWidth = Math.max(8, availableWidth - 4);
+  const titleHeight = countWrappedDisplayLines(picker.title, contentWidth);
+  const itemsHeight = visibleItems.reduce((sum, item, index) => {
+    const actualIndex = start + index;
+    const checkbox = item.checked ? "[x]" : "[ ]";
+    return sum + countWrappedDisplayLines(`${actualIndex === picker.selected ? "> " : "  "}${checkbox} ${item.label}`, contentWidth);
+  }, 0);
+  const footerHeight = countWrappedDisplayLines("Space toggle · Enter confirm · Esc cancel", contentWidth);
+  const pickerHeight = titleHeight + itemsHeight + footerHeight + 2;
 
   return (
     <box
@@ -838,9 +1176,11 @@ function CheckboxPickerView(
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
+      width="100%"
       height={pickerHeight}
+      flexShrink={0}
     >
-      <text fg={colors.accent} content={picker.title} />
+      <text fg={colors.accent} content={picker.title} wrapMode="word" />
       {visibleItems.map((item, index) => {
         const actualIndex = start + index;
         const checkbox = item.checked ? "[x]" : "[ ]";
@@ -849,16 +1189,25 @@ function CheckboxPickerView(
             key={`checkbox-${actualIndex}`}
             fg={actualIndex === picker.selected ? colors.accent : colors.dim}
             content={`${actualIndex === picker.selected ? "> " : "  "}${checkbox} ${item.label}`}
+            wrapMode="word"
           />
         );
       })}
-      <text fg={colors.dim} content="Space toggle · Enter confirm · Esc cancel" />
+      <text fg={colors.dim} content="Space toggle · Enter confirm · Esc cancel" wrapMode="word" />
     </box>
   );
 }
 
 function PromptSelectView(
-  { prompt, colors }: { prompt: PromptSelectState | null; colors: OpenTuiPalette },
+  {
+    prompt,
+    colors,
+    availableWidth,
+  }: {
+    prompt: PromptSelectState | null;
+    colors: OpenTuiPalette;
+    availableWidth: number;
+  },
 ): React.ReactElement | null {
   if (!prompt || prompt.options.length === 0) return null;
 
@@ -866,7 +1215,14 @@ function PromptSelectView(
   const visibleOptions = prompt.options.slice(start, end);
   const selectedOption = prompt.options[clamp(prompt.selected, 0, prompt.options.length - 1)];
   const description = selectedOption?.description?.trim();
-  const promptHeight = prompt.message.split("\n").length + visibleOptions.length + (description ? 1 : 0) + 2;
+  const contentWidth = Math.max(8, availableWidth - 4);
+  const messageHeight = countWrappedDisplayLines(prompt.message, contentWidth);
+  const optionsHeight = visibleOptions.reduce((sum, option, index) => {
+    const actualIndex = start + index;
+    return sum + countWrappedDisplayLines(`${actualIndex === prompt.selected ? "> " : "  "}${option.label}`, contentWidth);
+  }, 0);
+  const descriptionHeight = description ? countWrappedDisplayLines(description, contentWidth) : 0;
+  const promptHeight = messageHeight + optionsHeight + descriptionHeight + 2;
 
   return (
     <box
@@ -875,9 +1231,11 @@ function PromptSelectView(
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
+      width="100%"
       height={promptHeight}
+      flexShrink={0}
     >
-      <text fg={colors.yellow} content={prompt.message} />
+      <text fg={colors.yellow} content={prompt.message} wrapMode="word" />
       {visibleOptions.map((option, index) => {
         const actualIndex = start + index;
         return (
@@ -885,10 +1243,11 @@ function PromptSelectView(
             key={`prompt-select-${actualIndex}`}
             fg={actualIndex === prompt.selected ? colors.accent : colors.dim}
             content={`${actualIndex === prompt.selected ? "> " : "  "}${option.label}`}
+            wrapMode="word"
           />
         );
       })}
-      {description ? <text fg={colors.dim} content={description} /> : null}
+      {description ? <text fg={colors.dim} content={description} wrapMode="word" /> : null}
     </box>
   );
 }
@@ -927,6 +1286,9 @@ function PromptSecretView(
         }}
         placeholder={prompt.allowEmpty ? "Press Enter to confirm, Esc to cancel" : "Enter a value"}
         focused={focused}
+        textColor={colors.text}
+        focusedTextColor={colors.text}
+        placeholderColor={colors.dim}
         onSubmit={onSubmit}
       />
       <text fg={colors.dim} content="Enter confirm · Esc cancel" />
@@ -1002,8 +1364,8 @@ function AskPanelView(
           const answerDisplay = !answer
             ? "(unanswered)"
             : selected?.kind === "custom_input"
-            ? `✎ ${answer.customText ?? ""}`
-            : selected?.label ?? "(unknown)";
+              ? `✎ ${answer.customText ?? ""}`
+              : selected?.label ?? "(unknown)";
           const noteKey = answer ? `${index}-${answer.optionIndex}` : "";
           const note = noteKey ? optionNotes.get(noteKey) : undefined;
           return (
@@ -1070,6 +1432,9 @@ function AskPanelView(
             value={inlineValue}
             focused={customInputMode || noteInputMode}
             placeholder={customInputMode ? "Type a custom answer" : "Add a note"}
+            textColor={colors.text}
+            focusedTextColor={colors.text}
+            placeholderColor={colors.dim}
             onInput={onInput}
             onChange={onInput}
             onSubmit={onSubmit}
@@ -1082,9 +1447,8 @@ function AskPanelView(
       ) : null}
       <text
         fg={colors.dim}
-        content={`Use ↑/↓ to select, ←/→ to navigate questions, Enter to confirm.${
-          agentOptionCount > 0 && selectedIndex < agentOptionCount ? " Tab to add note." : ""
-        }`}
+        content={`Use ↑/↓ to select, ←/→ to navigate questions, Enter to confirm.${agentOptionCount > 0 && selectedIndex < agentOptionCount ? " Tab to add note." : ""
+          }`}
       />
       {error ? <text fg={colors.red} content={error} /> : null}
     </box>
@@ -1103,12 +1467,24 @@ export function OpenTuiApp({
   const [entries, setEntries] = useState<ConversationEntry[]>(
     projectToTuiEntries([...(session.log ?? [])] as any[]),
   );
-  const [theme, setTheme] = useState<OpenTuiTheme>(() => buildTheme(null, null));
-  const [processing, setProcessing] = useState(false);
+  const initialTheme: OpenTuiThemeMode = (process.env.VIGIL_THEME === "light" || process.env.VIGIL_THEME === "dark") ? process.env.VIGIL_THEME : "dark";
+  const [themeMode, setThemeMode] = useState<OpenTuiThemeMode>(initialTheme);
+  const [theme, setTheme] = useState<OpenTuiTheme>(() => {
+    if (process.env.VIGIL_THEME === "light") return buildTheme("light", "#1e1e2e", "#ffffff");
+    if (process.env.VIGIL_THEME === "dark") return buildTheme("dark", "#ffffff", "#1e1e2e");
+    return buildTheme("dark", null, null);
+  });
+  const [processing, _setProcessing] = useState(false);
+  const processingRef = useRef(false);
+  const setProcessing = useCallback((v: boolean) => {
+    processingRef.current = v;
+    _setProcessing(v);
+  }, []);
   const [phase, setPhase] = useState<ActivityPhase>("idle");
   const [contextTokens, setContextTokens] = useState(0);
   const [cacheReadTokens, setCacheReadTokens] = useState(0);
   const [hint, setHint] = useState<string | null>(null);
+  const [markdownMode, setMarkdownMode] = useState<"rendered" | "raw">("rendered");
   const [pendingAsk, setPendingAsk] = useState<PendingAskUi | null>(
     typeof session.getPendingAsk === "function" ? session.getPendingAsk() : null,
   );
@@ -1135,13 +1511,28 @@ export function OpenTuiApp({
   const promptSecretInputRef = useRef<InputRenderable | null>(null);
   const askInputRef = useRef<InputRenderable | null>(null);
   const lastInputValueRef = useRef("");
+  const lastCtrlCRef = useRef(0);
+  const closingRef = useRef(false);
+  const closingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const suppressComposerSyncRef = useRef(false);
+  const pasteCounterRef = useRef(new TurnPasteCounter());
+  const maybeCollapseLargePasteRef = useRef<(previousValue: string, nextValue: string) => boolean>(() => false);
+  const updateInputOverlayRef = useRef<(value: string, cursorOffset: number) => void>(() => { });
+  const composerTokenVisualsRef = useRef<ComposerTokenVisuals | null>(null);
   const promptSelectResolverRef = useRef<((value: string | undefined) => void) | null>(null);
   const promptSecretResolverRef = useRef<((value: string | undefined) => void) | null>(null);
   const colors = theme.colors;
   const markdownStyle = theme.markdownStyle;
+  if (!composerTokenVisualsRef.current) {
+    composerTokenVisualsRef.current = createComposerTokenVisuals(colors);
+  }
+  const composerTokenVisuals = composerTokenVisualsRef.current;
 
-  const refreshTerminalTheme = useCallback(async () => {
+  const envThemeOverride: OpenTuiThemeMode | undefined =
+    (process.env.VIGIL_THEME === "light" || process.env.VIGIL_THEME === "dark") ? process.env.VIGIL_THEME : undefined;
+
+  const refreshTerminalTheme = useCallback(async (nextMode?: OpenTuiThemeMode) => {
     if (typeof renderer.getPalette !== "function") return;
 
     try {
@@ -1150,19 +1541,55 @@ export function OpenTuiApp({
       }
 
       const nextPalette = paletteSnapshot(await renderer.getPalette({ size: 16, timeout: 1200 }));
+
+      // VIGIL_THEME env var locks the mode — skip auto-detection
+      let detectedMode: OpenTuiThemeMode | undefined;
+      if (!envThemeOverride && !nextMode && nextPalette.defaultBackground) {
+        const bg = hexToRgb(nextPalette.defaultBackground);
+        if (bg) {
+          // Relative luminance (sRGB approximation)
+          const luminance = (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) / 255;
+          detectedMode = luminance > 0.5 ? "light" : "dark";
+        }
+      }
+
+      const resolvedMode = envThemeOverride ?? nextMode ?? detectedMode ?? themeMode;
+      if (resolvedMode !== themeMode) {
+        setThemeMode(resolvedMode);
+      }
+
+      // When VIGIL_THEME is set, provide synthetic fg/bg if the terminal palette doesn't match
+      let fg = nextPalette.defaultForeground;
+      let bg = nextPalette.defaultBackground;
+      if (envThemeOverride) {
+        if (!fg) fg = envThemeOverride === "light" ? "#1e1e2e" : "#ffffff";
+        if (!bg) bg = envThemeOverride === "light" ? "#ffffff" : "#1e1e2e";
+        // Override bg if terminal reports wrong luminance for the forced mode
+        const bgRgb = bg ? hexToRgb(bg) : null;
+        if (bgRgb) {
+          const lum = (0.299 * bgRgb[0] + 0.587 * bgRgb[1] + 0.114 * bgRgb[2]) / 255;
+          const expectLight = envThemeOverride === "light";
+          if (expectLight !== (lum > 0.5)) {
+            fg = envThemeOverride === "light" ? "#1e1e2e" : "#ffffff";
+            bg = envThemeOverride === "light" ? "#ffffff" : "#1e1e2e";
+          }
+        }
+      }
+
       setTheme((current) => {
         if (
-          current.defaultForeground === nextPalette.defaultForeground &&
-          current.defaultBackground === nextPalette.defaultBackground
+          current.mode === resolvedMode &&
+          current.defaultForeground === fg &&
+          current.defaultBackground === bg
         ) {
           return current;
         }
-        return buildTheme(nextPalette.defaultForeground, nextPalette.defaultBackground);
+        return buildTheme(resolvedMode, fg, bg);
       });
     } catch {
       // Ignore palette detection failures and keep the current fallback colors.
     }
-  }, [renderer]);
+  }, [renderer, themeMode, envThemeOverride]);
 
   useEffect(() => {
     void refreshTerminalTheme();
@@ -1175,6 +1602,22 @@ export function OpenTuiApp({
       clearInterval(intervalId);
     };
   }, [refreshTerminalTheme]);
+
+  useEffect(() => {
+    const handleThemeMode = (mode: OpenTuiThemeMode) => {
+      setThemeMode(mode);
+      void refreshTerminalTheme(mode);
+    };
+
+    renderer.on?.("theme_mode", handleThemeMode);
+    return () => {
+      if (typeof renderer.off === "function") {
+        renderer.off("theme_mode", handleThemeMode);
+      } else if (typeof renderer.removeListener === "function") {
+        renderer.removeListener("theme_mode", handleThemeMode);
+      }
+    };
+  }, [renderer, refreshTerminalTheme]);
 
   useEffect(() => {
     setAskError(null);
@@ -1381,8 +1824,9 @@ export function OpenTuiApp({
     return session.subscribeLog(syncFromLog);
   }, [session]);
 
-  const handleProgressRef = useRef<(event: ProgressEvent) => void>(() => {});
+  const handleProgressRef = useRef<(event: ProgressEvent) => void>(() => { });
   handleProgressRef.current = (event) => {
+    if (closingRef.current) return;
     switch (event.action) {
       case "reasoning_chunk":
         setPhase("thinking");
@@ -1444,7 +1888,13 @@ export function OpenTuiApp({
   const syncComposerState = useCallback(() => {
     const composer = inputRef.current;
     if (!composer || composer.isDestroyed) return;
+    const previousValue = lastInputValueRef.current;
     const nextValue = composer.plainText;
+    if (previousValue !== nextValue) {
+      maybeCollapseLargePasteRef.current(previousValue, nextValue);
+    }
+    const visibleValue = composer.plainText;
+    const cursorOffset = composer.cursorOffset;
     const computedWidth = Math.max(1, composer.getLayoutNode().getComputedWidth());
     const measured = composer.editorView.measureForDimensions(computedWidth, INPUT_MAX_VISIBLE_LINES);
     const measuredLines = Math.max(
@@ -1452,9 +1902,10 @@ export function OpenTuiApp({
       composer.virtualLineCount || 1,
       measured?.lineCount || 1,
     );
-    lastInputValueRef.current = nextValue;
-    setDraftValue(nextValue);
+    lastInputValueRef.current = visibleValue;
+    setDraftValue(visibleValue);
     setInputVisibleLines(Math.max(1, Math.min(INPUT_MAX_VISIBLE_LINES, measuredLines)));
+    updateInputOverlayRef.current(visibleValue, cursorOffset);
   }, []);
 
   const setComposerText = useCallback((value: string, cursorToEnd = true) => {
@@ -1468,6 +1919,7 @@ export function OpenTuiApp({
   }, [syncComposerState]);
 
   const clearInput = useCallback(() => {
+    pasteCounterRef.current.reset();
     lastInputValueRef.current = "";
     setDraftValue("");
     setInputVisibleLines(1);
@@ -1475,6 +1927,7 @@ export function OpenTuiApp({
     setCommandPicker(null);
     setCheckboxPicker(null);
     if (inputRef.current) {
+      inputRef.current.extmarks.clear();
       inputRef.current.setText("");
     }
   }, []);
@@ -1513,8 +1966,24 @@ export function OpenTuiApp({
 
   const performExit = useCallback(async () => {
     autoSave();
-    await onExit();
+    const msg = GOODBYE_MESSAGES[Math.floor(Math.random() * GOODBYE_MESSAGES.length)]!;
+    await onExit(msg);
   }, [autoSave, onExit]);
+
+  const beginClosing = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setProcessing(false);
+    setPhase("closing");
+    setHint(null);
+    setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+    setCommandPicker(null);
+    setCheckboxPicker(null);
+    if (closingTimerRef.current) {
+      clearTimeout(closingTimerRef.current);
+    }
+    void performExit();
+  }, [performExit]);
 
   const buildCommandOptions = useCallback((cmdName: string) => {
     const command = commandRegistry.lookup(cmdName);
@@ -1557,39 +2026,95 @@ export function OpenTuiApp({
     return true;
   }, [buildCommandOptions, commandRegistry]);
 
-  const updateCommandOverlay = useCallback((value: string) => {
+  const updateInputOverlay = useCallback((value: string, cursorOffset: number) => {
     if (commandPicker || checkboxPicker || promptSelect || promptSecret) return;
 
-    if (!isCommandOverlayEligible(value)) {
-      setCommandOverlay(EMPTY_COMMAND_OVERLAY);
-      return;
+    const livePrefix = inputRef.current ? inputRef.current.getTextRange(0, cursorOffset) : value;
+
+    if (isCommandOverlayEligible(livePrefix)) {
+      const prefix = livePrefix.slice(1);
+      const matches = commandRegistry.getAll().filter((command) =>
+        command.name.slice(1).startsWith(prefix),
+      );
+
+      if (matches.length > 0) {
+        setCommandOverlay((current) => ({
+          mode: "command",
+          visible: true,
+          items: matches.map((command) => `${command.name}  ${command.description}`),
+          values: matches.map((command) => command.name),
+          selected: current.mode === "command"
+            ? clamp(current.selected, 0, Math.max(0, matches.length - 1))
+            : 0,
+        }));
+        return;
+      }
     }
 
-    const prefix = value.slice(1);
-    const matches = commandRegistry.getAll().filter((command) =>
-      command.name.slice(1).startsWith(prefix),
-    );
-
-    if (matches.length === 0) {
-      setCommandOverlay(EMPTY_COMMAND_OVERLAY);
-      return;
+    const fileQuery = isFileOverlayEligible(value, cursorOffset)
+      ? findFileReferenceQuery(value, cursorOffset)
+      : null;
+    if (fileQuery) {
+      const candidates = scanCandidates(fileQuery.prefix);
+      if (candidates.length > 0) {
+        setCommandOverlay((current) => ({
+          mode: "file",
+          visible: true,
+          items: candidates,
+          values: candidates,
+          selected: current.mode === "file"
+            ? clamp(current.selected, 0, Math.max(0, candidates.length - 1))
+            : 0,
+        }));
+        return;
+      }
     }
 
-    setCommandOverlay({
-      visible: true,
-      items: matches.map((command) => `${command.name}  ${command.description}`),
-      values: matches.map((command) => command.name),
-      selected: 0,
-    });
+    setCommandOverlay(EMPTY_COMMAND_OVERLAY);
   }, [checkboxPicker, commandPicker, commandRegistry, promptSecret, promptSelect]);
+  updateInputOverlayRef.current = updateInputOverlay;
 
-  useEffect(() => {
-    updateCommandOverlay(draftValue);
-  }, [draftValue, updateCommandOverlay]);
+  const resetTurnPasteState = useCallback(() => {
+    pasteCounterRef.current.reset();
+  }, []);
+
+  const maybeCollapseLargePaste = useCallback((previousValue: string, nextValue: string): boolean => {
+    const composer = inputRef.current;
+    if (!composer || suppressComposerSyncRef.current) return false;
+
+    const diff = getTextDiffRange(previousValue, nextValue);
+    if (!diff || !diff.insertedText) return false;
+
+    const decision = classifyPastedText(diff.insertedText, pasteCounterRef.current);
+    if (!decision.replacedWithPlaceholder || decision.index === undefined) return false;
+
+    suppressComposerSyncRef.current = true;
+    try {
+      replaceRangeWithComposerToken(composer, {
+        rangeStart: diff.startOffset,
+        rangeEnd: diff.endAfterOffset,
+        label: decision.text,
+        metadata: {
+          kind: "paste",
+          label: decision.text,
+          submitText: diff.insertedText,
+          index: decision.index,
+          lineCount: decision.lineCount,
+        },
+        styleId: composerTokenVisuals.pasteStyleId,
+      });
+    } finally {
+      suppressComposerSyncRef.current = false;
+    }
+
+    return true;
+  }, [composerTokenVisuals.pasteStyleId]);
+  maybeCollapseLargePasteRef.current = maybeCollapseLargePaste;
 
   useEffect(() => {
     const composer = inputRef.current;
     if (!composer) return;
+    patchComposerExtmarksForDisplayWidth(composer);
 
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let followupTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1604,6 +2129,7 @@ export function OpenTuiApp({
     };
 
     composer.onContentChange = scheduleSync;
+    composer.onCursorChange = scheduleSync;
     scheduleSync();
 
     return () => {
@@ -1611,6 +2137,7 @@ export function OpenTuiApp({
       if (followupTimeoutId) clearTimeout(followupTimeoutId);
       if (inputRef.current === composer) {
         composer.onContentChange = undefined;
+        composer.onCursorChange = undefined;
       }
     };
   }, [syncComposerState]);
@@ -1620,6 +2147,10 @@ export function OpenTuiApp({
       queueMicrotask(() => {
         promptSecretInputRef.current?.focus();
       });
+      return;
+    }
+
+    if (phase === "closing") {
       return;
     }
 
@@ -1640,6 +2171,7 @@ export function OpenTuiApp({
     focusComposerSoon,
     noteInputMode,
     pendingAsk,
+    phase,
     promptSecret,
     promptSelect,
   ]);
@@ -1650,6 +2182,10 @@ export function OpenTuiApp({
       promptSecretResolverRef.current?.(undefined);
       promptSelectResolverRef.current = null;
       promptSecretResolverRef.current = null;
+      if (closingTimerRef.current) {
+        clearTimeout(closingTimerRef.current);
+        closingTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -1665,8 +2201,8 @@ export function OpenTuiApp({
       resetUiState: () => {
         setProcessing(false);
         setPhase("idle");
-        setContextTokens(0);
-        setCacheReadTokens(0);
+        setContextTokens(session.lastInputTokens);
+        setCacheReadTokens(session.lastCacheReadTokens ?? 0);
         setPendingAsk(null);
         setAskError(null);
         setPlanCheckpoints(null);
@@ -1737,6 +2273,7 @@ export function OpenTuiApp({
     } finally {
       abortControllerRef.current = null;
       setProcessing(false);
+      setPhase("idle");
     }
   }, [session, autoSave]);
 
@@ -1761,6 +2298,7 @@ export function OpenTuiApp({
     } finally {
       abortControllerRef.current = null;
       setProcessing(false);
+      setPhase("idle");
     }
   }, [session, autoSave]);
 
@@ -1785,8 +2323,15 @@ export function OpenTuiApp({
     } finally {
       abortControllerRef.current = null;
       setProcessing(false);
+      setPhase("idle");
     }
   }, [session, autoSave]);
+
+  const getSerializedComposerInput = useCallback((): string => {
+    const composer = inputRef.current;
+    if (!composer) return draftValue;
+    return serializeComposerText(composer, ensureComposerTokenType(composer));
+  }, [draftValue]);
 
   const handleSubmit = useCallback(async (submittedValue: string) => {
     const input = submittedValue.trim();
@@ -1797,12 +2342,14 @@ export function OpenTuiApp({
       return;
     }
 
-    if (!processing && input.startsWith("/") && !/\s/.test(input)) {
+    if (!processingRef.current && input.startsWith("/") && !/\s/.test(input)) {
       const command = commandRegistry.lookup(input);
       if (command?.options && startCommandPicker(input)) {
         if (inputRef.current) {
+          inputRef.current.extmarks.clear();
           inputRef.current.setText("");
         }
+        resetTurnPasteState();
         lastInputValueRef.current = "";
         setDraftValue("");
         setInputVisibleLines(1);
@@ -1812,7 +2359,11 @@ export function OpenTuiApp({
 
     clearInput();
 
-    if (processing) {
+    // Use ref to avoid stale closure — OpenTUI's custom renderer may not
+    // re-create useCallback closures on every state change.
+    const isProcessing = processingRef.current;
+
+    if (isProcessing) {
       if (typeof session.deliverMessage === "function") {
         session.deliverMessage("user", input);
         session.appendStatusMessage?.(`[Queued user message]\n${input}`, "queued_user_message");
@@ -1858,38 +2409,91 @@ export function OpenTuiApp({
     showHint,
   ]);
 
-  const acceptCommandOverlaySelection = useCallback(() => {
-    const selectedCommand = commandOverlay.values[commandOverlay.selected];
-    if (!selectedCommand) {
+  const acceptInputOverlaySelection = useCallback(() => {
+    const selectedValue = commandOverlay.values[commandOverlay.selected];
+    if (!selectedValue) {
       setCommandOverlay(EMPTY_COMMAND_OVERLAY);
       return;
     }
 
-    const command = commandRegistry.lookup(selectedCommand);
+    if (commandOverlay.mode === "file") {
+      const composer = inputRef.current;
+      if (!composer) {
+        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        return;
+      }
+
+      const query = findFileReferenceQuery(composer.plainText, composer.cursorOffset);
+      if (!query) {
+        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        return;
+      }
+
+      const label = buildFileReferenceLabel(selectedValue);
+      suppressComposerSyncRef.current = true;
+      try {
+        replaceRangeWithComposerToken(composer, {
+          rangeStart: query.startOffset,
+          rangeEnd: query.endOffset,
+          label,
+          metadata: {
+            kind: "file",
+            label,
+            submitText: label,
+            path: selectedValue,
+          },
+          styleId: composerTokenVisuals.fileStyleId,
+          trailingText: " ",
+        });
+      } finally {
+        suppressComposerSyncRef.current = false;
+      }
+
+      setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+      syncComposerState();
+      return;
+    }
+
+    const command = commandRegistry.lookup(selectedValue);
     setCommandOverlay(EMPTY_COMMAND_OVERLAY);
-    if (command?.options && startCommandPicker(selectedCommand)) {
+    if (command?.options && startCommandPicker(selectedValue)) {
       if (inputRef.current) {
         inputRef.current.setText("");
+        inputRef.current.extmarks.clear();
       }
+      resetTurnPasteState();
       lastInputValueRef.current = "";
       setDraftValue("");
       setInputVisibleLines(1);
       return;
     }
 
-    void handleSubmit(selectedCommand);
-  }, [clearInput, commandOverlay, commandRegistry, handleSubmit, startCommandPicker]);
+    void handleSubmit(selectedValue);
+  }, [
+    commandOverlay,
+    commandRegistry,
+    composerTokenVisuals.fileStyleId,
+    handleSubmit,
+    resetTurnPasteState,
+    startCommandPicker,
+    syncComposerState,
+  ]);
 
-  const completeCommandOverlaySelection = useCallback(() => {
-    const selectedCommand = commandOverlay.values[commandOverlay.selected];
-    if (!selectedCommand) {
+  const completeInputOverlaySelection = useCallback(() => {
+    const selectedValue = commandOverlay.values[commandOverlay.selected];
+    if (!selectedValue) {
       setCommandOverlay(EMPTY_COMMAND_OVERLAY);
       return;
     }
 
-    setComposerText(`${selectedCommand} `);
+    if (commandOverlay.mode === "file") {
+      acceptInputOverlaySelection();
+      return;
+    }
+
+    setComposerText(`${selectedValue} `);
     setCommandOverlay(EMPTY_COMMAND_OVERLAY);
-  }, [commandOverlay, setComposerText]);
+  }, [acceptInputOverlaySelection, commandOverlay, setComposerText]);
 
   const acceptCommandPickerSelectionLocal = useCallback(() => {
     if (!commandPicker) return;
@@ -2046,6 +2650,12 @@ export function OpenTuiApp({
     const hasSelection = selectionText.length > 0;
     const isCopyCombo = event.name === "c" && (event.meta || event.super || event.ctrl);
     const composer = inputRef.current;
+
+    if (phase === "closing") {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
 
     if (hasSelection && isCopyCombo) {
       const copied = copyToClipboard(selectionText, (text) => renderer.copyToClipboardOSC52(text));
@@ -2256,12 +2866,17 @@ export function OpenTuiApp({
     }
 
     const liveComposerValue = composer?.plainText ?? draftValue;
-    const shouldHandleCommandOverlay = commandOverlay.visible && isCommandOverlayEligible(liveComposerValue);
-    if (commandOverlay.visible && !shouldHandleCommandOverlay) {
+    const liveCursorOffset = composer?.cursorOffset ?? liveComposerValue.length;
+    const shouldHandleInputOverlay = commandOverlay.visible && (
+      commandOverlay.mode === "command"
+        ? isCommandOverlayEligible(composer ? composer.getTextRange(0, liveCursorOffset) : liveComposerValue)
+        : isFileOverlayEligible(liveComposerValue, liveCursorOffset)
+    );
+    if (commandOverlay.visible && !shouldHandleInputOverlay) {
       setCommandOverlay(EMPTY_COMMAND_OVERLAY);
     }
 
-    if (shouldHandleCommandOverlay) {
+    if (shouldHandleInputOverlay) {
       if (event.name === "up" || (event.name === "tab" && event.shift)) {
         setCommandOverlay((current) => ({
           ...current,
@@ -2281,13 +2896,13 @@ export function OpenTuiApp({
         return;
       }
       if (event.name === "tab") {
-        completeCommandOverlaySelection();
+        completeInputOverlaySelection();
         event.preventDefault();
         event.stopPropagation();
         return;
       }
       if (event.name === "return") {
-        acceptCommandOverlaySelection();
+        acceptInputOverlaySelection();
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -2317,28 +2932,78 @@ export function OpenTuiApp({
     if (event.name === "c" && event.ctrl) {
       event.preventDefault();
       event.stopPropagation();
-      if (processing) {
+
+      if (commandPicker) {
+        setCommandPicker(null);
+        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        return;
+      }
+
+      if (checkboxPicker) {
+        setCheckboxPicker(null);
+        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        return;
+      }
+
+      if (commandOverlay.visible) {
+        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastCtrlCRef.current < CTRL_C_EXIT_WINDOW_MS) {
+        if (processingRef.current) {
+          const decision = session.requestTurnInterrupt
+            ? session.requestTurnInterrupt()
+            : (session.cancelCurrentTurn?.(), { accepted: true as const });
+          if (decision.accepted) {
+            abortControllerRef.current?.abort();
+          }
+        }
+        beginClosing();
+        return;
+      }
+
+      lastCtrlCRef.current = now;
+
+      if (processingRef.current) {
         const decision = session.requestTurnInterrupt
           ? session.requestTurnInterrupt()
           : (session.cancelCurrentTurn?.(), { accepted: true as const });
         if (decision.accepted) {
           abortControllerRef.current?.abort();
-          setProcessing(false);
-          setPhase("idle");
-          showHint("Current turn interrupted.");
+          // Do NOT set processing=false here — let runTurn's finally block
+          // handle it after the turn actually finishes. This prevents a new
+          // turn from starting before the old one unwinds.
+          setPhase("cancelling");
         } else {
-          showHint("Interrupt is currently disabled.");
+          showHint(
+            decision.reason === "compact_in_progress"
+              ? "Interrupt is disabled during compact phase"
+              : "Interrupt is currently disabled.",
+          );
         }
         return;
       }
 
       if (lastInputValueRef.current.trim()) {
         clearInput();
-        showHint("Input cleared.");
         return;
       }
 
-      void performExit();
+      showHint("Press Ctrl+C again to exit");
+      return;
+    }
+
+    if (event.name === "g" && event.ctrl) {
+      setMarkdownMode((current) => {
+        const next = current === "rendered" ? "raw" : "rendered";
+        showHint(next === "raw" ? "Markdown raw: ON" : "Markdown raw: OFF");
+        return next;
+      });
+      event.preventDefault();
+      event.stopPropagation();
+      return;
     }
 
     if (!composer || pendingAsk) return;
@@ -2387,8 +3052,15 @@ export function OpenTuiApp({
     .reverse()
     .find((item) => item.entry.kind === "assistant")?.index ?? -1;
 
-  const modelName = `${session.primaryAgent.modelConfig?.provider ?? "model"}:${session.primaryAgent.modelConfig?.model ?? "unknown"}`;
+  const modelDescriptor = getCurrentModelDescriptor(session);
+  const modelName = modelDescriptor?.compactScopedLabel ?? "unknown";
+  const modelNameColor = resolveModelNameColor(theme.mode, modelDescriptor, colors);
   const sidebarVisible = terminal.width >= MIN_TERMINAL_WIDTH_FOR_SIDEBAR;
+  const sidebarWidth = sidebarVisible ? getSidebarWidth(terminal.width) : 0;
+  const leftColumnWidth = Math.max(
+    24,
+    terminal.width - 4 - (sidebarVisible ? sidebarWidth + 1 : 0),
+  );
   const compactHeader = terminal.height < MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER
     || terminal.width < MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER;
 
@@ -2410,6 +3082,7 @@ export function OpenTuiApp({
             colors={colors}
             directory={process.cwd()}
             useCompact={compactHeader}
+            themeMode={theme.mode}
           />
 
           <scrollbox
@@ -2419,12 +3092,12 @@ export function OpenTuiApp({
             stickyScroll={true}
             stickyStart="bottom"
             viewportOptions={{ paddingRight: 1 }}
+            autoHideScrollbars={1500}
             verticalScrollbarOptions={{
-              visible: true,
               paddingLeft: 1,
               trackOptions: {
-                backgroundColor: colors.panel,
-                foregroundColor: colors.border,
+                backgroundColor: "transparent",
+                foregroundColor: colors.border + "66",
               },
             }}
           >
@@ -2442,6 +3115,7 @@ export function OpenTuiApp({
                     key={conversationEntryKey(entry, index)}
                     entry={entry}
                     streaming={processing && index === lastAssistantIndex}
+                    markdownMode={markdownMode}
                     colors={colors}
                     markdownStyle={markdownStyle}
                     needsSpacing={needsSpacing}
@@ -2470,10 +3144,10 @@ export function OpenTuiApp({
               colors={colors}
             />
           ) : null}
-          <CommandOverlayView overlay={commandOverlay} colors={colors} />
-          <CommandPickerView picker={commandPicker} colors={colors} />
-          <CheckboxPickerView picker={checkboxPicker} colors={colors} />
-          <PromptSelectView prompt={promptSelect} colors={colors} />
+          <CommandOverlayView overlay={commandOverlay} colors={colors} availableWidth={leftColumnWidth} />
+          <CommandPickerView picker={commandPicker} colors={colors} availableWidth={leftColumnWidth} />
+          <CheckboxPickerView picker={checkboxPicker} colors={colors} availableWidth={leftColumnWidth} />
+          <PromptSelectView prompt={promptSelect} colors={colors} availableWidth={leftColumnWidth} />
           <PromptSecretView
             prompt={promptSecret}
             inputRef={promptSecretInputRef}
@@ -2481,56 +3155,12 @@ export function OpenTuiApp({
             onSubmit={submitPromptSecret}
             colors={colors}
           />
-
-          <box flexDirection="column" gap={0} flexShrink={0}>
-            <box
-              border
-              borderStyle="rounded"
-              title=" Input "
-              borderColor={pendingAsk || commandPicker || checkboxPicker || promptSelect || promptSecret ? colors.border : colors.accent}
-              paddingLeft={1}
-              paddingRight={1}
-              flexDirection="column"
-              height={inputVisibleLines + 2}
-              flexShrink={0}
-            >
-              <textarea
-                ref={(node) => {
-                  inputRef.current = node;
-                }}
-                placeholder={pendingAsk ? "Ask pending..." : "Type a message or /command"}
-                focused={!pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret}
-                width="100%"
-                height={inputVisibleLines}
-                maxHeight={INPUT_MAX_VISIBLE_LINES}
-                minHeight={1}
-                keyBindings={COMPOSER_KEY_BINDINGS}
-                onSubmit={() => {
-                  const composer = inputRef.current;
-                  if (!composer) return;
-                  void handleSubmit(composer.plainText);
-                }}
-                wrapMode="word"
-                scrollMargin={0}
-              />
-            </box>
-            <box flexShrink={0}>
-              <StatusStrip
-                modelName={modelName}
-                phase={phase}
-                contextTokens={contextTokens}
-                contextLimit={session.primaryAgent.modelConfig?.contextLength}
-                cacheReadTokens={cacheReadTokens}
-                hint={hint}
-                showContext={!sidebarVisible}
-                colors={colors}
-              />
-            </box>
-          </box>
         </box>
 
         {sidebarVisible ? (
           <SidebarView
+            themeMode={theme.mode}
+            width={sidebarWidth}
             contextTokens={contextTokens}
             contextLimit={session.primaryAgent.modelConfig?.contextLength}
             cacheReadTokens={cacheReadTokens}
@@ -2538,6 +3168,67 @@ export function OpenTuiApp({
             colors={colors}
           />
         ) : null}
+      </box>
+
+      <box flexDirection="column" gap={0} flexShrink={0}>
+        <box
+          flexDirection="column"
+          height={inputVisibleLines + 2}
+          flexShrink={0}
+        >
+          <text
+            fg={colors.text}
+            content={"─".repeat(Math.max(8, terminal.width - 5))}
+          />
+          <box flexDirection="row" width="100%">
+            <text fg={colors.accent} content="❯ " flexShrink={0} />
+            <textarea
+              ref={(node) => {
+                inputRef.current = node;
+              }}
+              placeholder={pendingAsk ? "Ask pending..." : "Type a message or /command"}
+              focused={phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret}
+              textColor={colors.text}
+              focusedTextColor={colors.text}
+              placeholderColor={colors.dim}
+              cursorStyle={{ style: "block", blinking: false }}
+              cursorColor={colors.text}
+              paddingRight={1}
+              width="100%"
+              height={inputVisibleLines}
+              maxHeight={INPUT_MAX_VISIBLE_LINES}
+              minHeight={1}
+              syntaxStyle={composerTokenVisuals.syntaxStyle}
+              keyBindings={COMPOSER_KEY_BINDINGS}
+              onSubmit={() => {
+                void handleSubmit(getSerializedComposerInput());
+              }}
+              wrapMode="word"
+              scrollMargin={0}
+            />
+          </box>
+          <text
+            fg={colors.text}
+            content={"─".repeat(Math.max(8, terminal.width - 5))}
+          />
+        </box>
+        <box flexShrink={0} flexDirection="column">
+          <StatusStrip
+            modelName={modelName}
+            modelColor={modelNameColor}
+            themeMode={theme.mode}
+            phase={phase}
+            contextTokens={contextTokens}
+            contextLimit={session.primaryAgent.modelConfig?.contextLength}
+            cacheReadTokens={cacheReadTokens}
+            hint={hint}
+            showContext={!sidebarVisible}
+            colors={colors}
+          />
+          <box paddingLeft={1}>
+            <text fg={colors.dim} content={shortenPath(process.cwd())} wrapMode="truncate" />
+          </box>
+        </box>
       </box>
 
     </box>

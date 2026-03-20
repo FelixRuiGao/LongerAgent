@@ -5,25 +5,36 @@ description: Interactively test the LongerAgent TUI via tmux. Use when you need 
 
 # TUI Interactive Testing via tmux
 
-Test the Ink-based TUI by running it inside a tmux session. You can send keystrokes, capture the terminal screen as text, and analyze the output — equivalent to screenshots for GUI testing.
+Test the Ink-based TUI by running it inside a tmux session. You can send keystrokes, capture the terminal screen as text or as a PNG screenshot, and analyze the output.
 
 ## Lifecycle
 
 ### 1. Start
 
+**Option A — OpenTUI (bun, faster startup):**
+```bash
+tmux kill-session -t la-tui 2>/dev/null
+tmux new-session -d -s la-tui -x 120 -y 40
+tmux send-keys -t la-tui 'clear && pnpm opentui:dev 2>&1' Enter
+sleep 5
+```
+
+**Option B — CLI entry (tsx):**
 ```bash
 tmux kill-session -t la-tui 2>/dev/null
 tmux new-session -d -s la-tui -x 120 -y 40
 tmux send-keys -t la-tui 'clear && npx tsx src/cli.ts 2>&1' Enter
-sleep 4
+sleep 5
 ```
 
 - `clear &&` prevents shell prompt / command text from lingering above the TUI.
 - `-x 120 -y 40` fixes the terminal size for consistent captures.
 - `2>&1` merges stderr into the pane so errors are visible.
-- Wait 4s for tsx compilation + TUI init.
+- Wait 5s for compilation + TUI init (bun is faster but 5s is a safe default for both).
 
-### 2. Capture (the "screenshot")
+### 2. Capture
+
+#### Text capture
 
 ```bash
 tmux capture-pane -t la-tui -p
@@ -42,6 +53,44 @@ To include scrollback history (e.g., after long conversations):
 ```bash
 tmux capture-pane -t la-tui -p -S -100
 ```
+
+#### Visual screenshot (PNG)
+
+Requires `freeze` (`brew tap charmbracelet/tap && brew install charmbracelet/tap/freeze`).
+
+Pipe ANSI output from `capture-pane -pe` into `freeze` to produce a real PNG image:
+
+```bash
+tmux capture-pane -t la-tui -pe | freeze -o /tmp/tui-screenshot.png
+```
+
+Then use the Read tool to view the image directly.
+
+Useful `freeze` options:
+
+| Option | Effect |
+|--------|--------|
+| `-c full` | Add macOS-style window chrome |
+| `-c none` | No window decoration (default) |
+| `--font.size 14` | Adjust font size |
+| `-w 120` | Set image width in columns |
+| `--background "#1e1e2e"` | Custom background color |
+
+**Standard pattern — capture + screenshot in one step:**
+```bash
+tmux capture-pane -t la-tui -pe | freeze -o /tmp/tui-screenshot.png && echo "saved"
+```
+
+**With scrollback:**
+```bash
+tmux capture-pane -t la-tui -pe -S -100 | freeze -o /tmp/tui-screenshot.png
+```
+
+**When to use which:**
+- **Text capture** — quick checks, verifying specific strings, CI assertions.
+- **Visual screenshot** — layout/alignment verification, color/theme debugging, visual regression checks.
+
+**Known limitation:** freeze renders with its own font, which differs from modern terminals (iTerm2, Kitty, etc.). Unicode block characters like `░█▓` appear as dotted patterns in freeze but as solid colored blocks in modern terminals. The freeze screenshot is reliable for verifying **colors, layout, and text content**, but not for pixel-perfect glyph rendering. For exact visual fidelity, test in a real terminal.
 
 ### 3. Send Input
 
@@ -110,10 +159,16 @@ Then the next real key should work. But the flushed `\x1b` + `x` pair will be si
 ```bash
 tmux kill-session -t la-tui 2>/dev/null
 tmux new-session -d -s la-tui -x 120 -y 40
-tmux send-keys -t la-tui 'npx tsx src/cli.ts 2>&1' Enter
-sleep 4
+tmux send-keys -t la-tui 'clear && pnpm opentui:dev 2>&1' Enter
+sleep 5
 tmux capture-pane -t la-tui -p
-# Expect: logo, CONVERSATION header, input prompt, status bar with model name
+# Expect: logo, CONTEXT panel, input prompt, status bar with model name
+```
+
+**With visual screenshot:**
+```bash
+sleep 5 && tmux capture-pane -t la-tui -pe | freeze -o /tmp/tui-startup.png
+# Then: Read /tmp/tui-startup.png to visually verify layout and colors
 ```
 
 ### Test slash command picker
@@ -139,6 +194,32 @@ sleep 1 && tmux capture-pane -t la-tui -p
 # Expect: partial response, status bar shows READY (not Working)
 ```
 
+### Test dark/light mode switching
+
+**Important:** tmux does not relay macOS appearance changes to the TUI (OSC 11 queries return tmux's own fixed background). Use `VIGIL_THEME` env var to force theme mode, and `freeze --background` to match:
+
+```bash
+# Light mode — start a separate session
+tmux kill-session -t la-tui 2>/dev/null
+tmux new-session -d -s la-tui -x 120 -y 40
+tmux send-keys -t la-tui 'clear && VIGIL_THEME=light pnpm opentui:dev 2>&1' Enter
+sleep 5 && tmux capture-pane -t la-tui -pe | freeze --background "#ffffff" -o /tmp/tui-light.png
+
+# Dark mode
+tmux kill-session -t la-tui 2>/dev/null
+tmux new-session -d -s la-tui -x 120 -y 40
+tmux send-keys -t la-tui 'clear && VIGIL_THEME=dark pnpm opentui:dev 2>&1' Enter
+sleep 5 && tmux capture-pane -t la-tui -pe | freeze -o /tmp/tui-dark.png
+```
+
+Note: `freeze` defaults to a dark background. For light mode screenshots, always pass `--background "#ffffff"` so the background matches what a real light terminal would show.
+
+**To toggle macOS system appearance (for real terminals, NOT tmux):**
+```bash
+osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to false'
+osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true'
+```
+
 ### Test exit
 ```bash
 tmux send-keys -t la-tui C-c && sleep 0.5 && tmux send-keys -t la-tui C-c && sleep 1 && tmux capture-pane -t la-tui -p
@@ -153,7 +234,7 @@ tmux send-keys -t la-tui C-c && sleep 0.5 && tmux send-keys -t la-tui C-c && sle
 | Slash command execution | 1s |
 | Model response (short) | 5 – 10s |
 | Model response (long / tool use) | 15 – 30s |
-| TUI startup | 4s |
+| TUI startup | 5s |
 
 If the status bar shows `Working` or a spinner, the model hasn't finished yet — wait longer and re-capture.
 
@@ -170,3 +251,9 @@ Model API may be slow or rate-limited. Check for error messages in the capture. 
 
 **Garbled/corrupted display:**
 Send Ctrl+L to force a terminal repaint: `send-keys -t la-tui C-l`
+
+**freeze produces blank/empty image:**
+Make sure to use `-pe` (not just `-p`) with `capture-pane` so ANSI sequences are included. Without `-e`, freeze receives plain text and may render an empty image if the content is only whitespace.
+
+**freeze not found:**
+Install with `brew tap charmbracelet/tap && brew install charmbracelet/tap/freeze`.

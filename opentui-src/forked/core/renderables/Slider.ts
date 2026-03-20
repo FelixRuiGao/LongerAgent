@@ -289,6 +289,7 @@ export class SliderRenderable extends Renderable {
     const startY = Math.max(0, realStartCell)
     const endY = Math.min(this.height - 1, realEndCell)
 
+    // Use thin half-block characters for a slim scrollbar
     for (let realY = startY; realY <= endY; realY++) {
       const virtualCellStart = realY * 2
       const virtualCellEnd = virtualCellStart + 2
@@ -300,14 +301,10 @@ export class SliderRenderable extends Renderable {
       let char = " "
 
       if (coverage >= 2) {
-        char = "█"
+        char = "▐"
       } else if (coverage > 0) {
         const virtualPositionInCell = thumbStartInCell - virtualCellStart
-        if (virtualPositionInCell === 0) {
-          char = "▀"
-        } else {
-          char = "▄"
-        }
+        char = virtualPositionInCell === 0 ? "▐" : "▐"
       }
 
       for (let x = 0; x < this.width; x++) {

@@ -55,6 +55,8 @@ export interface ScrollBoxOptions extends BoxOptions<ScrollBoxRenderable> {
   scrollY?: boolean
   scrollAcceleration?: ScrollAcceleration
   viewportCulling?: boolean
+  /** Hide scrollbars after idle. Set to `true` for 1500ms default, or a number in ms. */
+  autoHideScrollbars?: boolean | number
 }
 
 const SCROLLBOX_PADDING_KEYS = [
@@ -119,6 +121,10 @@ export class ScrollBoxRenderable extends BoxRenderable {
   private scrollAccumulatorX: number = 0
   private scrollAccumulatorY: number = 0
 
+  private _autoHideMs: number = 0
+  private _autoHideTimer: ReturnType<typeof setTimeout> | undefined
+  private _scrollbarsHidden: boolean = false
+
   private _stickyScroll: boolean
   private _stickyScrollTop: boolean = false
   private _stickyScrollBottom: boolean = false
@@ -152,7 +158,9 @@ export class ScrollBoxRenderable extends BoxRenderable {
   }
 
   set scrollTop(value: number) {
+    const prev = this.verticalScrollBar.scrollPosition
     this.verticalScrollBar.scrollPosition = value
+    if (this.verticalScrollBar.scrollPosition !== prev) this.flashScrollbars()
     if (!this._isApplyingStickyScroll) {
       // Only mark as manual scroll if:
       // 1. We're not at a sticky position after scrolling (prevents programmatic scrolls to sticky edges from disabling sticky)
@@ -171,7 +179,9 @@ export class ScrollBoxRenderable extends BoxRenderable {
   }
 
   set scrollLeft(value: number) {
+    const prev = this.horizontalScrollBar.scrollPosition
     this.horizontalScrollBar.scrollPosition = value
+    if (this.horizontalScrollBar.scrollPosition !== prev) this.flashScrollbars()
     if (!this._isApplyingStickyScroll) {
       // Only mark as manual scroll if:
       // 1. We're not at a sticky position after scrolling (prevents programmatic scrolls to sticky edges from disabling sticky)
@@ -286,6 +296,7 @@ export class ScrollBoxRenderable extends BoxRenderable {
       scrollY = true,
       scrollAcceleration,
       viewportCulling = true,
+      autoHideScrollbars,
       ...rootBoxOptions
     } = options
 
@@ -397,6 +408,14 @@ export class ScrollBoxRenderable extends BoxRenderable {
 
     this.recalculateBarProps()
 
+    // Auto-hide scrollbars
+    if (autoHideScrollbars) {
+      this._autoHideMs = typeof autoHideScrollbars === "number" ? autoHideScrollbars : 1500
+      this._scrollbarsHidden = true
+      this.verticalScrollBar.visible = false
+      this.horizontalScrollBar.visible = false
+    }
+
     if (stickyStart && stickyScroll) {
       this.applyStickyStart(stickyStart)
     }
@@ -410,6 +429,23 @@ export class ScrollBoxRenderable extends BoxRenderable {
     this._ctx.on("selection", this.selectionListener)
   }
 
+  private flashScrollbars(): void {
+    if (this._autoHideMs <= 0) return
+    if (this._scrollbarsHidden) {
+      this._scrollbarsHidden = false
+      // Let each scrollbar decide its own visibility based on content overflow
+      this.verticalScrollBar.resetVisibilityControl()
+      this.horizontalScrollBar.resetVisibilityControl()
+    }
+    if (this._autoHideTimer !== undefined) clearTimeout(this._autoHideTimer)
+    this._autoHideTimer = setTimeout(() => {
+      this._scrollbarsHidden = true
+      this.verticalScrollBar.visible = false
+      this.horizontalScrollBar.visible = false
+      this._autoHideTimer = undefined
+    }, this._autoHideMs)
+  }
+
   protected onUpdate(deltaTime: number): void {
     this.handleAutoScroll(deltaTime)
   }
@@ -421,6 +457,7 @@ export class ScrollBoxRenderable extends BoxRenderable {
       this.verticalScrollBar.scrollBy(delta.y, unit)
       this.horizontalScrollBar.scrollBy(delta.x, unit)
     }
+    this.flashScrollbars()
     // Note: scrollBy doesn't need to set _hasManualScroll here because the scrollbar
     // change will trigger the scrollTop setter which handles it
   }
@@ -585,12 +622,14 @@ export class ScrollBoxRenderable extends BoxRenderable {
       this._hasManualScroll = true
       this.scrollAccel.reset()
       this.resetScrollAccumulators()
+      this.flashScrollbars()
       return true
     }
     if (this.horizontalScrollBar.handleKeyPress(key)) {
       this._hasManualScroll = true
       this.scrollAccel.reset()
       this.resetScrollAccumulators()
+      this.flashScrollbars()
       return true
     }
     return false

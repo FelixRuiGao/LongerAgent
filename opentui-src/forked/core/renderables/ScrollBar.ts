@@ -133,7 +133,7 @@ export class ScrollBarRenderable extends Renderable {
       },
       ...(orientation === "vertical"
         ? {
-            width: Math.max(1, Math.min(2, this.width)),
+            width: 1,
             height: "100%",
             marginLeft: "auto",
           }
