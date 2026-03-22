@@ -163,12 +163,40 @@ pub const EditBuffer = struct {
         return self.cursors.items[0];
     }
 
+    fn snapCursorCol(self: *EditBuffer, row: u32, col: u32) u32 {
+        return iter_mod.snapColToGraphemeBoundary(
+            self.tb.rope(),
+            self.tb.memRegistry(),
+            row,
+            col,
+            self.tb.tabWidth(),
+            self.tb.widthMethod(),
+        );
+    }
+
+    fn normalizePrimaryCursor(self: *EditBuffer) ?Cursor {
+        if (self.cursors.items.len == 0) return null;
+
+        var cursor = self.cursors.items[0];
+        const snapped_col = self.snapCursorCol(cursor.row, cursor.col);
+        const snapped_offset = iter_mod.coordsToOffset(self.tb.rope(), cursor.row, snapped_col) orelse cursor.offset;
+
+        if (snapped_col != cursor.col or snapped_offset != cursor.offset) {
+            cursor.col = snapped_col;
+            cursor.desired_col = snapped_col;
+            cursor.offset = snapped_offset;
+            self.cursors.items[0] = cursor;
+        }
+
+        return self.cursors.items[0];
+    }
+
     pub fn setCursor(self: *EditBuffer, row: u32, col: u32) !void {
         const line_count = self.tb.lineCount();
         const clamped_row = @min(row, line_count -| 1);
 
         const line_width = iter_mod.lineWidthAt(self.tb.rope(), clamped_row);
-        const clamped_col = @min(col, line_width);
+        const clamped_col = self.snapCursorCol(clamped_row, @min(col, line_width));
 
         const offset = iter_mod.coordsToOffset(self.tb.rope(), clamped_row, clamped_col) orelse 0;
 
@@ -329,6 +357,22 @@ pub const EditBuffer = struct {
 
         if (start.row == end.row and start.col == end.col) return;
 
+        const line_count = self.tb.lineCount();
+        if (line_count == 0) return;
+
+        start.row = @min(start.row, line_count -| 1);
+        end.row = @min(end.row, line_count -| 1);
+        start.col = self.snapCursorCol(start.row, @min(start.col, iter_mod.lineWidthAt(self.tb.rope(), start.row)));
+        end.col = self.snapCursorCol(end.row, @min(end.col, iter_mod.lineWidthAt(self.tb.rope(), end.row)));
+
+        if (start.row > end.row or (start.row == end.row and start.col > end.col)) {
+            const temp = start;
+            start = end;
+            end = temp;
+        }
+
+        if (start.row == end.row and start.col == end.col) return;
+
         try self.autoStoreUndo();
 
         const start_offset = iter_mod.coordsToOffset(self.tb.rope(), start.row, start.col) orelse return EditBufferError.InvalidCursor;
@@ -341,9 +385,9 @@ pub const EditBuffer = struct {
         self.tb.markViewsDirty();
 
         if (self.cursors.items.len > 0) {
-            const line_count = self.tb.lineCount();
-            const clamped_row = if (start.row >= line_count) line_count -| 1 else start.row;
-            const line_width = if (line_count > 0) iter_mod.lineWidthAt(self.tb.rope(), clamped_row) else 0;
+            const new_line_count = self.tb.lineCount();
+            const clamped_row = if (start.row >= new_line_count) new_line_count -| 1 else start.row;
+            const line_width = if (new_line_count > 0) iter_mod.lineWidthAt(self.tb.rope(), clamped_row) else 0;
             const clamped_col = @min(start.col, line_width);
             const offset = iter_mod.coordsToOffset(self.tb.rope(), clamped_row, clamped_col) orelse 0;
 
@@ -356,8 +400,7 @@ pub const EditBuffer = struct {
     }
 
     pub fn backspace(self: *EditBuffer) !void {
-        if (self.cursors.items.len == 0) return;
-        const cursor = self.cursors.items[0];
+        const cursor = self.normalizePrimaryCursor() orelse return;
 
         if (cursor.row == 0 and cursor.col == 0) return;
 
@@ -384,8 +427,7 @@ pub const EditBuffer = struct {
     }
 
     pub fn deleteForward(self: *EditBuffer) !void {
-        if (self.cursors.items.len == 0) return;
-        const cursor = self.cursors.items[0];
+        const cursor = self.normalizePrimaryCursor() orelse return;
 
         try self.autoStoreUndo();
 
@@ -454,6 +496,7 @@ pub const EditBuffer = struct {
 
     pub fn moveUp(self: *EditBuffer) void {
         if (self.cursors.items.len == 0) return;
+        _ = self.normalizePrimaryCursor();
         const cursor = &self.cursors.items[0];
 
         if (cursor.row > 0) {
@@ -465,7 +508,7 @@ pub const EditBuffer = struct {
 
             const line_width = iter_mod.lineWidthAt(self.tb.rope(), cursor.row);
 
-            cursor.col = @min(cursor.desired_col, line_width);
+            cursor.col = self.snapCursorCol(cursor.row, @min(cursor.desired_col, line_width));
             cursor.offset = iter_mod.coordsToOffset(self.tb.rope(), cursor.row, cursor.col) orelse 0;
         }
 
@@ -475,6 +518,7 @@ pub const EditBuffer = struct {
 
     pub fn moveDown(self: *EditBuffer) void {
         if (self.cursors.items.len == 0) return;
+        _ = self.normalizePrimaryCursor();
         const cursor = &self.cursors.items[0];
 
         const line_count = self.tb.getLineCount();
@@ -487,7 +531,7 @@ pub const EditBuffer = struct {
 
             const line_width = iter_mod.lineWidthAt(self.tb.rope(), cursor.row);
 
-            cursor.col = @min(cursor.desired_col, line_width);
+            cursor.col = self.snapCursorCol(cursor.row, @min(cursor.desired_col, line_width));
             cursor.offset = iter_mod.coordsToOffset(self.tb.rope(), cursor.row, cursor.col) orelse 0;
         }
 

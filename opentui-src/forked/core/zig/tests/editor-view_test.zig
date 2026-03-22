@@ -1890,11 +1890,10 @@ test "EditorView - cursor at second cell of width=2 grapheme moveLeft should jum
     try std.testing.expectEqual(@as(u32, 9), cursor.col);
 
     // Manually set cursor to col 8 (second cell of emoji at 7-8)
-    // TODO: setCursor should probably also snap to beginning of grapheme?
-    //       When the width/cell based cursor is visual only and EditBuffer/Rope cursor is byte based
+    // The cursor should snap back to the beginning of the grapheme.
     try eb.setCursor(0, 8);
     cursor = eb.getPrimaryCursor();
-    try std.testing.expectEqual(@as(u32, 8), cursor.col);
+    try std.testing.expectEqual(@as(u32, 7), cursor.col);
 
     // Should jump to col 9 (after the emoji), not col 10
     eb.moveRight();
@@ -1903,11 +1902,37 @@ test "EditorView - cursor at second cell of width=2 grapheme moveLeft should jum
 
     try eb.setCursor(0, 8);
     cursor = eb.getPrimaryCursor();
-    try std.testing.expectEqual(@as(u32, 8), cursor.col);
+    try std.testing.expectEqual(@as(u32, 7), cursor.col);
 
     eb.moveLeft();
     cursor = eb.getPrimaryCursor();
     try std.testing.expectEqual(@as(u32, 6), cursor.col);
+}
+
+test "EditorView - moveDownVisual snaps wrapped CJK cursor to grapheme boundary" {
+    const pool = gp.initGlobalPool(std.testing.allocator);
+    defer gp.deinitGlobalPool();
+    const link_pool = link.initGlobalLinkPool(std.testing.allocator);
+    defer link.deinitGlobalLinkPool();
+
+    var eb = try EditBuffer.init(std.testing.allocator, pool, link_pool, .wcwidth);
+    defer eb.deinit();
+
+    var ev = try EditorView.init(std.testing.allocator, eb, 29, 24);
+    defer ev.deinit();
+    ev.setWrapMode(.char);
+
+    try eb.setText("bash_background  →  启动 dev server（如 npm run dev）\nbash_output      →  随时查看日志\nkill_shell       →  用完时终止");
+
+    try eb.setCursor(2, 9);
+    ev.moveDownVisual();
+
+    const cursor = eb.getPrimaryCursor();
+    try std.testing.expectEqual(@as(u32, 2), cursor.row);
+    try std.testing.expectEqual(@as(u32, 28), cursor.col);
+
+    const vcursor = ev.getVisualCursor();
+    try std.testing.expectEqual(@as(u32, 28), vcursor.logical_col);
 }
 
 test "EditorView - cursor should be able to land after closing paren on line with wide graphemes" {

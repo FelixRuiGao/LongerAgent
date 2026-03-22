@@ -534,7 +534,7 @@ describe("InputRenderable", () => {
       expect(input.value).toBe("programmatic")
 
       // Cursor position should move to end when value is set programmatically
-      expect(input.cursorOffset).toBe("programmatic".length)
+      expect(input.cursorOffset).toBe(Bun.stringWidth("programmatic"))
     })
 
     it("should handle value changes with cursor moving to end", () => {
@@ -547,7 +547,15 @@ describe("InputRenderable", () => {
 
       input.value = "world"
       expect(input.value).toBe("world")
-      expect(input.cursorOffset).toBe("world".length) // Cursor should move to end
+      expect(input.cursorOffset).toBe(Bun.stringWidth("world")) // Cursor should move to end
+    })
+
+    it("should use display width when setting CJK value programmatically", () => {
+      const { input } = createInputRenderable({ width: 20, height: 1 })
+
+      input.value = "终止"
+      expect(input.value).toBe("终止")
+      expect(input.cursorOffset).toBe(Bun.stringWidth("终止"))
     })
 
     it("should handle empty value setting", () => {

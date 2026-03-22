@@ -533,10 +533,36 @@ export class TextareaRenderable extends EditBufferRenderable {
     return true
   }
 
+  private clearLastLogicalLinePreservingEmptyLine(row: number): boolean {
+    const lines = this.plainText.split("\n")
+    if (row < 0 || row >= lines.length || row !== lines.length - 1) {
+      return false
+    }
+
+    if (lines[row] === "") {
+      return false
+    }
+
+    lines[row] = ""
+    this.replaceText(lines.join("\n"))
+    this.editBuffer.setCursor(row, 0)
+    this.requestRender()
+    return true
+  }
+
   public deleteToLineStart(): boolean {
     const cursor = this.editorView.getCursor()
+    const eol = this.editBuffer.getEOL()
+    const lineCount = this.editBuffer.getLineCount()
 
     if (cursor.col > 0) {
+      const deletingEntireLastLogicalLine =
+        cursor.row === lineCount - 1 && cursor.row === eol.row && cursor.col === eol.col
+
+      if (deletingEntireLastLogicalLine && this.clearLastLogicalLinePreservingEmptyLine(cursor.row)) {
+        return true
+      }
+
       this.editBuffer.deleteRange(cursor.row, 0, cursor.row, cursor.col)
     }
 

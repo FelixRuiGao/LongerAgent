@@ -232,6 +232,44 @@ pub fn lineWidthAt(rope: *UnifiedRope, row: u32) u32 {
     }
 }
 
+/// Snap a display column to the nearest legal grapheme boundary at or before `col`.
+/// This prevents cursor-like positions from landing inside a wide grapheme cell.
+pub fn snapColToGraphemeBoundary(rope: *UnifiedRope, mem_registry: *const MemRegistry, row: u32, col: u32, tab_width: u8, width_method: utf8.WidthMethod) u32 {
+    const line_width = lineWidthAt(rope, row);
+    const clamped_col = @min(col, line_width);
+
+    if (clamped_col == 0 or clamped_col == line_width) {
+        return clamped_col;
+    }
+
+    const linestart = rope.getMarker(.linestart, row) orelse return 0;
+    var seg_idx = linestart.leaf_index + 1;
+    var cols_before: u32 = 0;
+
+    while (seg_idx < rope.count()) : (seg_idx += 1) {
+        const seg = rope.get(seg_idx) orelse break;
+        if (seg.isBreak() or seg.isLineStart()) break;
+        if (seg.asText()) |chunk| {
+            const next_cols = cols_before + chunk.width;
+            if (clamped_col <= next_cols) {
+                if (clamped_col == next_cols) {
+                    return clamped_col;
+                }
+
+                const bytes = chunk.getBytes(mem_registry);
+                const is_ascii = (chunk.flags & TextChunk.Flags.ASCII_ONLY) != 0;
+                const local_col: u32 = clamped_col - cols_before;
+                const pos = utf8.findPosByWidth(bytes, local_col, tab_width, is_ascii, false, width_method);
+                return cols_before + pos.columns_used;
+            }
+
+            cols_before = next_cols;
+        }
+    }
+
+    return clamped_col;
+}
+
 /// Takes mutable rope for lazy marker cache rebuilding
 pub fn getGraphemeWidthAt(rope: *UnifiedRope, mem_registry: *const MemRegistry, row: u32, col: u32, tab_width: u8, width_method: utf8.WidthMethod) u32 {
     const line_width = lineWidthAt(rope, row);

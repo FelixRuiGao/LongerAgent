@@ -937,6 +937,23 @@ describe("Textarea - Keybinding Tests", () => {
       expect(editor.logicalCursor.row).toBe(1)
     })
 
+    it("should preserve an empty last line when ctrl+u clears the final logical line", async () => {
+      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
+        initialValue: "Line 1\nLine 2\nLine 3",
+        width: 40,
+        height: 10,
+      })
+
+      editor.focus()
+      editor.gotoLine(2)
+      editor.gotoLineEnd()
+
+      currentMockInput.pressKey("u", { ctrl: true })
+      expect(editor.plainText).toBe("Line 1\nLine 2\n")
+      expect(editor.logicalCursor.row).toBe(2)
+      expect(editor.logicalCursor.col).toBe(0)
+    })
+
     it("should do nothing with ctrl+k when cursor is at end of line", async () => {
       const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
         initialValue: "Line 1 content\nLine 2 content",

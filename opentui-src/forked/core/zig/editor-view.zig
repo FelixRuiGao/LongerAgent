@@ -455,6 +455,17 @@ pub const EditorView = struct {
         };
     }
 
+    fn snapLogicalCol(self: *EditorView, logical_row: u32, logical_col: u32) u32 {
+        return iter_mod.snapColToGraphemeBoundary(
+            self.edit_buffer.tb.rope(),
+            self.edit_buffer.tb.memRegistry(),
+            logical_row,
+            logical_col,
+            self.edit_buffer.tb.tabWidth(),
+            self.edit_buffer.tb.widthMethod(),
+        );
+    }
+
     /// This accounts for line wrapping by finding which virtual line contains the logical position
     /// Returns absolute visual coordinates (document-absolute, not viewport-relative)
     pub fn logicalToVisualCursor(self: *EditorView, logical_row: u32, logical_col: u32) VisualCursor {
@@ -463,7 +474,7 @@ pub const EditorView = struct {
         const clamped_row = if (line_count > 0) @min(logical_row, line_count - 1) else 0;
 
         const line_width = iter_mod.lineWidthAt(self.edit_buffer.tb.rope(), clamped_row);
-        const clamped_col = @min(logical_col, line_width);
+        const clamped_col = self.snapLogicalCol(clamped_row, @min(logical_col, line_width));
 
         const visual_row_idx = self.text_buffer_view.findVisualLineIndex(clamped_row, clamped_col);
 
@@ -510,14 +521,21 @@ pub const EditorView = struct {
 
         const vline = &vlines[visual_row];
         const clamped_visual_col = @min(visual_col, vline.width_cols);
-        const logical_col = vline.source_col_offset + clamped_visual_col;
         const logical_row = @as(u32, @intCast(vline.source_line));
+        const continues_same_logical_line = visual_row + 1 < vlines.len and vlines[visual_row + 1].source_line == vline.source_line;
+
+        var logical_col = vline.source_col_offset + clamped_visual_col;
+        if (continues_same_logical_line and clamped_visual_col == vline.width_cols and vline.width_cols > 0) {
+            logical_col = vline.source_col_offset + vline.width_cols - 1;
+        }
+        logical_col = self.snapLogicalCol(logical_row, logical_col);
+        const snapped_visual_col = logical_col - vline.source_col_offset;
 
         const offset = iter_mod.coordsToOffset(self.edit_buffer.tb.rope(), logical_row, logical_col) orelse 0;
 
         return VisualCursor{
             .visual_row = visual_row,
-            .visual_col = clamped_visual_col,
+            .visual_col = snapped_visual_col,
             .logical_row = logical_row,
             .logical_col = logical_col,
             .offset = offset,
@@ -661,8 +679,8 @@ pub const EditorView = struct {
         }
 
         const vline = &vlines[vcursor.visual_row];
-        const logical_col = vline.source_col_offset; // Start column of this visual line
         const logical_row = @as(u32, @intCast(vline.source_line));
+        const logical_col = self.snapLogicalCol(logical_row, vline.source_col_offset); // Start column of this visual line
         const offset = iter_mod.coordsToOffset(self.edit_buffer.tb.rope(), logical_row, logical_col) orelse 0;
 
         return VisualCursor{
@@ -704,7 +722,7 @@ pub const EditorView = struct {
                 // To stay on the current visual line, we need to be one position BEFORE the boundary
                 // However, if width is 0, just use the start position
                 if (vline.width_cols > 0) {
-                    logical_col = vline.source_col_offset + vline.width_cols - 1;
+                    logical_col = self.snapLogicalCol(logical_row, vline.source_col_offset + vline.width_cols - 1);
                 } else {
                     logical_col = vline.source_col_offset;
                 }

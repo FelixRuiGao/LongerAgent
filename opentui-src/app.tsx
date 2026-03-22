@@ -1796,7 +1796,7 @@ export function OpenTuiApp({
     if (!composer) return;
     composer.setText(value);
     if (cursorToEnd) {
-      composer.cursorOffset = value.length;
+      composer.cursorOffset = Bun.stringWidth(value);
     }
     syncComposerState();
   }, [syncComposerState]);
@@ -2484,6 +2484,12 @@ export function OpenTuiApp({
       visualStart.logicalRow === cursor.row &&
       visualStart.logicalCol === cursor.col
     ) {
+      return;
+    }
+
+    if (visualStart.logicalRow === cursor.row && visualStart.logicalCol === 0) {
+      composer.deleteToLineStart();
+      syncComposerState();
       return;
     }
 
