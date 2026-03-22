@@ -19,3 +19,5 @@ Docs/
 segments/
 dejavu-fonts-ttf-2.37/
 *.tgz
+.codex/
+.zig-cache/
