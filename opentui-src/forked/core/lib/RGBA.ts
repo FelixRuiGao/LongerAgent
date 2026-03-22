@@ -21,7 +21,24 @@ export class RGBA {
     return hexToRgb(hex)
   }
 
+  static fromAnsi256(index: number): RGBA {
+    if (!Number.isInteger(index) || index < 0 || index > 255) {
+      throw new RangeError(`ANSI 256 color index must be an integer between 0 and 255, got ${index}`)
+    }
+
+    // Sentinel encoding:
+    //   r < 0 marks an indexed terminal color.
+    //   g stores the 0..255 palette index.
+    //   b is reserved for future use.
+    //   a is kept opaque so existing truthy/alpha checks stay stable.
+    return new RGBA(new Float32Array([-1, index, 0, 1]))
+  }
+
   toInts(): [number, number, number, number] {
+    if (this.isAnsi256()) {
+      const [r, g, b] = ansi256ToRgb(this.ansi256Index()!)
+      return [r, g, b, 255]
+    }
     return [Math.round(this.r * 255), Math.round(this.g * 255), Math.round(this.b * 255), Math.round(this.a * 255)]
   }
 
@@ -62,16 +79,83 @@ export class RGBA {
   }
 
   toString() {
+    if (this.isAnsi256()) {
+      return `ansi256(${this.ansi256Index()})`
+    }
     return `rgba(${this.r.toFixed(2)}, ${this.g.toFixed(2)}, ${this.b.toFixed(2)}, ${this.a.toFixed(2)})`
   }
 
   equals(other?: RGBA): boolean {
     if (!other) return false
+    if (this.isAnsi256() || other.isAnsi256()) {
+      return this.isAnsi256() && other.isAnsi256() && this.ansi256Index() === other.ansi256Index()
+    }
     return this.r === other.r && this.g === other.g && this.b === other.b && this.a === other.a
+  }
+
+  isAnsi256(): boolean {
+    return this.r < 0 && this.b === 0 && this.a === 1 && Number.isInteger(this.g) && this.g >= 0 && this.g <= 255
+  }
+
+  ansi256Index(): number | null {
+    return this.isAnsi256() ? Math.round(this.g) : null
   }
 }
 
 export type ColorInput = string | RGBA
+
+const ANSI_16_RGB: Array<[number, number, number]> = [
+  [0, 0, 0],
+  [128, 0, 0],
+  [0, 128, 0],
+  [128, 128, 0],
+  [0, 0, 128],
+  [128, 0, 128],
+  [0, 128, 128],
+  [192, 192, 192],
+  [128, 128, 128],
+  [255, 0, 0],
+  [0, 255, 0],
+  [255, 255, 0],
+  [0, 0, 255],
+  [255, 0, 255],
+  [0, 255, 255],
+  [255, 255, 255],
+]
+
+export function ansi256(index: number): RGBA {
+  return RGBA.fromAnsi256(index)
+}
+
+export function isAnsi256Color(color: RGBA | undefined | null): color is RGBA {
+  return !!color && color.isAnsi256()
+}
+
+export function getAnsi256Index(color: RGBA | undefined | null): number | null {
+  return color?.ansi256Index() ?? null
+}
+
+export function ansi256ToRgb(index: number): [number, number, number] {
+  if (!Number.isInteger(index) || index < 0 || index > 255) {
+    throw new RangeError(`ANSI 256 color index must be an integer between 0 and 255, got ${index}`)
+  }
+
+  if (index < 16) {
+    return ANSI_16_RGB[index]
+  }
+
+  if (index < 232) {
+    const paletteIndex = index - 16
+    const r = Math.floor(paletteIndex / 36)
+    const g = Math.floor((paletteIndex % 36) / 6)
+    const b = paletteIndex % 6
+    const steps = [0, 95, 135, 175, 215, 255]
+    return [steps[r], steps[g], steps[b]]
+  }
+
+  const gray = 8 + (index - 232) * 10
+  return [gray, gray, gray]
+}
 
 export function hexToRgb(hex: string): RGBA {
   hex = hex.replace(/^#/, "")

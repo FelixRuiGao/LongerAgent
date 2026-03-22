@@ -33,6 +33,9 @@ function makeSessionLike(projectRoot: string): any {
   s._cacheHitEnabled = true;
   s._currentMasterPlan = undefined;
   s._currentPhasePlan = undefined;
+  s._turnInFlight = null;
+  s._turnRelease = null;
+  s._messageQueue = [];
   s._activeAgents = new Map();
   s._log = [];
   s._idAllocator = new LogIdAllocator();
@@ -199,10 +202,10 @@ describe("P3 pending turn helpers", () => {
     try {
       const s = makeSessionLike(root);
       s._pendingTurnState = { stage: "pre_user_input", userInput: "hello" };
-      s.turn = vi.fn(async () => "ok");
+      s._turnInner = vi.fn(async () => "ok");
       const out = await (Session.prototype as any).resumePendingTurn.call(s);
       expect(out).toBe("ok");
-      expect(s.turn).toHaveBeenCalledWith("hello", undefined);
+      expect(s._turnInner).toHaveBeenCalledWith("hello", undefined);
       expect(s._pendingTurnState).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });

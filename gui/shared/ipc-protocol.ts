@@ -29,6 +29,21 @@ export interface ModelInfo {
   supportsMultimodal: boolean;
 }
 
+export interface CurrentModelDisplay {
+  configName?: string;
+  providerId: string;
+  selectionKey: string;
+  modelId: string;
+  brandKey: string;
+  brandLabel: string;
+  providerLabel: string;
+  modelLabel: string;
+  modelDetailedLabel: string;
+  scopedLabel: string;
+  scopedDetailedLabel: string;
+  note?: string;
+}
+
 export interface TokenInfo {
   inputTokens: number;
   totalTokens: number;
@@ -41,6 +56,7 @@ export interface SessionSummary {
   compactCount: number;
   createdAt: string;
   currentModel: string;
+  currentModelDisplay?: CurrentModelDisplay | null;
 }
 
 // ------------------------------------------------------------------
@@ -104,11 +120,20 @@ export interface McpStatusInfo {
 // ------------------------------------------------------------------
 
 export interface ModelTreeNode {
+  kind?: "group" | "provider" | "vendor" | "model" | "action";
+  id?: string;
   label: string;
   value: string;
+  note?: string;
   isCurrent: boolean;
+  credentialState?: "configured" | "missing" | "oauth_missing" | "not_required";
   keyMissing: boolean;
   keyHint?: string;
+  brandKey?: string;
+  brandLabel?: string;
+  providerId?: string;
+  selectionKey?: string;
+  modelId?: string;
   children?: ModelTreeNode[];
 }
 
@@ -123,6 +148,7 @@ export interface ActiveSessionInfo {
   state: SessionState;
   title: string;
   currentModel: string;
+  currentModelDisplay?: CurrentModelDisplay | null;
 }
 
 // ------------------------------------------------------------------
@@ -183,7 +209,7 @@ export interface InvokeChannels {
   };
   "session:getState": {
     args: [sessionId: string];
-    result: { state: SessionState; summary: SessionSummary; currentModel: string; cwd: string };
+    result: { state: SessionState; summary: SessionSummary; currentModel: string; currentModelDisplay: CurrentModelDisplay | null; cwd: string };
   };
   "session:deliverMessage": {
     args: [sessionId: string, content: string];
@@ -374,6 +400,7 @@ export interface EventChannels {
   "session:modelChanged": {
     sessionId: string;
     model: string;
+    display: CurrentModelDisplay | null;
   };
   "sidebar:refresh": void;
 }

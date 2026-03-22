@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
@@ -8,12 +8,20 @@ const FIXED_IMPORT = 'import("web-tree-sitter/web-tree-sitter.wasm", {';
 export function ensureOpenTuiWorkerPatch(): void {
   const require = createRequire(import.meta.url);
   const coreEntry = require.resolve("@opentui/core");
-  const workerPath = join(dirname(coreEntry), "parser.worker.js");
-  const source = readFileSync(workerPath, "utf8");
+  const candidatePaths = [
+    join(dirname(coreEntry), "parser.worker.js"),
+    join(dirname(coreEntry), "lib", "tree-sitter", "parser.worker.ts"),
+    join(dirname(coreEntry), "lib", "tree-sitter", "parser.worker.js"),
+  ];
 
-  if (!source.includes(BROKEN_IMPORT)) {
-    return;
+  for (const workerPath of candidatePaths) {
+    if (!existsSync(workerPath)) {
+      continue;
+    }
+    const source = readFileSync(workerPath, "utf8");
+    if (!source.includes(BROKEN_IMPORT)) {
+      continue;
+    }
+    writeFileSync(workerPath, source.replace(BROKEN_IMPORT, FIXED_IMPORT), "utf8");
   }
-
-  writeFileSync(workerPath, source.replace(BROKEN_IMPORT, FIXED_IMPORT), "utf8");
 }

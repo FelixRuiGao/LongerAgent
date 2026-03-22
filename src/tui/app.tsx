@@ -443,9 +443,8 @@ export function App({
       } finally {
         abortControllerRef.current = null;
         inputPanelRef.current?.resetTurnPasteCounter();
-        if (!cancelledRef.current) {
-          setProcessing(false);
-        }
+        setProcessing(false);
+        setStableActivity("idle");
       }
     },
     [session, autoSave, setStableActivity, clearActivityFallback],
@@ -497,9 +496,8 @@ export function App({
       resetUiState: () => {
         cancelledRef.current = false;
         setProcessing(false);
-        // Reset token count on /new
-        setContextTokens(0);
-        setCacheReadTokens(0);
+        setContextTokens(session.lastInputTokens);
+        setCacheReadTokens(session.lastCacheReadTokens ?? 0);
         setStableActivity("idle");
         setStatusError(false);
         setPendingAsk(null);
@@ -633,9 +631,8 @@ export function App({
       } finally {
         abortControllerRef.current = null;
         inputPanelRef.current?.resetTurnPasteCounter();
-        if (!cancelledRef.current) {
-          setProcessing(false);
-        }
+        setProcessing(false);
+        setStableActivity("idle");
       }
     },
     [session, autoSave, setStableActivity, clearActivityFallback],
@@ -679,9 +676,8 @@ export function App({
       } finally {
         abortControllerRef.current = null;
         inputPanelRef.current?.resetTurnPasteCounter();
-        if (!cancelledRef.current) {
-          setProcessing(false);
-        }
+        setProcessing(false);
+        setStableActivity("idle");
       }
     },
     [session, autoSave, setStableActivity, clearActivityFallback],
@@ -725,9 +721,8 @@ export function App({
       } finally {
         abortControllerRef.current = null;
         inputPanelRef.current?.resetTurnPasteCounter();
-        if (!cancelledRef.current) {
-          setProcessing(false);
-        }
+        setProcessing(false);
+        setStableActivity("idle");
       }
     },
     [session, autoSave, setStableActivity, clearActivityFallback],
@@ -1014,8 +1009,9 @@ export function App({
 
       cancelledRef.current = true;
       abortControllerRef.current?.abort();
-      setProcessing(false);
-      setStableActivity("idle");
+      // Do NOT set processing=false here — let runTurn's finally block
+      // handle it after the turn actually finishes. This prevents a new
+      // turn from starting before the old one unwinds.
       clearInputHint();
     } else {
       showInputHint("Press Ctrl+C again to exit");

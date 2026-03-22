@@ -1,19 +1,26 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSession, useSessionRegistry } from "../context";
 import { useUiPrefs } from "../App";
-import { useToast } from "./Toast";
-import { theme, mono, shadows, humanModelName, extractProvider, PROVIDER_INFO, formatTokens } from "../theme";
+import { theme, mono, PROVIDER_INFO, formatTokens } from "../theme";
 
 // ---------------------------------------------------------------------------
 // Model tree node (from IPC)
 // ---------------------------------------------------------------------------
 
 interface ModelTreeNode {
+  kind?: "group" | "provider" | "vendor" | "model" | "action";
+  id?: string;
   label: string;
   value: string;
+  note?: string;
   isCurrent: boolean;
   keyMissing: boolean;
   keyHint?: string;
+  brandKey?: string;
+  brandLabel?: string;
+  providerId?: string;
+  selectionKey?: string;
+  modelId?: string;
   children?: ModelTreeNode[];
 }
 
@@ -22,10 +29,9 @@ interface ModelTreeNode {
 // ---------------------------------------------------------------------------
 
 export function StatusBar(): React.ReactElement {
-  const { currentModel, switchModel, tokenInfo, activityPhase } = useSession();
+  const { currentModelDisplay, switchModel, tokenInfo, activityPhase } = useSession();
   const { foregroundSessionId } = useSessionRegistry();
   const { openSettings, sidebarCollapsed } = useUiPrefs();
-  const { toast } = useToast();
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
@@ -96,18 +102,20 @@ export function StatusBar(): React.ReactElement {
     });
   }, []);
 
-  const handleSelectModel = useCallback((value: string) => {
+  const handleSelectModel = useCallback((value: string, _label: string) => {
     // value is "provider:model" format
     switchModel(value);
     setPickerOpen(false);
-    const label = value.split(":").pop() || value;
-    toast(`Switched to ${humanModelName(value)}`, "info");
-  }, [switchModel, toast]);
+  }, [switchModel]);
 
   // Current model display
-  const displayModel = currentModel ? humanModelName(currentModel) : "No model";
-  const providerKey = currentModel ? extractProvider(currentModel).toLowerCase() : "";
-  const providerInfo = PROVIDER_INFO[providerKey];
+  const displayModel = currentModelDisplay?.modelDetailedLabel ?? "No model";
+  const providerInfo = currentModelDisplay
+    ? PROVIDER_INFO[currentModelDisplay.brandKey.toLowerCase()] ?? {
+      label: currentModelDisplay.brandLabel,
+      color: theme.muted,
+    }
+    : undefined;
 
   // Activity phase display (mirrors TUI status bar)
   const isActive = activityPhase !== "idle";
@@ -343,13 +351,13 @@ function ProviderGroup({
   node: ModelTreeNode;
   expanded: boolean;
   onToggle: () => void;
-  onSelect: (value: string) => void;
+  onSelect: (value: string, label: string) => void;
   expandedSubs: Set<string>;
   onToggleSub: (value: string) => void;
 }): React.ReactElement {
   const hasChildren = node.children && node.children.length > 0;
-  const provKey = node.value.toLowerCase();
-  const info = PROVIDER_INFO[provKey] || { label: node.label, color: theme.muted };
+  const brandKey = (node.brandKey || node.providerId || node.value).toLowerCase();
+  const info = PROVIDER_INFO[brandKey] || { label: node.brandLabel || node.label, color: theme.muted };
   const containsCurrent = nodeContainsCurrent(node);
   const allKeysMissing = node.keyMissing || (node.children?.every((c) => c.keyMissing) ?? false);
 
@@ -441,7 +449,7 @@ function SubGroup({
   node: ModelTreeNode;
   expanded: boolean;
   onToggle: () => void;
-  onSelect: (value: string) => void;
+  onSelect: (value: string, label: string) => void;
   expandedSubs: Set<string>;
   onToggleSub: (value: string) => void;
 }): React.ReactElement {
@@ -525,29 +533,15 @@ function ModelItem({
 }: {
   node: ModelTreeNode;
   depth: number;
-  onSelect: (value: string) => void;
+  onSelect: (value: string, label: string) => void;
 }): React.ReactElement {
   const [hovered, setHovered] = useState(false);
   const { openSettings } = useUiPrefs();
   const paddingLeft = 36 + depth * 16;
 
-  // Humanize the label: try provider:model format first, then raw label
-  const displayLabel = useMemo(() => {
-    // If the label already looks human-friendly (contains spaces and mixed case), keep it
-    if (/[A-Z].*\s/.test(node.label) && !/^[a-z]/.test(node.label)) return node.label;
-    // Try humanizing via the value (which is "provider:model") or the label itself
-    const fromValue = humanModelName(node.value);
-    if (fromValue !== node.value && fromValue !== node.value.split(":").pop()) return fromValue;
-    const fromLabel = humanModelName(node.label);
-    if (fromLabel !== node.label) return fromLabel;
-    // Last resort: clean up hyphenated names
-    return node.label;
-  }, [node.label, node.value]);
-
-  // Extract optionNote suffix like "(1M context beta)"
-  const noteMatch = node.label.match(/\(([^)]+)\)\s*$/);
-  const note = noteMatch ? noteMatch[1] : null;
-  const mainLabel = note ? displayLabel.replace(/\s*\([^)]+\)\s*$/, "") : displayLabel;
+  const mainLabel = node.label;
+  const note = node.note ?? null;
+  const detailedLabel = note ? `${mainLabel} (${note})` : mainLabel;
 
   return (
     <div
@@ -557,7 +551,7 @@ function ModelItem({
           const providerId = node.value.includes(":") ? node.value.split(":")[0] : node.value;
           openSettings("models", providerId);
         } else {
-          onSelect(node.value);
+          onSelect(node.value, detailedLabel);
         }
       }}
       onMouseEnter={() => setHovered(true)}

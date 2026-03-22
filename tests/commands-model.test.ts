@@ -99,17 +99,17 @@ describe("/model command", () => {
     expect(anthropic).toBeTruthy();
     expect(kimiGlobal).toBeTruthy();
     expect(openai).toBeTruthy();
-    expect(anthropic!.children?.some((c) => c.label.includes("claude-haiku-4-5"))).toBe(true);
-    expect(anthropic!.children?.some((c) => c.label.includes("claude-sonnet-4-6  (current)"))).toBe(true);
-    expect(anthropic!.children?.some((c) => c.label.includes("claude-sonnet-4-6  (1M context beta)"))).toBe(true);
+    expect(anthropic!.children?.some((c) => c.label.includes("Claude Haiku 4.5"))).toBe(true);
+    expect(anthropic!.children?.some((c) => c.label.includes("Claude Sonnet 4.6  (current)"))).toBe(true);
+    expect(anthropic!.children?.some((c) => c.label.includes("Claude Sonnet 4.6  (1M context beta)"))).toBe(true);
     expect(
-      openai!.children?.some((c) => c.label.includes("gpt-5.2  (key missing: run longeragent init)")),
+      openai!.children?.some((c) => c.label.includes("GPT-5.2  (key missing: run longeragent init)")),
     ).toBe(true);
     expect(openai!.children?.some((c) => c.label.includes("gpt-5.1"))).toBe(false);
     expect(openai!.children?.some((c) => c.label.includes("gpt-4o"))).toBe(false);
-    expect(openai!.children?.some((c) => c.label.includes("gpt-5.4"))).toBe(true);
-    expect(openai!.children?.some((c) => c.label.includes("gpt-5.2-codex"))).toBe(true);
-    expect(openai!.children?.some((c) => c.label.includes("gpt-5.3-codex"))).toBe(true);
+    expect(openai!.children?.some((c) => c.label.includes("GPT-5.4"))).toBe(true);
+    expect(openai!.children?.some((c) => c.label.includes("GPT-5.2 Codex"))).toBe(true);
+    expect(openai!.children?.some((c) => c.label.includes("GPT-5.3 Codex"))).toBe(true);
   });
 
   it("tracks managed provider keys per exact endpoint instead of sharing them across a group", () => {
@@ -176,21 +176,21 @@ describe("/model command", () => {
 
     expect(vendorAnthro).toBeTruthy();
     expect(vendorAnthro!.label).toBe("Anthropic");
-    expect(vendorAnthro!.children?.some((c) => c.label.startsWith("openrouter/claude-haiku-4.5"))).toBe(true);
-    expect(vendorAnthro!.children?.some((c) => c.label.includes("openrouter/claude-sonnet-4.6  (1M context)"))).toBe(true);
+    expect(vendorAnthro!.children?.some((c) => c.label.startsWith("Claude Haiku 4.5"))).toBe(true);
+    expect(vendorAnthro!.children?.some((c) => c.label.includes("Claude Sonnet 4.6  (1M context)"))).toBe(true);
 
     expect(vendorOpenAI).toBeTruthy();
     expect(vendorOpenAI!.label).toBe("OpenAI");
-    expect(vendorOpenAI!.children?.some((c) => c.label.startsWith("openrouter/gpt-5.4"))).toBe(true);
-    expect(vendorOpenAI!.children?.some((c) => c.label.startsWith("openrouter/gpt-5.3-codex"))).toBe(true);
+    expect(vendorOpenAI!.children?.some((c) => c.label.startsWith("GPT-5.4"))).toBe(true);
+    expect(vendorOpenAI!.children?.some((c) => c.label.startsWith("GPT-5.3 Codex"))).toBe(true);
 
     expect(vendorKimi).toBeTruthy();
     expect(vendorKimi!.label).toBe("Kimi");
-    expect(vendorKimi!.children?.some((c) => c.label.startsWith("openrouter/kimi-k2.5"))).toBe(true);
+    expect(vendorKimi!.children?.some((c) => c.label.startsWith("Kimi K2.5"))).toBe(true);
 
     expect(vendorMiniMax).toBeTruthy();
     expect(vendorMiniMax!.label).toBe("MiniMax");
-    expect(vendorMiniMax!.children?.some((c) => c.label.startsWith("openrouter/minimax-m2.1"))).toBe(true);
+    expect(vendorMiniMax!.children?.some((c) => c.label.startsWith("MiniMax M2.1"))).toBe(true);
 
     expect(vendorGLM).toBeTruthy();
     expect(vendorGLM!.label).toBe("GLM / Zhipu");

@@ -50,7 +50,6 @@ import {
 import {
   RGBA,
   SyntaxStyle,
-  type TerminalColors,
   type InputRenderable,
   type KeyBinding,
   type ScrollBoxRenderable,
@@ -90,70 +89,48 @@ export interface OpenTuiAppProps {
   onExit: (farewell?: string) => Promise<void> | void;
 }
 
-type OpenTuiThemeMode = "dark" | "light";
+// -- Fixed dark-only palette --------------------------------------------------
+// Derived from the logo gradient: gold → orange → red → magenta → purple.
+// Background is a near-black warm tone reminiscent of CRT phosphor afterglow.
 
-const BASE_COLORS = {
-  background: "transparent",
-  panel: "transparent",
-  border: "#4b5567",
-  accent: "#f4c95d",
-  dim: "#97a2b5",
-  text: "#ecf2ff",
-  yellow: "#f5e1b4",
-  red: "#e1a9b2",
-  green: "#9fd89f",
-  cyan: "#93d7cf",
-  orange: "#ffb347",
-  thinking: "#b0b8c6",
-  muted: "#778093",
-  readyStatus: "#a0e6a0",
-  thinkingStatus: "#7dcfff",
-  workingStatus: "#bb9af7",
-  generatingStatus: "#f4c95d",
-  waitingStatus: "#ff9e64",
-  closingStatus: "#7a8490",
-  errorStatus: "#f7768e",
+const BG = "#0d0c0f";
+
+const COLORS = {
+  background: BG,
+  panel: BG,
+  // Structural
+  border: "#2a2630",
+  separator: "#2a2630",
+  // Text hierarchy — cool-shifted to balance the warm background
+  text: "#c8ced8",
+  dim: "#636a76",
+  muted: "#454a54",
+  // Logo-derived accents (sampled from the gradient)
+  accent: "#ffb703",       // logo line 1 — gold
+  orange: "#fb8500",       // logo line 2
+  red: "#f05030",          // logo line 3
+  magenta: "#e81860",      // logo line 4
+  purple: "#a010a0",       // logo line 6
+  // Semantic colors not in the gradient
+  yellow: "#e8c468",
+  green: "#73a942",
+  cyan: "#6aa8a0",
+  thinking: "#8a7e90",
+  // Phase indicators — each maps to a logo gradient stop
+  readyStatus: "#6aa8a0",
+  thinkingStatus: "#a010a0",
+  workingStatus: "#e81860",
+  generatingStatus: "#ffb703",
+  waitingStatus: "#fb8500",
+  closingStatus: "#4d4843",
+  errorStatus: "#f05030",
 } as const;
 
-const SEMANTIC_PALETTES: Record<OpenTuiThemeMode, typeof BASE_COLORS> = {
-  dark: {
-    ...BASE_COLORS,
-    yellow: "#f5e1b4",
-    red: "#e1a9b2",
-    green: "#9fd89f",
-    cyan: "#93d7cf",
-    readyStatus: "#a0e6a0",
-    thinkingStatus: "#7dcfff",
-    workingStatus: "#bb9af7",
-    generatingStatus: "#f4c95d",
-    waitingStatus: "#ff9e64",
-    closingStatus: "#7a8490",
-    errorStatus: "#f7768e",
-    muted: "#778093",
-  },
-  light: {
-    ...BASE_COLORS,
-    accent: "#d8aa38",
-    yellow: "#eca030",
-    red: "#d02848",
-    green: "#22b858",
-    cyan: "#18b0a0",
-    readyStatus: "#1ca850",
-    thinkingStatus: "#1a88d0",
-    workingStatus: "#8240de",
-    generatingStatus: "#d88808",
-    waitingStatus: "#e06418",
-    closingStatus: "#606870",
-    errorStatus: "#dc3838",
-    muted: "#707880",
-  },
-};
-
-type OpenTuiPalette = typeof BASE_COLORS;
+type OpenTuiPalette = typeof COLORS;
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
-const TERMINAL_PALETTE_REFRESH_MS = 30_000;
+// (terminal palette refresh removed — dark-only, fixed bg)
 const CTRL_C_EXIT_WINDOW_MS = 2000;
 const FIXED_CLOSE_DELAY_MS = 1500;
 const INPUT_MAX_VISIBLE_LINES = 10;
@@ -166,8 +143,7 @@ const MIN_TERMINAL_WIDTH_FOR_SIDEBAR = 90;
 const MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER = 72;
 const MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER = 28;
 const APP_VERSION = "v0.1.3";
-const CONTEXT_PRIMARY_NEUTRAL = "#738399";
-const CONTEXT_SECONDARY_NEUTRAL = "#c0cad8";
+// (removed CONTEXT_PRIMARY_NEUTRAL / CONTEXT_SECONDARY_NEUTRAL — unused)
 const CUSTOM_EMPTY_HINT =
   'Custom answer is empty. Please enter an answer first, or choose "Discuss further" instead.';
 const GOODBYE_MESSAGES = [
@@ -210,14 +186,11 @@ interface CommandOverlayState {
 }
 
 interface OpenTuiTheme {
-  mode: OpenTuiThemeMode;
   colors: OpenTuiPalette;
   markdownStyle: SyntaxStyle;
-  defaultForeground: string | null;
-  defaultBackground: string | null;
 }
 
-const DARK_PROVIDER_MODEL_COLORS: Record<string, string> = {
+const PROVIDER_MODEL_COLORS: Record<string, string> = {
   openai: "#10a37f",
   "openai-codex": "#10a37f",
   kimi: "#38bdf8",
@@ -236,86 +209,34 @@ const DARK_PROVIDER_MODEL_COLORS: Record<string, string> = {
   anthropic: "#e6c3a5",
 };
 
-const LIGHT_PROVIDER_MODEL_COLORS: Record<string, string> = {
-  openai: "#109870",
-  "openai-codex": "#109870",
-  kimi: "#1a88d0",
-  "kimi-cn": "#1a88d0",
-  "kimi-code": "#1a88d0",
-  minimax: "#d83078",
-  "minimax-cn": "#d83078",
-  glm: "#5448d8",
-  "glm-intl": "#5448d8",
-  "glm-code": "#5448d8",
-  "glm-intl-code": "#5448d8",
-  openrouter: "#9238d8",
-  lmstudio: "#545c68",
-  omlx: "#545c68",
-  ollama: "#545c68",
-  anthropic: "#b86018",
-};
-
-function normalizeHexColor(hex: string | null | undefined): string | null {
-  if (!hex) return null;
-  const normalized = hex.trim().toLowerCase();
-  return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : null;
-}
-
 function resolveModelNameColor(
-  themeMode: OpenTuiThemeMode,
   descriptor: ModelDescriptor | null,
   colors: OpenTuiPalette,
 ): string {
-  if (!descriptor) {
-    return colors.accent;
-  }
-
-  const providerColors = themeMode === "light" ? LIGHT_PROVIDER_MODEL_COLORS : DARK_PROVIDER_MODEL_COLORS;
-
-  const exact = providerColors[descriptor.providerId];
-  if (exact) return exact;
-
-  const brand = providerColors[descriptor.brandKey];
-  if (brand) return brand;
-
-  return colors.accent;
-}
-
-function hexToRgb(hex: string): [number, number, number] | null {
-  const normalized = normalizeHexColor(hex);
-  if (!normalized) return null;
-  return [
-    Number.parseInt(normalized.slice(1, 3), 16),
-    Number.parseInt(normalized.slice(3, 5), 16),
-    Number.parseInt(normalized.slice(5, 7), 16),
-  ];
-}
-
-function rgbToHex(r: number, g: number, b: number): string {
-  return `#${[r, g, b]
-    .map((value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
-function mixHexColors(foreground: string, background: string, towardBackground: number): string | null {
-  const fg = hexToRgb(foreground);
-  const bg = hexToRgb(background);
-  if (!fg || !bg) return null;
-  const weight = Math.max(0, Math.min(1, towardBackground));
-  return rgbToHex(
-    fg[0] * (1 - weight) + bg[0] * weight,
-    fg[1] * (1 - weight) + bg[1] * weight,
-    fg[2] * (1 - weight) + bg[2] * weight,
-  );
+  if (!descriptor) return colors.accent;
+  return PROVIDER_MODEL_COLORS[descriptor.providerId]
+    ?? PROVIDER_MODEL_COLORS[descriptor.brandKey]
+    ?? colors.accent;
 }
 
 function buildMarkdownStyle(colors: OpenTuiPalette): SyntaxStyle {
+  // Code syntax colors — logo-gradient-derived
+  const kw    = RGBA.fromHex("#e0a050");  // keywords: warm amber
+  const str   = RGBA.fromHex("#8aad6a");  // strings: forest green
+  const fn    = RGBA.fromHex("#d0a0d0");  // functions: soft lavender
+  const typ   = RGBA.fromHex("#e8c468");  // types: golden
+  const num   = RGBA.fromHex("#d08770");  // numbers: burnt orange
+  const cmt   = RGBA.fromHex("#5a5565");  // comments: muted purple-gray
+  const op    = RGBA.fromHex("#9098a8");  // operators/punctuation: cool gray
+  const lit   = RGBA.fromHex("#6aa8a0");  // constants/builtins: teal
+
   return SyntaxStyle.fromStyles({
     default: { fg: RGBA.fromHex(colors.text) },
     conceal: { fg: RGBA.fromHex(colors.dim) },
-    "markup.heading": { fg: RGBA.fromHex(colors.text), bold: true },
-    "markup.heading.1": { fg: RGBA.fromHex(colors.text), bold: true },
-    "markup.heading.2": { fg: RGBA.fromHex(colors.text), bold: true },
+    // Markdown
+    "markup.heading": { fg: RGBA.fromHex(colors.accent), bold: true },
+    "markup.heading.1": { fg: RGBA.fromHex(colors.accent), bold: true },
+    "markup.heading.2": { fg: RGBA.fromHex(colors.orange), bold: true },
     "markup.heading.3": { fg: RGBA.fromHex(colors.text), bold: true },
     "markup.heading.4": { fg: RGBA.fromHex(colors.text), bold: true },
     "markup.heading.5": { fg: RGBA.fromHex(colors.text), bold: true },
@@ -325,45 +246,57 @@ function buildMarkdownStyle(colors: OpenTuiPalette): SyntaxStyle {
     "markup.raw": { fg: RGBA.fromHex(colors.yellow) },
     "markup.raw.block": { fg: RGBA.fromHex(colors.yellow) },
     "markup.link": { fg: RGBA.fromHex(colors.cyan) },
-    "markup.link.label": { fg: RGBA.fromHex(colors.text), underline: true },
+    "markup.link.label": { fg: RGBA.fromHex(colors.cyan), underline: true },
     "markup.link.url": { fg: RGBA.fromHex(colors.cyan), underline: true },
-    "markup.quote": { fg: RGBA.fromHex(colors.muted), italic: true },
+    "markup.quote": { fg: RGBA.fromHex(colors.dim), italic: true },
     "markup.list": { fg: RGBA.fromHex(colors.text) },
+    // Code syntax — tree-sitter capture names
+    "keyword": { fg: kw, bold: true },
+    "keyword.return": { fg: kw, bold: true },
+    "keyword.function": { fg: kw, bold: true },
+    "keyword.import": { fg: kw, bold: true },
+    "keyword.operator": { fg: op },
+    "keyword.conditional": { fg: kw, bold: true },
+    "keyword.repeat": { fg: kw, bold: true },
+    "keyword.exception": { fg: kw, bold: true },
+    "string": { fg: str },
+    "string.special": { fg: str },
+    "string.escape": { fg: num },
+    "comment": { fg: cmt, italic: true },
+    "comment.line": { fg: cmt, italic: true },
+    "comment.block": { fg: cmt, italic: true },
+    "function": { fg: fn },
+    "function.call": { fg: fn },
+    "function.method": { fg: fn },
+    "function.builtin": { fg: fn },
+    "method": { fg: fn },
+    "variable": { fg: RGBA.fromHex("#b0b8c4") },
+    "variable.builtin": { fg: lit },
+    "variable.parameter": { fg: RGBA.fromHex("#b0b8c4") },
+    "type": { fg: typ },
+    "type.builtin": { fg: typ },
+    "constructor": { fg: typ },
+    "number": { fg: num },
+    "number.float": { fg: num },
+    "constant": { fg: lit },
+    "constant.builtin": { fg: lit },
+    "boolean": { fg: lit },
+    "operator": { fg: op },
+    "punctuation": { fg: op },
+    "punctuation.bracket": { fg: op },
+    "punctuation.delimiter": { fg: op },
+    "punctuation.special": { fg: op },
+    "property": { fg: RGBA.fromHex("#b0b8c4") },
+    "attribute": { fg: typ },
+    "tag": { fg: kw },
+    "label": { fg: RGBA.fromHex(colors.accent) },
   });
 }
 
-function buildTheme(
-  mode: OpenTuiThemeMode,
-  defaultForeground: string | null,
-  defaultBackground: string | null,
-): OpenTuiTheme {
-  const semantic = SEMANTIC_PALETTES[mode];
-  const text = normalizeHexColor(defaultForeground) ?? semantic.text;
-  const background = normalizeHexColor(defaultBackground) ?? "#000000";
-  const dim = mixHexColors(text, background, 0.35) ?? semantic.dim;
-  const border = mixHexColors(text, background, 0.62) ?? semantic.border;
-  const colors: OpenTuiPalette = {
-    ...semantic,
-    text,
-    dim,
-    border,
-  };
-
-  return {
-    mode,
-    colors,
-    markdownStyle: buildMarkdownStyle(colors),
-    defaultForeground: normalizeHexColor(defaultForeground),
-    defaultBackground: normalizeHexColor(defaultBackground),
-  };
-}
-
-function paletteSnapshot(palette: TerminalColors): { defaultForeground: string | null; defaultBackground: string | null } {
-  return {
-    defaultForeground: normalizeHexColor(palette.defaultForeground),
-    defaultBackground: normalizeHexColor(palette.defaultBackground),
-  };
-}
+const THEME: OpenTuiTheme = {
+  colors: COLORS,
+  markdownStyle: buildMarkdownStyle(COLORS),
+};
 
 interface PromptSelectState {
   message: string;
@@ -627,49 +560,16 @@ const LOGO_LINES = [
   "  ░██░██     ░██   ░██  ░███   ░██  ░██         ",
   "   ░███    ░██████  ░█████░█ ░██████░██████████ ",
 ];
-const LOGO_GRADIENT_DARK = ["#ffb703", "#fb8500", "#f05030", "#e81860", "#d01080", "#a010a0", "#5a0c92"];
-const LOGO_GRADIENT_LIGHT = ["#e64a19", "#df333c", "#d81b60", "#ab1e85", "#8e24aa", "#5e35b1", "#1e88e5"];
+const LOGO_GRADIENT = ["#ffb703", "#fb8500", "#f05030", "#e81860", "#d01080", "#a010a0", "#5a0c92"];
 
-function HeaderView(
-  {
-    colors,
-    directory,
-    useCompact,
-    themeMode,
-  }: {
-    colors: OpenTuiPalette;
-    directory: string;
-    useCompact: boolean;
-    themeMode: OpenTuiThemeMode;
-  },
+function LogoBlock(
+  { colors }: { colors: OpenTuiPalette },
 ): React.ReactElement {
-  if (useCompact) {
-    return (
-      <box
-        paddingLeft={1}
-        paddingRight={1}
-        flexDirection="column"
-        width="100%"
-        flexShrink={0}
-      >
-        <text fg={colors.accent} bold content="VIGIL" />
-        <text fg={colors.dim} content={`${APP_VERSION}  ${shortenPath(directory)}`} wrapMode="truncate" />
-      </box>
-    );
-  }
-
   return (
-    <box
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      width="100%"
-      flexShrink={0}
-    >
-      {LOGO_LINES.map((line, i) => {
-        const gradient = themeMode === "light" ? LOGO_GRADIENT_LIGHT : LOGO_GRADIENT_DARK;
-        return <text key={`logo-${i}`} fg={gradient[i]} content={line} />;
-      })}
+    <box paddingLeft={1} paddingRight={1} flexDirection="column" width="100%" paddingBottom={1}>
+      {LOGO_LINES.map((line, i) => (
+        <text key={`logo-${i}`} fg={LOGO_GRADIENT[i]} content={line} />
+      ))}
     </box>
   );
 }
@@ -704,14 +604,14 @@ function ConversationEntryView(
     case "user":
       return (
         <box flexDirection="row" paddingTop={1} paddingBottom={1}>
-          <text fg={colors.accent} content="> " />
-          <text fg={colors.text} content={entry.text} />
-          {entry.queued ? <text fg={colors.yellow} content=" (Queued)" /> : null}
+          <text fg={colors.accent} bold content="❯ " />
+          <text fg={colors.text} bold content={entry.text} />
+          {entry.queued ? <text fg={colors.orange} content=" [queued]" /> : null}
         </box>
       );
     case "assistant":
       return (
-        <box paddingLeft={1}>
+        <box paddingLeft={1} paddingTop={1}>
           {markdownMode === "raw" ? (
             <text fg={colors.text} content={entry.text} />
           ) : (
@@ -736,7 +636,7 @@ function ConversationEntryView(
     case "reasoning":
       return (
         <box paddingLeft={needsSpacing ? 1 : 0} paddingTop={needsSpacing ? 1 : 0}>
-          <text fg={colors.muted} content={entry.text} />
+          <text fg={colors.thinking} content={entry.text} />
         </box>
       );
     case "tool_call":
@@ -749,13 +649,13 @@ function ConversationEntryView(
         const rest = restSource.replace(/\s+/g, " ").trim();
         const timeDisplay = entry.elapsedMs !== undefined ? formatElapsed(entry.elapsedMs) : null;
         return (
-          <box flexDirection="row" width="100%">
-            <text fg={colors.cyan} content={`- ${toolName}`} flexShrink={0} />
-            {timeDisplay ? <text fg={colors.muted} content={` (${timeDisplay}) `} flexShrink={0} /> : null}
+          <box flexDirection="row" width="100%" paddingLeft={1}>
+            <text fg={colors.purple} content={toolName} flexShrink={0} />
+            {timeDisplay ? <text fg={colors.muted} content={` ${timeDisplay}`} flexShrink={0} /> : null}
             {rest ? (
               <text
                 fg={colors.muted}
-                content={rest}
+                content={` ${rest}`}
                 wrapMode="none"
                 truncate
                 flexGrow={1}
@@ -767,7 +667,7 @@ function ConversationEntryView(
       }
     case "tool_result":
       return (
-        <box flexDirection="column" paddingLeft={2}>
+        <box flexDirection="column" paddingLeft={3}>
           {entry.text.split("\n").map((line, index) => (
             <text
               key={`tool-result-${index}`}
@@ -779,7 +679,7 @@ function ConversationEntryView(
       );
     case "progress":
       return (
-        <box>
+        <box paddingLeft={1}>
           <text fg={colors.muted} content={entry.text} />
         </box>
       );
@@ -787,32 +687,31 @@ function ConversationEntryView(
     case "compact_mark":
       return (
         <box paddingTop={1}>
-          <text fg={colors.yellow} content={entry.text} />
+          <text fg={colors.orange} content={entry.text} />
         </box>
       );
     case "error":
       return (
         <box paddingTop={1}>
-          <text fg={colors.red} content={`[x] Error: ${entry.text}`} />
+          <text fg={colors.red} bold content={`[!] ${entry.text}`} />
         </box>
       );
     case "sub_agent_rollup":
       return (
-        <box flexDirection="column">
+        <box flexDirection="column" paddingLeft={1}>
           <text fg={colors.dim} content={entry.text} />
         </box>
       );
     case "sub_agent_done":
       return (
-        <box>
-          <text fg={colors.dim} content="- " />
+        <box paddingLeft={1}>
           <text fg={colors.dim} content={entry.text} />
         </box>
       );
     case "interrupted_marker":
       return (
         <box paddingLeft={1}>
-          <text fg={colors.yellow} content={entry.text} />
+          <text fg={colors.orange} content={entry.text} />
         </box>
       );
     default:
@@ -824,22 +723,18 @@ function StatusStrip(
   {
     modelName,
     modelColor,
-    themeMode,
     phase,
     contextTokens,
     contextLimit,
-    cacheReadTokens,
     hint,
     showContext,
     colors,
   }: {
     modelName: string;
     modelColor: string;
-    themeMode: OpenTuiThemeMode;
     phase: ActivityPhase;
     contextTokens: number;
     contextLimit?: number;
-    cacheReadTokens?: number;
     hint?: string | null;
     showContext: boolean;
     colors: OpenTuiPalette;
@@ -872,50 +767,44 @@ function StatusStrip(
       case "error":
         return { indicator: "●", color: colors.errorStatus, label: "ERROR" };
       default:
-        return { indicator: "●", color: colors.readyStatus, label: phase.toUpperCase() };
+        return { indicator: "●", color: colors.readyStatus, label: phase.toUpperCase().slice(0, 5) };
     }
   })();
-  const separatorColor = colors.border;
-  const contextParts = formatContextParts(contextTokens, contextLimit, cacheReadTokens);
-  const contextSecondaryTextColor = themeMode === "dark" ? "#64748b" : CONTEXT_SECONDARY_NEUTRAL;
+
+  const pct = formatUsagePercent(contextTokens, contextLimit);
+  const ctxCompact = `${pct} ${formatCompactTokens(contextTokens)}/${formatCompactTokens(contextLimit)}`;
 
   return (
     <box paddingLeft={1} paddingRight={1} flexDirection="column" gap={0} width="100%">
-      <box flexDirection="column">
-        <box flexDirection="row">
-          <text fg={phaseVisual.color} content={`${phaseVisual.indicator} ${phaseVisual.label}`} />
-          <text fg={separatorColor} content="  |  " />
-          {phase === "closing" ? (
-            <text fg={colors.dim} content="Shutting down..." />
-          ) : (
-            <>
-              <text fg={modelColor} content={modelName} />
-              {showContext ? (
-                <>
-                  <text fg={separatorColor} content="  |  " />
-                  <text fg={contextSecondaryTextColor} content="Context " />
-                  <text fg={colors.text} content={contextParts.primary} />
-                  {contextParts.secondary ? <text fg={contextSecondaryTextColor} content={contextParts.secondary} /> : null}
-                </>
-              ) : null}
-            </>
-          )}
-        </box>
-        {hint ? <text fg={colors.dim} content={hint} /> : null}
+      <box flexDirection="row">
+        <text fg={phaseVisual.color} bold content={`${phaseVisual.indicator} ${phaseVisual.label}`} />
+        <text fg={colors.separator} content=" │ " />
+        {phase === "closing" ? (
+          <text fg={colors.dim} content="shutting down..." />
+        ) : (
+          <>
+            <text fg={modelColor} content={modelName} />
+            {showContext ? (
+              <>
+                <text fg={colors.separator} content=" │ " />
+                <text fg={colors.dim} content={ctxCompact} />
+              </>
+            ) : null}
+          </>
+        )}
       </box>
+      {hint ? <text fg={colors.dim} content={hint} /> : null}
     </box>
   );
 }
 
 function ContextUsageCard(
   {
-    themeMode,
     contextTokens,
     contextLimit,
     cacheReadTokens,
     colors,
   }: {
-    themeMode: OpenTuiThemeMode;
     contextTokens: number;
     contextLimit?: number;
     cacheReadTokens?: number;
@@ -923,34 +812,30 @@ function ContextUsageCard(
   },
 ): React.ReactElement {
   const percentText = formatUsagePercent(contextTokens, contextLimit);
-  const barWidth = 22;
+  const barWidth = 20;
   const limit = contextLimit && contextLimit > 0 ? contextLimit : 1;
-  const filledBlocks = Math.max(0, Math.min(barWidth, Math.round((contextTokens / limit) * barWidth)));
+  const ratio = contextTokens / limit;
+  const filledBlocks = Math.max(0, Math.min(barWidth, Math.round(ratio * barWidth)));
   const emptyBlocks = Math.max(0, barWidth - filledBlocks);
 
-  const gradient = themeMode === "light" ? LOGO_GRADIENT_LIGHT : LOGO_GRADIENT_DARK;
-  // Pick a color from the middle of the logo gradient for the filled bar
-  const filledColor = gradient[Math.floor(gradient.length / 2)];
+  // Bar color follows the logo gradient as usage climbs
+  const barColor = ratio > 0.8 ? colors.red : ratio > 0.5 ? colors.orange : colors.accent;
 
   return (
-    <box
-      flexDirection="column"
-      width="100%"
-      gap={0}
-    >
-      <text fg={colors.text} bold content="CONTEXT" />
-      <text content=" " />
+    <box flexDirection="column" width="100%" gap={0}>
+      <text fg={colors.dim} bold content="CONTEXT" />
       <box flexDirection="row">
-        {filledBlocks > 0 ? <text fg={filledColor} content={"█".repeat(filledBlocks)} /> : null}
-        {emptyBlocks > 0 ? <text fg={colors.dim} content={"░".repeat(emptyBlocks)} /> : null}
-        <text fg={colors.text} content={` ${percentText}`} />
+        {filledBlocks > 0 ? <text fg={barColor} content={"━".repeat(filledBlocks)} /> : null}
+        {emptyBlocks > 0 ? <text fg={colors.border} content={"─".repeat(emptyBlocks)} /> : null}
+        <text fg={colors.dim} content={` ${percentText}`} />
       </box>
-      <text content=" " />
       <box flexDirection="row">
         <text fg={colors.text} content={formatCompactTokens(contextTokens)} />
-        <text fg={colors.dim} content={` / ${contextLimit ? formatCompactTokens(contextLimit) : "0"} Tokens`} />
+        <text fg={colors.muted} content={`/${contextLimit ? formatCompactTokens(contextLimit) : "?"}`} />
+        {(cacheReadTokens ?? 0) > 0 ? (
+          <text fg={colors.muted} content={` (${formatCompactTokens(cacheReadTokens)} hit)`} />
+        ) : null}
       </box>
-      <text fg={colors.green} content={`╰─ ⚡ ${formatCompactTokens(cacheReadTokens)} Cached`} />
     </box>
   );
 }
@@ -981,24 +866,21 @@ function PlanCard(
   );
 }
 
-function SidebarTitle({ themeMode, colors }: { themeMode: OpenTuiThemeMode; colors: OpenTuiPalette }): React.ReactElement {
-  const gradient = themeMode === "light" ? LOGO_GRADIENT_LIGHT : LOGO_GRADIENT_DARK;
+function SidebarTitle({ colors }: { colors: OpenTuiPalette }): React.ReactElement {
   const name = "VIGIL";
-  // Sample 5 colors evenly from the 7-color gradient
   const indices = [0, 1, 3, 5, 6];
   return (
     <box flexDirection="row">
       {name.split("").map((ch, i) => (
-        <text key={`sidebar-title-${i}`} fg={gradient[indices[i]]} bold content={ch} />
+        <text key={`sidebar-title-${i}`} fg={LOGO_GRADIENT[indices[i]]} bold content={ch} />
       ))}
-      <text fg={colors.dim} content={` ${APP_VERSION}`} />
+      <text fg={colors.muted} content={` ${APP_VERSION}`} />
     </box>
   );
 }
 
 function SidebarView(
   {
-    themeMode,
     width,
     contextTokens,
     contextLimit,
@@ -1006,7 +888,6 @@ function SidebarView(
     checkpoints,
     colors,
   }: {
-    themeMode: OpenTuiThemeMode;
     width: number;
     contextTokens: number;
     contextLimit?: number;
@@ -1018,7 +899,15 @@ function SidebarView(
   const safeCheckpoints = checkpoints ?? [];
 
   return (
-    <box width={width} minWidth={width} maxWidth={width} flexDirection="column">
+    <box
+      width={width}
+      minWidth={width}
+      maxWidth={width}
+      flexDirection="column"
+      border={["left"] as any}
+      borderColor={colors.separator}
+      borderStyle="single"
+    >
       <scrollbox
         flexGrow={1}
         viewportOptions={{ paddingRight: 1 }}
@@ -1027,14 +916,13 @@ function SidebarView(
           paddingLeft: 1,
           trackOptions: {
             backgroundColor: "transparent",
-            foregroundColor: colors.border + "66",
+            foregroundColor: colors.border + "44",
           },
         }}
       >
-        <box flexDirection="column" gap={1} width="100%" paddingLeft={2}>
-          <SidebarTitle themeMode={themeMode} colors={colors} />
+        <box flexDirection="column" gap={1} width="100%" paddingLeft={1}>
+          <SidebarTitle colors={colors} />
           <ContextUsageCard
-            themeMode={themeMode}
             contextTokens={contextTokens}
             contextLimit={contextLimit}
             cacheReadTokens={cacheReadTokens}
@@ -1066,7 +954,7 @@ function CommandOverlayView(
   return (
     <box
       border
-      borderColor={colors.accent}
+      borderColor={colors.border}
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
@@ -1117,7 +1005,7 @@ function CommandPickerView(
   return (
     <box
       border
-      borderColor={colors.accent}
+      borderColor={colors.border}
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
@@ -1172,7 +1060,7 @@ function CheckboxPickerView(
   return (
     <box
       border
-      borderColor={colors.accent}
+      borderColor={colors.border}
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
@@ -1227,7 +1115,7 @@ function PromptSelectView(
   return (
     <box
       border
-      borderColor={colors.yellow}
+      borderColor={colors.border}
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
@@ -1273,7 +1161,7 @@ function PromptSecretView(
   return (
     <box
       border
-      borderColor={colors.yellow}
+      borderColor={colors.border}
       paddingLeft={1}
       paddingRight={1}
       flexDirection="column"
@@ -1333,7 +1221,7 @@ function AskPanelView(
 ): React.ReactElement {
   if (ask.kind !== "agent_question") {
     return (
-      <box border borderColor={colors.red} paddingLeft={1} paddingRight={1} flexDirection="column">
+      <box border borderColor={colors.border} paddingLeft={1} paddingRight={1} flexDirection="column">
         <text fg={colors.red} content={`Unsupported ask kind: ${ask.kind}`} />
         <text content={ask.summary} />
         {error ? <text fg={colors.red} content={error} /> : null}
@@ -1356,7 +1244,7 @@ function AskPanelView(
       (error ? 1 : 0);
     const panelHeight = reviewContentLines + 2;
     return (
-      <box border borderColor={colors.green} paddingLeft={1} paddingRight={1} flexDirection="column" height={panelHeight}>
+      <box border borderColor={colors.border} paddingLeft={1} paddingRight={1} flexDirection="column" height={panelHeight}>
         <text fg={colors.green} content="Review your answers" />
         {questions.map((question, index) => {
           const answer = questionAnswers.get(index);
@@ -1385,7 +1273,7 @@ function AskPanelView(
   const question = questions[currentQuestionIndex];
   if (!question) {
     return (
-      <box border borderColor={colors.red} paddingLeft={1} paddingRight={1} flexDirection="column">
+      <box border borderColor={colors.border} paddingLeft={1} paddingRight={1} flexDirection="column">
         <text fg={colors.red} content="Question index out of range." />
       </box>
     );
@@ -1402,7 +1290,7 @@ function AskPanelView(
   const panelHeight = panelContentLines + 2;
 
   return (
-    <box border borderColor={colors.yellow} paddingLeft={1} paddingRight={1} flexDirection="column" height={panelHeight}>
+    <box border borderColor={colors.border} paddingLeft={1} paddingRight={1} flexDirection="column" height={panelHeight}>
       <text fg={colors.yellow} content={`Question ${currentQuestionIndex + 1}/${totalQuestions}: ${question.question}`} />
       {question.options.map((option, index) => {
         const isSelected = index === selectedIndex;
@@ -1467,13 +1355,7 @@ export function OpenTuiApp({
   const [entries, setEntries] = useState<ConversationEntry[]>(
     projectToTuiEntries([...(session.log ?? [])] as any[]),
   );
-  const initialTheme: OpenTuiThemeMode = (process.env.VIGIL_THEME === "light" || process.env.VIGIL_THEME === "dark") ? process.env.VIGIL_THEME : "dark";
-  const [themeMode, setThemeMode] = useState<OpenTuiThemeMode>(initialTheme);
-  const [theme, setTheme] = useState<OpenTuiTheme>(() => {
-    if (process.env.VIGIL_THEME === "light") return buildTheme("light", "#1e1e2e", "#ffffff");
-    if (process.env.VIGIL_THEME === "dark") return buildTheme("dark", "#ffffff", "#1e1e2e");
-    return buildTheme("dark", null, null);
-  });
+  const theme = THEME;
   const [processing, _setProcessing] = useState(false);
   const processingRef = useRef(false);
   const setProcessing = useCallback((v: boolean) => {
@@ -1529,96 +1411,6 @@ export function OpenTuiApp({
   }
   const composerTokenVisuals = composerTokenVisualsRef.current;
 
-  const envThemeOverride: OpenTuiThemeMode | undefined =
-    (process.env.VIGIL_THEME === "light" || process.env.VIGIL_THEME === "dark") ? process.env.VIGIL_THEME : undefined;
-
-  const refreshTerminalTheme = useCallback(async (nextMode?: OpenTuiThemeMode) => {
-    if (typeof renderer.getPalette !== "function") return;
-
-    try {
-      if (typeof renderer.clearPaletteCache === "function") {
-        renderer.clearPaletteCache();
-      }
-
-      const nextPalette = paletteSnapshot(await renderer.getPalette({ size: 16, timeout: 1200 }));
-
-      // VIGIL_THEME env var locks the mode — skip auto-detection
-      let detectedMode: OpenTuiThemeMode | undefined;
-      if (!envThemeOverride && !nextMode && nextPalette.defaultBackground) {
-        const bg = hexToRgb(nextPalette.defaultBackground);
-        if (bg) {
-          // Relative luminance (sRGB approximation)
-          const luminance = (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) / 255;
-          detectedMode = luminance > 0.5 ? "light" : "dark";
-        }
-      }
-
-      const resolvedMode = envThemeOverride ?? nextMode ?? detectedMode ?? themeMode;
-      if (resolvedMode !== themeMode) {
-        setThemeMode(resolvedMode);
-      }
-
-      // When VIGIL_THEME is set, provide synthetic fg/bg if the terminal palette doesn't match
-      let fg = nextPalette.defaultForeground;
-      let bg = nextPalette.defaultBackground;
-      if (envThemeOverride) {
-        if (!fg) fg = envThemeOverride === "light" ? "#1e1e2e" : "#ffffff";
-        if (!bg) bg = envThemeOverride === "light" ? "#ffffff" : "#1e1e2e";
-        // Override bg if terminal reports wrong luminance for the forced mode
-        const bgRgb = bg ? hexToRgb(bg) : null;
-        if (bgRgb) {
-          const lum = (0.299 * bgRgb[0] + 0.587 * bgRgb[1] + 0.114 * bgRgb[2]) / 255;
-          const expectLight = envThemeOverride === "light";
-          if (expectLight !== (lum > 0.5)) {
-            fg = envThemeOverride === "light" ? "#1e1e2e" : "#ffffff";
-            bg = envThemeOverride === "light" ? "#ffffff" : "#1e1e2e";
-          }
-        }
-      }
-
-      setTheme((current) => {
-        if (
-          current.mode === resolvedMode &&
-          current.defaultForeground === fg &&
-          current.defaultBackground === bg
-        ) {
-          return current;
-        }
-        return buildTheme(resolvedMode, fg, bg);
-      });
-    } catch {
-      // Ignore palette detection failures and keep the current fallback colors.
-    }
-  }, [renderer, themeMode, envThemeOverride]);
-
-  useEffect(() => {
-    void refreshTerminalTheme();
-
-    const intervalId = setInterval(() => {
-      void refreshTerminalTheme();
-    }, TERMINAL_PALETTE_REFRESH_MS);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [refreshTerminalTheme]);
-
-  useEffect(() => {
-    const handleThemeMode = (mode: OpenTuiThemeMode) => {
-      setThemeMode(mode);
-      void refreshTerminalTheme(mode);
-    };
-
-    renderer.on?.("theme_mode", handleThemeMode);
-    return () => {
-      if (typeof renderer.off === "function") {
-        renderer.off("theme_mode", handleThemeMode);
-      } else if (typeof renderer.removeListener === "function") {
-        renderer.removeListener("theme_mode", handleThemeMode);
-      }
-    };
-  }, [renderer, refreshTerminalTheme]);
-
   useEffect(() => {
     setAskError(null);
     setAskSelectionIndex(0);
@@ -1665,7 +1457,6 @@ export function OpenTuiApp({
       setContextTokens(session.lastInputTokens);
       setCacheReadTokens(session.lastCacheReadTokens ?? 0);
       setPendingAsk(session.getPendingAsk?.() ?? null);
-      void refreshTerminalTheme();
       autoSave();
     } catch (err) {
       if (!controller.signal.aborted) {
@@ -1677,7 +1468,7 @@ export function OpenTuiApp({
       abortControllerRef.current = null;
       setProcessing(false);
     }
-  }, [autoSave, refreshTerminalTheme, session]);
+  }, [autoSave, session]);
 
   const getAskQuestions = useCallback((): AgentQuestionItem[] => {
     if (!pendingAsk || pendingAsk.kind !== "agent_question") return [];
@@ -3054,15 +2845,15 @@ export function OpenTuiApp({
 
   const modelDescriptor = getCurrentModelDescriptor(session);
   const modelName = modelDescriptor?.compactScopedLabel ?? "unknown";
-  const modelNameColor = resolveModelNameColor(theme.mode, modelDescriptor, colors);
+  const modelNameColor = resolveModelNameColor(modelDescriptor, colors);
   const sidebarVisible = terminal.width >= MIN_TERMINAL_WIDTH_FOR_SIDEBAR;
   const sidebarWidth = sidebarVisible ? getSidebarWidth(terminal.width) : 0;
   const leftColumnWidth = Math.max(
     24,
     terminal.width - 4 - (sidebarVisible ? sidebarWidth + 1 : 0),
   );
-  const compactHeader = terminal.height < MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER
-    || terminal.width < MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER;
+  const showLogoInScroll = terminal.height >= MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER
+    && terminal.width >= MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER;
 
   return (
     <box
@@ -3078,13 +2869,6 @@ export function OpenTuiApp({
     >
       <box flexDirection="row" flexGrow={1} gap={1}>
         <box flexDirection="column" flexGrow={1} gap={1}>
-          <HeaderView
-            colors={colors}
-            directory={process.cwd()}
-            useCompact={compactHeader}
-            themeMode={theme.mode}
-          />
-
           <scrollbox
             ref={scrollRef}
             flexGrow={1}
@@ -3092,16 +2876,16 @@ export function OpenTuiApp({
             stickyScroll={true}
             stickyStart="bottom"
             viewportOptions={{ paddingRight: 1 }}
-            autoHideScrollbars={1500}
             verticalScrollbarOptions={{
               paddingLeft: 1,
               trackOptions: {
                 backgroundColor: "transparent",
-                foregroundColor: colors.border + "66",
+                foregroundColor: colors.border + "44",
               },
             }}
           >
             <box flexDirection="column" gap={0}>
+              {showLogoInScroll ? <LogoBlock colors={colors} /> : null}
               {entries.map((entry, index) => {
                 const prev = index > 0 ? entries[index - 1] : null;
                 const needsSpacing = entry.kind === "reasoning" && (
@@ -3159,7 +2943,6 @@ export function OpenTuiApp({
 
         {sidebarVisible ? (
           <SidebarView
-            themeMode={theme.mode}
             width={sidebarWidth}
             contextTokens={contextTokens}
             contextLimit={session.primaryAgent.modelConfig?.contextLength}
@@ -3177,22 +2960,22 @@ export function OpenTuiApp({
           flexShrink={0}
         >
           <text
-            fg={colors.text}
+            fg={colors.separator}
             content={"─".repeat(Math.max(8, terminal.width - 5))}
           />
           <box flexDirection="row" width="100%">
-            <text fg={colors.accent} content="❯ " flexShrink={0} />
+            <text fg={colors.accent} bold content="❯ " flexShrink={0} />
             <textarea
               ref={(node) => {
                 inputRef.current = node;
               }}
-              placeholder={pendingAsk ? "Ask pending..." : "Type a message or /command"}
+              placeholder={pendingAsk ? "ask pending..." : "message or /command"}
               focused={phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret}
               textColor={colors.text}
               focusedTextColor={colors.text}
-              placeholderColor={colors.dim}
+              placeholderColor={colors.muted}
               cursorStyle={{ style: "block", blinking: false }}
-              cursorColor={colors.text}
+              cursorColor={colors.accent}
               paddingRight={1}
               width="100%"
               height={inputVisibleLines}
@@ -3208,7 +2991,7 @@ export function OpenTuiApp({
             />
           </box>
           <text
-            fg={colors.text}
+            fg={colors.separator}
             content={"─".repeat(Math.max(8, terminal.width - 5))}
           />
         </box>
@@ -3216,17 +2999,15 @@ export function OpenTuiApp({
           <StatusStrip
             modelName={modelName}
             modelColor={modelNameColor}
-            themeMode={theme.mode}
             phase={phase}
             contextTokens={contextTokens}
             contextLimit={session.primaryAgent.modelConfig?.contextLength}
-            cacheReadTokens={cacheReadTokens}
             hint={hint}
             showContext={!sidebarVisible}
             colors={colors}
           />
           <box paddingLeft={1}>
-            <text fg={colors.dim} content={shortenPath(process.cwd())} wrapMode="truncate" />
+            <text fg={colors.muted} content={shortenPath(process.cwd())} wrapMode="truncate" />
           </box>
         </box>
       </box>

@@ -5,6 +5,8 @@ interface ParsedArgs {
   verbose: boolean;
 }
 
+const SESSION_CLOSE_TIMEOUT_MS = 150;
+
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = { verbose: false };
 
@@ -45,19 +47,63 @@ async function main(): Promise<void> {
   });
 
   const root = createRoot(renderer);
+  let exiting = false;
+  let fatalCleaningUp = false;
 
-  const exit = async () => {
+  const cleanupTerminalAfterFatal = () => {
+    if (fatalCleaningUp) return;
+    fatalCleaningUp = true;
+
     try {
       root.unmount();
     } catch {
       // ignore
     }
+
     try {
-      await runtime.session.close();
+      renderer.destroy();
     } catch {
       // ignore
     }
-    renderer.destroy();
+  };
+
+  const handleFatal = (err: unknown) => {
+    cleanupTerminalAfterFatal();
+    console.error("Fatal OpenTUI error:", err);
+    process.exit(1);
+  };
+
+  process.on("uncaughtException", handleFatal);
+  process.on("unhandledRejection", handleFatal);
+
+  const exit = async (farewell?: string) => {
+    if (exiting) return;
+    exiting = true;
+
+    // 1. Restore terminal immediately
+    try {
+      root.unmount();
+    } catch {
+      // ignore
+    }
+
+    try {
+      renderer.destroy();
+    } catch {
+      // ignore
+    }
+
+    if (farewell) {
+      try {
+        process.stdout.write(`\n${farewell}\n`);
+      } catch {
+        console.log(farewell);
+      }
+    }
+
+    // 2. Best-effort session cleanup, then exit no matter what
+    runtime.session.close().catch(() => {});
+    process.exit(0);
   };
 
   root.render(
@@ -73,6 +119,9 @@ async function main(): Promise<void> {
   await new Promise<void>((resolve) => {
     renderer.once("destroy", () => resolve());
   });
+
+  process.off("uncaughtException", handleFatal);
+  process.off("unhandledRejection", handleFatal);
 }
 
 main().catch((err) => {

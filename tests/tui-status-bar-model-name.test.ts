@@ -35,7 +35,7 @@ describe("status bar model name formatting", () => {
       "OpenRouter/Kimi K2.5",
     );
     expect(formatStatusBarModelName("foo-bar", "custom-model-x")).toBe(
-      "Foo Bar/custom-model-x",
+      "Foo Bar/Custom Model X",
     );
   });
 });

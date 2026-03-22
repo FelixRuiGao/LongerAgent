@@ -116,6 +116,7 @@ export class SessionStore {
   private _activeBaseDir: string | undefined;
   private _projectDir: string;
   private _sessionDir: string | undefined;
+  private _predictedSessionDir: string | undefined;
 
   constructor(opts?: { projectPath?: string; baseDir?: string }) {
     this._projectPath = opts?.projectPath;
@@ -180,17 +181,15 @@ export class SessionStore {
     return join(baseDir, GLOBAL_TUI_PREFERENCES_FILE);
   }
 
-  private static _createUniqueSessionDir(projectDir: string): string {
+  private static _findUniqueSessionDir(projectDir: string): string {
     const ts = timestampSlug();
     const first = join(projectDir, `${ts}_chat`);
     if (!existsSync(first)) {
-      mkdirSync(first, { recursive: true });
       return first;
     }
     for (let idx = 1; idx < 1000; idx++) {
       const candidate = join(projectDir, `${ts}_${String(idx).padStart(3, "0")}_chat`);
       if (existsSync(candidate)) continue;
-      mkdirSync(candidate, { recursive: true });
       return candidate;
     }
     throw new Error("Failed to allocate a unique session directory.");
@@ -204,7 +203,11 @@ export class SessionStore {
       try {
         mkdirSync(projectDir, { recursive: true });
         this._ensureProjectMetadata(projectDir);
-        const sessionDir = SessionStore._createUniqueSessionDir(projectDir);
+        let sessionDir = this._predictedSessionDir;
+        if (!sessionDir || dirname(sessionDir) !== projectDir || existsSync(sessionDir)) {
+          sessionDir = SessionStore._findUniqueSessionDir(projectDir);
+        }
+        mkdirSync(sessionDir, { recursive: true });
         mkdirSync(join(sessionDir, "artifacts"), { recursive: true });
 
         // Ensure global AGENTS.md exists (fallback for users who skipped init wizard)
@@ -216,6 +219,7 @@ export class SessionStore {
         this._activeBaseDir = baseDir;
         this._projectDir = projectDir;
         this._sessionDir = sessionDir;
+        this._predictedSessionDir = undefined;
 
         if (baseDir !== this._preferredBaseDir) {
           console.warn(
@@ -236,6 +240,35 @@ export class SessionStore {
   /** Clear the current session directory (used by /new to defer creation). */
   clearSession(): void {
     this._sessionDir = undefined;
+    this._predictedSessionDir = undefined;
+  }
+
+  predictNextSessionDir(): string {
+    if (this._sessionDir) return this._sessionDir;
+    if (this._predictedSessionDir) return this._predictedSessionDir;
+
+    const errors: string[] = [];
+    for (const baseDir of this._candidateBaseDirs()) {
+      const projectDir = join(baseDir, "projects", this._projectSlug);
+      try {
+        mkdirSync(projectDir, { recursive: true });
+        this._ensureProjectMetadata(projectDir);
+        const sessionDir = SessionStore._findUniqueSessionDir(projectDir);
+        this._activeBaseDir = baseDir;
+        this._projectDir = projectDir;
+        this._predictedSessionDir = sessionDir;
+        return sessionDir;
+      } catch (exc) {
+        errors.push(`${baseDir}: ${exc}`);
+      }
+    }
+
+    const detail = errors.length > 0 ? errors.join(" | ") : "no candidate paths available";
+    throw new Error(`Unable to predict session storage directory. Tried: ${detail}`);
+  }
+
+  predictNextArtifactsDir(): string {
+    return join(this.predictNextSessionDir(), "artifacts");
   }
 
   loadGlobalPreferences(): GlobalTuiPreferences {

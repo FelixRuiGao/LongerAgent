@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
+import { countTokens as gptCountTokens, encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
 
 import { Session } from "../src/session.js";
 import { SessionStore } from "../src/persistence.js";
@@ -123,6 +124,10 @@ function stubRunActivation(session: Session, text = "ok"): void {
   });
 }
 
+function countMessageTokens(messages: Array<Record<string, unknown>>): number {
+  return gptCountTokens(messages as any);
+}
+
 describe("session storage lifecycle", () => {
   it("round-trips global TUI preferences through SessionStore", () => {
     const baseDir = makeTempDir("longeragent-prefs-base-");
@@ -164,7 +169,8 @@ describe("session storage lifecycle", () => {
       const systemContent = String(((session as any)._log?.find((e: any) => e.type === "system_prompt")?.content ?? ""));
 
       expect(store.sessionDir).toBeUndefined();
-      expect(systemContent).toContain("{SESSION_ARTIFACTS}");
+      expect(systemContent).toContain("/artifacts");
+      expect(systemContent).not.toContain("{SESSION_ARTIFACTS}");
       expect(systemContent).toContain(store.projectDir);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
@@ -212,7 +218,8 @@ describe("session storage lifecycle", () => {
 
       const resetSystemContent = String(((session as any)._log?.find((e: any) => e.type === "system_prompt")?.content ?? ""));
       expect(store.sessionDir).toBeUndefined();
-      expect(resetSystemContent).toContain("{SESSION_ARTIFACTS}");
+      expect(resetSystemContent).toContain("/artifacts");
+      expect(resetSystemContent).not.toContain("{SESSION_ARTIFACTS}");
 
       stubRunActivation(session, "phase-2");
       await session.turn("second");
@@ -414,6 +421,80 @@ describe("session storage lifecycle", () => {
         modelId: "kimi-k2.5",
       });
     } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("estimates initial input tokens for a fresh session before the first user message", () => {
+    const previousHome = process.env["HOME"];
+    const baseDir = makeTempDir("longeragent-lifecycle-base-");
+    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    try {
+      process.env["HOME"] = baseDir;
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store);
+      const projected = projectToApiMessages((session as any).log, {
+        importantLog: "(empty file)",
+        agentsMd: "",
+        requiresAlternatingRoles: false,
+      });
+      const expected = countMessageTokens(projected);
+
+      expect(session.lastInputTokens).toBe(expected);
+      expect(session.lastTotalTokens).toBe(expected);
+      expect(session.lastCacheReadTokens).toBe(0);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env["HOME"];
+      } else {
+        process.env["HOME"] = previousHome;
+      }
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("includes tool definitions in the initial input token estimate", () => {
+    const previousHome = process.env["HOME"];
+    const baseDir = makeTempDir("longeragent-lifecycle-base-");
+    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    try {
+      process.env["HOME"] = baseDir;
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store);
+      const tools = [
+        {
+          name: "write_file",
+          description: "Write a file to disk",
+          parameters: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              content: { type: "string" },
+            },
+            required: ["path", "content"],
+          },
+        },
+      ];
+      (session.primaryAgent as any).tools = tools;
+
+      session.resetForNewSession(store);
+
+      const projected = projectToApiMessages((session as any).log, {
+        importantLog: "(empty file)",
+        agentsMd: "",
+        requiresAlternatingRoles: false,
+      });
+      const expected = gptCountTokens(projected as any) + gptEncode(JSON.stringify(tools)).length;
+
+      expect(session.lastInputTokens).toBe(expected);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env["HOME"];
+      } else {
+        process.env["HOME"] = previousHome;
+      }
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
     }

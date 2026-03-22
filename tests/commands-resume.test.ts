@@ -81,6 +81,29 @@ describe("resume command", () => {
     expect(options[0]?.label).not.toContain("12345678901234567890123456");
   });
 
+  it("normalizes newlines in /resume summaries before truncation", () => {
+    const registry = buildDefaultRegistry();
+    const resume = registry.lookup("/resume");
+    expect(resume?.options).toBeTruthy();
+
+    const options = resume!.options!({
+      session: {},
+      store: {
+        listSessions: vi.fn(() => [
+          {
+            path: "/tmp/s1",
+            created: "2026-02-21T08:00:00.000-08:00",
+            summary: "hello\nworld\nagain",
+            turns: 1,
+          },
+        ]),
+      } as unknown as CommandContext["store"],
+    });
+
+    expect(options[0]?.label).toContain("hello world again");
+    expect(options[0]?.label).not.toContain("\n");
+  });
+
   it("restores from log.json and rebuilds conversation", async () => {
     const registry = buildDefaultRegistry();
     const resume = registry.lookup("/resume");

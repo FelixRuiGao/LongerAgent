@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConversationEntry } from "../context";
-import { useSession } from "../context";
-import { theme, mono, shadows, humanModelName, PROVIDER_INFO } from "../theme";
+import { theme, mono, shadows } from "../theme";
 import { highlightCode } from "./SyntaxHighlight";
 import { useToast } from "./Toast";
 
@@ -448,26 +447,9 @@ function AssistantBubble({
   opacity: number;
   isStreaming?: boolean;
 }): React.ReactElement {
-  const { currentModel } = useSession();
   const [copied, setCopied] = useState(false);
   const htmlContent = useMemo(() => markdownToHtml(text), [text]);
   const contentRef = useRef<HTMLDivElement>(null);
-
-  const displayLabel = currentModel ? humanModelName(currentModel) : "assistant";
-
-  // Try to extract provider color for the label
-  const providerKey = currentModel ? (() => {
-    const colonIdx = currentModel.indexOf(":");
-    if (colonIdx > 0) return currentModel.slice(0, colonIdx);
-    // Check for runtime-openrouter pattern
-    if (/openrouter/i.test(currentModel)) return "openrouter";
-    if (/anthropic/i.test(currentModel)) return "anthropic";
-    if (/openai/i.test(currentModel)) return "openai";
-    if (/kimi|moonshot/i.test(currentModel)) return "kimi-cn";
-    if (/google|gemini/i.test(currentModel)) return "google";
-    if (/deepseek/i.test(currentModel)) return "deepseek";
-    return "";
-  })() : "";
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(text).then(() => {

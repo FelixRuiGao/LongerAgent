@@ -40,6 +40,8 @@ import {
   registerSkillCommands,
   resolveModelSelection,
 } from "../../src/commands.js";
+import { buildModelPickerTree } from "../../src/model-picker-tree.js";
+import { getCurrentModelDescriptor } from "../../src/model-presentation.js";
 import { SessionStore } from "../../src/persistence.js";
 import type { AgentQuestionDecision } from "../../src/ask.js";
 import type { ModelInfo, SessionState } from "../shared/ipc-protocol.js";
@@ -232,6 +234,9 @@ function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle("session:turn", async (_event, sessionId: string, input: string) => {
     const m = requireSession(sessionId);
+    if (m.abortController) {
+      throw new Error("A turn is already in progress for this session.");
+    }
     m.abortController = new AbortController();
     registry!.setState(m, "thinking");
 
@@ -306,13 +311,17 @@ function registerIpcHandlers(win: BrowserWindow): void {
       // auto-save handled by registry
     }
     m.store.clearSession();
-    m.session.resetForNewSession?.(m.store);
+    await m.session.resetForNewSession?.(m.store);
     registry!.setState(m, "idle");
     if (m.id === registry!.foregroundId) {
       registry!.sendLogUpdate(m);
       const model = m.session.currentModelConfigName ?? "";
       if (!win.isDestroyed()) {
-        win.webContents.send("session:modelChanged", { sessionId: m.id, model });
+        win.webContents.send("session:modelChanged", {
+          sessionId: m.id,
+          model,
+          display: getCurrentModelDescriptor(m.session),
+        });
       }
     }
   });
@@ -330,7 +339,7 @@ function registerIpcHandlers(win: BrowserWindow): void {
       modelSelectionKey: resolved.modelSelectionKey,
       modelId: resolved.modelId,
     });
-    m.session.resetForNewSession?.(m.store);
+    await m.session.resetForNewSession?.(m.store);
     registry!.setState(m, "idle");
     if (m.id === registry!.foregroundId) {
       registry!.sendLogUpdate(m);
@@ -338,6 +347,7 @@ function registerIpcHandlers(win: BrowserWindow): void {
         win.webContents.send("session:modelChanged", {
           sessionId: m.id,
           model: m.session.currentModelConfigName ?? resolved.selectedConfigName,
+          display: getCurrentModelDescriptor(m.session),
         });
       }
     }
@@ -352,8 +362,10 @@ function registerIpcHandlers(win: BrowserWindow): void {
         compactCount: (m.session as any)._compactCount ?? 0,
         createdAt: (m.session as any)._createdAt ?? "",
         currentModel: m.session.currentModelConfigName ?? "",
+        currentModelDisplay: getCurrentModelDescriptor(m.session),
       },
       currentModel: m.session.currentModelConfigName ?? "",
+      currentModelDisplay: getCurrentModelDescriptor(m.session),
       cwd: m.projectPath,
     };
   });
@@ -418,34 +430,66 @@ function registerIpcHandlers(win: BrowserWindow): void {
           commandRegistry: cmdRegistry,
           exit: () => { app.quit(); },
           onTurnRequested: (content: string) => {
-            m.abortController = new AbortController();
-            registry!.setState(m, "thinking");
-            m.session.turn(content, { signal: m.abortController.signal })
-              .then(() => { registry!.setState(m, "idle"); })
-              .catch(() => { if (m.state !== "asking") registry!.setState(m, "idle"); })
-              .finally(() => { m.abortController = null; });
+            (async () => {
+              await m.session.waitForTurnComplete();
+              m.abortController = new AbortController();
+              registry!.setState(m, "thinking");
+              try {
+                await m.session.turn(content, { signal: m.abortController.signal });
+                registry!.setState(m, "idle");
+              } catch {
+                if (m.state !== "asking") registry!.setState(m, "idle");
+              } finally {
+                m.abortController = null;
+              }
+            })();
           },
           onManualSummarizeRequested: (instruction: string) => {
             if (typeof (m.session as any).runManualSummarize !== "function") return;
-            m.abortController = new AbortController();
-            registry!.setState(m, "thinking");
-            (m.session as any).runManualSummarize(instruction, { signal: m.abortController.signal })
-              .then(() => { registry!.setState(m, "idle"); })
-              .catch(() => { if (m.state !== "asking") registry!.setState(m, "idle"); })
-              .finally(() => { m.abortController = null; });
+            (async () => {
+              await m.session.waitForTurnComplete();
+              m.abortController = new AbortController();
+              registry!.setState(m, "thinking");
+              try {
+                await (m.session as any).runManualSummarize(instruction, { signal: m.abortController.signal });
+                registry!.setState(m, "idle");
+              } catch {
+                if (m.state !== "asking") registry!.setState(m, "idle");
+              } finally {
+                m.abortController = null;
+              }
+            })();
           },
           onManualCompactRequested: (instruction: string) => {
             if (typeof (m.session as any).runManualCompact !== "function") return;
-            m.abortController = new AbortController();
-            registry!.setState(m, "thinking");
-            (m.session as any).runManualCompact(instruction, { signal: m.abortController.signal })
-              .then(() => { registry!.setState(m, "idle"); })
-              .catch(() => { if (m.state !== "asking") registry!.setState(m, "idle"); })
-              .finally(() => { m.abortController = null; });
+            (async () => {
+              await m.session.waitForTurnComplete();
+              m.abortController = new AbortController();
+              registry!.setState(m, "thinking");
+              try {
+                await (m.session as any).runManualCompact(instruction, { signal: m.abortController.signal });
+                registry!.setState(m, "idle");
+              } catch {
+                if (m.state !== "asking") registry!.setState(m, "idle");
+              } finally {
+                m.abortController = null;
+              }
+            })();
           },
         },
         argStr,
       );
+      if (m.id === registry!.foregroundId) {
+        registry!.sendLogUpdate(m);
+        registry!.sendTokenUpdate(m);
+        if (!win.isDestroyed()) {
+          win.webContents.send("session:modelChanged", {
+            sessionId: m.id,
+            model: m.session.currentModelConfigName ?? "",
+            display: getCurrentModelDescriptor(m.session),
+          });
+        }
+      }
       return { success: true, messages };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -533,30 +577,8 @@ function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle("session:getModelTree", async (_event, sessionId: string) => {
     const m = requireSession(sessionId);
-    const cmdRegistry = buildDefaultRegistry();
-    const modelCmd = cmdRegistry.lookup("/model");
-    if (!modelCmd?.options) return [];
     try {
-      const tree = modelCmd.options({ session: m.session, store: m.store ?? undefined });
-      function transform(opts: Array<{ label: string; value: string; children?: any[] }>): any[] {
-        return opts.map((opt) => {
-          const isCurrent = opt.label.includes("(current)");
-          const keyMissing = opt.label.includes("key missing") || opt.label.includes("not logged in");
-          let keyHint: string | undefined;
-          const keyMatch = opt.label.match(/\((key missing:[^)]+)\)/);
-          if (keyMatch) keyHint = keyMatch[1];
-          const oauthMatch = opt.label.match(/\((not logged in:[^)]+)\)/);
-          if (oauthMatch) keyHint = oauthMatch[1];
-          let label = opt.label
-            .replace(/\s+\(current\)/g, "")
-            .replace(/\s+\(current,\s*[^)]*\)/g, "")
-            .replace(/\s+\(key missing:[^)]*\)/g, "")
-            .replace(/\s+\(not logged in:[^)]*\)/g, "")
-            .trim();
-          return { label, value: opt.value, isCurrent, keyMissing, keyHint, children: opt.children ? transform(opt.children) : undefined };
-        });
-      }
-      return transform(tree);
+      return buildModelPickerTree({ session: m.session });
     } catch (err) {
       console.error("[GUI] Failed to build model tree:", err);
       return [];
@@ -617,7 +639,7 @@ function registerIpcHandlers(win: BrowserWindow): void {
     const preset = findProviderPreset(providerId);
     if (!preset?.localServer) throw new Error(`'${providerId}' is not a local provider`);
     const { fetchModelsFromServer } = await import("../../src/model-discovery.js");
-    const baseUrl = preset.defaultBaseUrl || `http://localhost:${preset.localServer.defaultPort}/v1`;
+    const baseUrl = preset.defaultBaseUrl || "http://localhost:11434/v1";
     const models = await fetchModelsFromServer(baseUrl);
     return { baseUrl, models };
   });

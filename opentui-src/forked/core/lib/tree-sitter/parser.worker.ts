@@ -88,7 +88,7 @@ class ParserWorker {
         await mkdir(path.join(this.tsDataPath, "languages"), { recursive: true })
         await mkdir(path.join(this.tsDataPath, "queries"), { recursive: true })
 
-        let { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
+        let { default: treeWasm } = await import("web-tree-sitter/web-tree-sitter.wasm" as string, {
           with: { type: "wasm" },
         })
 

@@ -16,20 +16,14 @@ import type { SessionStore, LocalProviderConfig } from "./persistence.js";
 import { loadLog, validateAndRepairLog } from "./persistence.js";
 import { fetchModelsFromServer } from "./model-discovery.js";
 import {
-  formatDisplayModelName,
-  formatScopedModelName,
   getThinkingLevels,
 } from "./config.js";
 import {
   PROVIDER_PRESETS,
   findProviderPreset,
-  type ProviderPresetModel,
 } from "./provider-presets.js";
 import {
   resolveModelSelection as resolveModelSelectionCore,
-  type ModelEntryLike,
-  readModelEntries,
-  hasEnvApiKey,
   parseProviderModelTarget,
   runtimeModelName,
 } from "./model-selection.js";
@@ -44,7 +38,8 @@ import {
 } from "./provider-credential-flow.js";
 import { resolveSkillContent, type SkillMeta } from "./skills/loader.js";
 import { ACCENT_PRESETS, DEFAULT_ACCENT, setAccent, theme } from "./tui/theme.js";
-import { hasOAuthTokens } from "./auth/openai-oauth.js";
+import { buildModelPickerTree, toCommandPickerOptions } from "./model-picker-tree.js";
+import { formatCurrentModelScopedLabel, getCurrentModelDescriptor } from "./model-presentation.js";
 
 // ------------------------------------------------------------------
 // Types
@@ -221,7 +216,6 @@ async function cmdHelp(ctx: CommandContext, _args: string): Promise<void> {
 }
 
 async function cmdNew(ctx: CommandContext, _args: string): Promise<void> {
-  ctx.resetUiState();
   ctx.autoSave();
 
   // Clear session dir — a new directory will be created lazily on first save.
@@ -232,7 +226,8 @@ async function cmdNew(ctx: CommandContext, _args: string): Promise<void> {
 
   // Full session reset — store is updated, then conversation re-initialized
   // with correct paths. Equivalent to constructing a fresh Session.
-  ctx.session.resetForNewSession(ctx.store);
+  await ctx.session.resetForNewSession(ctx.store);
+  ctx.resetUiState();
 }
 
 async function cmdSummarize(ctx: CommandContext, args: string): Promise<void> {
@@ -354,7 +349,8 @@ function buildResumeOptionLabel(
 }
 
 function truncateDisplayText(text: string, maxChars: number): string {
-  return Array.from(text).slice(0, maxChars).join("");
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return Array.from(normalized).slice(0, maxChars).join("");
 }
 
 function resumeOptions(ctx: CommandOptionsContext): CommandOption[] {
@@ -386,10 +382,7 @@ async function cmdQuit(ctx: CommandContext, _args: string): Promise<void> {
 }
 
 function currentSessionModelDisplayName(session: any): string {
-  return formatDisplayModelName(
-    session.primaryAgent?.modelConfig?.provider,
-    session.currentModelName ?? session.primaryAgent?.modelConfig?.model,
-  );
+  return getCurrentModelDescriptor(session)?.compactScopedDetailedLabel ?? "";
 }
 
 function persistGlobalPreferences(ctx: CommandContext): void {
@@ -540,22 +533,6 @@ function parseModelArgs(args: string): { target: string } {
   return { target };
 }
 
-function formatPresetPickerLabel(provider: string, presetModel: ProviderPresetModel): string {
-  let label = formatDisplayModelName(provider, presetModel.id);
-  if (presetModel.optionNote) {
-    label = `${label}  (${presetModel.optionNote})`;
-  }
-  return label;
-}
-
-function formatPresetSelectedHint(provider: string, presetModel: ProviderPresetModel): string {
-  let label = formatScopedModelName(provider, presetModel.id);
-  if (presetModel.optionNote) {
-    label = `${label} (${presetModel.optionNote})`;
-  }
-  return label;
-}
-
 function createCommandPromptAdapter(ctx: CommandContext): CredentialPromptAdapter | null {
   if (!ctx.promptSelect || !ctx.promptSecret) return null;
   return {
@@ -572,63 +549,6 @@ export function resolveModelSelection(
 }
 
 /**
- * Build model children (leaf-level options) for a single provider.
- */
-function buildModelChildren(
-  provider: string,
-  byProvider: Map<string, Map<string, { model: string; label: string }>>,
-  providerHasKey: Map<string, boolean>,
-  session: any,
-  currentProvider: string,
-  currentModel: string,
-): CommandOption[] {
-  const models = Array.from((byProvider.get(provider) ?? new Map()).entries());
-  models.sort((a, b) => a[1].label.localeCompare(b[1].label));
-  const children: CommandOption[] = [];
-
-  for (const [selectionKey, item] of models) {
-    const runtimeSelectionName = runtimeModelName(provider, selectionKey);
-    const isCurrent = session.currentModelConfigName === runtimeSelectionName
-      || (
-        selectionKey === item.model
-        && provider === currentProvider
-        && item.model === currentModel
-      );
-    const missingApiKey = !providerHasKey.get(provider);
-    const missingHint = provider === "openai-codex"
-      ? "not logged in: run longeragent oauth"
-      : isManagedProvider(provider)
-        ? "key missing: select to configure"
-        : "key missing: run longeragent init";
-
-    let label = item.label;
-    if (isCurrent && missingApiKey) {
-      label = `${label}  (current, ${missingHint})`;
-    } else if (isCurrent) {
-      label = `${label}  (current)`;
-    } else if (missingApiKey) {
-      label = `${label}  (${missingHint})`;
-    }
-
-    children.push({
-      label,
-      value: `${provider}:${selectionKey}`,
-    });
-  }
-
-  return children;
-}
-
-/** Display names for OpenRouter vendor prefixes. */
-const OPENROUTER_VENDOR_NAMES: Record<string, string> = {
-  "anthropic": "Anthropic",
-  "openai": "OpenAI",
-  "moonshotai": "Kimi",
-  "minimax": "MiniMax",
-  "z-ai": "GLM / Zhipu",
-};
-
-/**
  * Build options for /model picker.
  *
  * Supports three structures:
@@ -637,203 +557,7 @@ const OPENROUTER_VENDOR_NAMES: Record<string, string> = {
  * - Three-level via vendor prefix: openrouter → vendor → model
  */
 function modelOptions(ctx: CommandOptionsContext): CommandOption[] {
-  const session = ctx.session;
-  const config = session.config;
-  if (!config) return [];
-
-  const entries = readModelEntries(config);
-  const currentProvider = String(session.primaryAgent?.modelConfig?.provider ?? "");
-  const currentModel = String(session.primaryAgent?.modelConfig?.model ?? "");
-
-  // Gather all providers/models:
-  // 1) preset catalog
-  // 2) user-defined config models (for custom IDs/providers)
-  const byProvider = new Map<string, Map<string, { model: string; label: string }>>();
-  const providerOrder: string[] = [];
-  const addModel = (provider: string, selectionKey: string, model: string, label: string) => {
-    if (!provider || !selectionKey || !model) return;
-    if (!byProvider.has(provider)) {
-      byProvider.set(provider, new Map());
-      providerOrder.push(provider);
-    }
-    if (!byProvider.get(provider)!.has(selectionKey)) {
-      byProvider.get(provider)!.set(selectionKey, { model, label });
-    }
-  };
-
-  for (const preset of PROVIDER_PRESETS) {
-    for (const m of preset.models) {
-      addModel(preset.id, m.key, m.id, formatPresetPickerLabel(preset.id, m));
-    }
-  }
-  for (const e of entries) {
-    addModel(
-      e.provider,
-      e.model,
-      e.model,
-      formatDisplayModelName(e.provider, e.model),
-    );
-  }
-
-  // Provider-level key status from config/env/current model.
-  const providerHasKey = new Map<string, boolean>();
-  for (const e of entries) {
-    if (e.hasResolvedApiKey) {
-      providerHasKey.set(e.provider, true);
-    }
-  }
-  for (const preset of PROVIDER_PRESETS) {
-    if (preset.localServer) continue;
-    if (hasEnvApiKey(preset.envVar)) {
-      providerHasKey.set(preset.id, true);
-    }
-  }
-  // OAuth: check token store for openai-codex (sync, no HTTP)
-  try {
-    if (hasOAuthTokens()) providerHasKey.set("openai-codex", true);
-  } catch { /* auth module not available */ }
-  if (currentProvider && session.primaryAgent?.modelConfig?.apiKey) {
-    providerHasKey.set(currentProvider, true);
-  }
-
-  // Build a lookup from provider id → preset (for group metadata).
-  const presetById = new Map<string, (typeof PROVIDER_PRESETS)[number]>();
-  for (const p of PROVIDER_PRESETS) {
-    presetById.set(p.id, p);
-  }
-
-  const options: CommandOption[] = [];
-  const processed = new Set<string>();
-
-  for (const provider of providerOrder) {
-    if (processed.has(provider)) continue;
-    processed.add(provider);
-
-    const preset = presetById.get(provider);
-
-    // ── Three-level: grouped providers (kimi, glm, minimax) ──
-    if (preset?.group) {
-      // Collect all providers in this group (preserving providerOrder).
-      const groupMembers = providerOrder.filter((p) => {
-        const pp = presetById.get(p);
-        return pp?.group === preset.group;
-      });
-      for (const gp of groupMembers) processed.add(gp);
-
-      const subOptions: CommandOption[] = [];
-      let groupHasCurrent = false;
-
-      for (const gp of groupMembers) {
-        const gpPreset = presetById.get(gp);
-        const children = buildModelChildren(
-          gp, byProvider, providerHasKey, session, currentProvider, currentModel,
-        );
-        const subHasCurrent = children.some((c) => c.label.includes("(current)"));
-        if (subHasCurrent) groupHasCurrent = true;
-
-        const subLabel = gpPreset?.subLabel ?? gp;
-        subOptions.push({
-          label: subHasCurrent ? `${subLabel}  (current)` : subLabel,
-          value: gp,
-          children,
-        });
-      }
-
-      const groupLabel = preset.groupLabel ?? preset.group;
-      options.push({
-        label: groupHasCurrent ? `${groupLabel}  (current)` : groupLabel,
-        value: preset.group,
-        children: subOptions,
-      });
-      continue;
-    }
-
-    // ── Three-level: OpenRouter (sub-group by vendor prefix) ──
-    if (provider === "openrouter") {
-      const children = buildModelChildren(
-        provider, byProvider, providerHasKey, session, currentProvider, currentModel,
-      );
-
-      // Group children by vendor prefix (e.g. "anthropic/..." → "anthropic").
-      const vendorGroups = new Map<string, CommandOption[]>();
-      const vendorOrder: string[] = [];
-      for (const child of children) {
-        const modelKey = child.value.split(":")[1] ?? "";
-        const slashIdx = modelKey.indexOf("/");
-        const vendor = slashIdx > 0 ? modelKey.slice(0, slashIdx) : "other";
-        if (!vendorGroups.has(vendor)) {
-          vendorGroups.set(vendor, []);
-          vendorOrder.push(vendor);
-        }
-        vendorGroups.get(vendor)!.push(child);
-      }
-
-      const subOptions: CommandOption[] = [];
-      let openrouterHasCurrent = false;
-      for (const vendor of vendorOrder) {
-        const vendorChildren = vendorGroups.get(vendor)!;
-        const vendorHasCurrent = vendorChildren.some((c) => c.label.includes("(current)"));
-        if (vendorHasCurrent) openrouterHasCurrent = true;
-        const displayName = OPENROUTER_VENDOR_NAMES[vendor] ?? vendor;
-        subOptions.push({
-          label: vendorHasCurrent ? `${displayName}  (current)` : displayName,
-          value: `openrouter-${vendor}`,
-          children: vendorChildren,
-        });
-      }
-
-      options.push({
-        label: openrouterHasCurrent ? "openrouter  (current)" : "openrouter",
-        value: "openrouter",
-        children: subOptions,
-      });
-      continue;
-    }
-
-    // ── Local inference servers: append "Discover models..." entry ──
-    if (preset?.localServer) {
-      const children = buildModelChildren(
-        provider, byProvider, providerHasKey, session, currentProvider, currentModel,
-      );
-      children.push({
-        label: "Discover models...",
-        value: `${provider}:__discover__`,
-      });
-      const hasCurrent = children.some((c) => c.label.includes("(current)"));
-      options.push({
-        label: hasCurrent ? `${provider}  (current)` : provider,
-        value: provider,
-        children,
-      });
-      continue;
-    }
-
-    // ── Two-level: ungrouped providers (anthropic, openai, user-defined) ──
-    const children = buildModelChildren(
-      provider, byProvider, providerHasKey, session, currentProvider, currentModel,
-    );
-    const hasCurrent = children.some((c) => c.label.includes("(current)"));
-    options.push({
-      label: hasCurrent ? `${provider}  (current)` : provider,
-      value: provider,
-      children,
-    });
-  }
-
-  // Ensure local providers appear even if no models are configured yet.
-  for (const preset of PROVIDER_PRESETS) {
-    if (!preset.localServer || processed.has(preset.id)) continue;
-    options.push({
-      label: preset.id,
-      value: preset.id,
-      children: [{
-        label: "Discover models...",
-        value: `${preset.id}:__discover__`,
-      }],
-    });
-  }
-
-  return options;
+  return toCommandPickerOptions(buildModelPickerTree({ session: ctx.session })) as CommandOption[];
 }
 
 /**
@@ -846,10 +570,7 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
   const trimmed = args.trim();
 
   if (!trimmed) {
-    const displayCurrent = currentSessionModelDisplayName(session) || "unknown";
-    const current = session.currentModelConfigName
-      ? `${session.currentModelConfigName} (${displayCurrent})`
-      : displayCurrent;
+    const current = currentSessionModelDisplayName(session) || "unknown";
     ctx.showMessage(
       `Current model: ${current}\n` +
       "Use /model to select a new model.\n" +
@@ -910,18 +631,10 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
       modelSelectionKey: resolvedSelection.modelSelectionKey,
       modelId: resolvedSelection.modelId,
     });
-    session.resetForNewSession(ctx.store);
+    await session.resetForNewSession(ctx.store);
     persistGlobalPreferences(ctx);
 
-    const mc = session.primaryAgent?.modelConfig;
-    if (mc) {
-      ctx.showMessage(
-        `--- New session with ${selectedHint} (${formatScopedModelName(mc.provider, mc.model)}) ---\n` +
-        `  Context: ${(mc.contextLength ?? 0).toLocaleString()} tokens`
-      );
-    } else {
-      ctx.showMessage(`--- New session with ${selectedHint} ---`);
-    }
+    void selectedHint;
   } catch (e) {
     ctx.showMessage(`Failed to switch model: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -1065,14 +778,9 @@ async function cmdModelLocalDiscover(ctx: CommandContext, providerId: string): P
     modelSelectionKey: modelChoice,
     modelId: modelChoice,
   });
-  session.resetForNewSession(ctx.store);
+  await session.resetForNewSession(ctx.store);
   persistGlobalPreferences(ctx);
 
-  ctx.showMessage(
-    `--- New session with ${preset.name} / ${modelChoice} ---\n` +
-    `  URL: ${baseUrl}\n` +
-    `  Context: ${contextLength.toLocaleString()} tokens`,
-  );
 }
 
 // ------------------------------------------------------------------

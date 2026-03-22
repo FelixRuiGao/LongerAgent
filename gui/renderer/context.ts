@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { ActiveSessionInfo } from "../shared/ipc-protocol.js";
+import type { ActiveSessionInfo, CurrentModelDisplay } from "../shared/ipc-protocol.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -185,6 +185,7 @@ export interface SessionContextValue {
   pendingAsk: PendingAsk | null;
   tokenInfo: TokenInfo;
   currentModel: string;
+  currentModelDisplay: CurrentModelDisplay | null;
   models: ModelInfo[];
   cwd: string;
   planCheckpoints: PlanCheckpoint[] | null;
@@ -202,6 +203,7 @@ const defaultSessionValue: SessionContextValue = {
   pendingAsk: null,
   tokenInfo: { inputTokens: 0, totalTokens: 0, cacheReadTokens: 0 },
   currentModel: "",
+  currentModelDisplay: null,
   models: [],
   cwd: "",
   planCheckpoints: null,
@@ -226,6 +228,7 @@ interface SessionReducerState {
   pendingAsk: PendingAsk | null;
   tokenInfo: TokenInfo;
   currentModel: string;
+  currentModelDisplay: CurrentModelDisplay | null;
   models: ModelInfo[];
   cwd: string;
   planCheckpoints: PlanCheckpoint[] | null;
@@ -237,7 +240,7 @@ type SessionAction =
   | { type: "SET_MESSAGES"; payload: ConversationEntry[] }
   | { type: "SET_PENDING_ASK"; payload: PendingAsk | null }
   | { type: "SET_TOKEN_INFO"; payload: TokenInfo }
-  | { type: "SET_CURRENT_MODEL"; payload: string }
+  | { type: "SET_CURRENT_MODEL"; payload: { model: string; display: CurrentModelDisplay | null } }
   | { type: "SET_MODELS"; payload: ModelInfo[] }
   | { type: "SET_CWD"; payload: string }
   | { type: "SET_PLAN_CHECKPOINTS"; payload: PlanCheckpoint[] | null }
@@ -250,6 +253,7 @@ const initialReducerState: SessionReducerState = {
   pendingAsk: null,
   tokenInfo: { inputTokens: 0, totalTokens: 0, cacheReadTokens: 0 },
   currentModel: "",
+  currentModelDisplay: null,
   models: [],
   cwd: "",
   planCheckpoints: null,
@@ -271,7 +275,11 @@ function sessionReducer(
     case "SET_TOKEN_INFO":
       return { ...prevState, tokenInfo: action.payload };
     case "SET_CURRENT_MODEL":
-      return { ...prevState, currentModel: action.payload };
+      return {
+        ...prevState,
+        currentModel: action.payload.model,
+        currentModelDisplay: action.payload.display,
+      };
     case "SET_MODELS":
       return { ...prevState, models: action.payload };
     case "SET_CWD":
@@ -438,7 +446,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     unsubs.push(
       api.on("session:modelChanged", (data: any) => {
         if (data.sessionId !== fgIdRef.current) return;
-        dispatchRef.current({ type: "SET_CURRENT_MODEL", payload: data.model });
+        dispatchRef.current({
+          type: "SET_CURRENT_MODEL",
+          payload: { model: data.model, display: data.display ?? null },
+        });
       }),
     );
 
@@ -495,9 +506,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     const api = (window as any).api as ElectronAPI | undefined;
     const sid = fgIdRef.current;
     if (!api || !sid) return;
-    api.invoke("session:switchModel", sid, name).then(() => {
-      dispatch({ type: "SET_CURRENT_MODEL", payload: name });
-    }).catch(() => {});
+    api.invoke("session:switchModel", sid, name).catch(() => {});
   }, []);
 
   const resetSession = useCallback(() => {
@@ -516,6 +525,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     pendingAsk: s.pendingAsk,
     tokenInfo: s.tokenInfo,
     currentModel: s.currentModel,
+    currentModelDisplay: s.currentModelDisplay,
     models: s.models,
     cwd: s.cwd,
     planCheckpoints: s.planCheckpoints,

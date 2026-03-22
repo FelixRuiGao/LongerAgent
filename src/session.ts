@@ -20,6 +20,8 @@ import { getLongerAgentHomeDir } from "./home-path.js";
 import { join, dirname, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as yaml from "js-yaml";
+import { countTokens as gptCountTokens, encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
+
 
 import { loadTemplate, validateTemplate } from "./templates/loader.js";
 
@@ -433,7 +435,12 @@ export class Session {
   // Message queue (check_status pull model)
   private _messageQueue: Array<{ source: string; content: string; timestamp: number }> = [];
   private _currentTurnSignal: AbortSignal | null = null;
+  private _currentTurnAbortController: AbortController | null = null;
   private _interruptSnapshot: InterruptSnapshot | null = null;
+
+  // Turn serialization — prevents concurrent turn() calls from corrupting state
+  private _turnInFlight: Promise<string | void> | null = null;
+  private _turnRelease: (() => void) | null = null;
 
   /** Callback for incremental persistence — called at save-worthy checkpoints. */
   onSaveRequest?: () => void;
@@ -532,6 +539,8 @@ export class Session {
       createSystemPrompt(this._nextLogId("system_prompt"), systemPrompt),
       false,
     );
+    this._updateInitialTokenEstimate();
+    this._notifyLogListeners();
   }
 
   /**
@@ -917,6 +926,82 @@ export class Session {
     });
   }
 
+  private _installCurrentTurnSignal(signal?: AbortSignal): {
+    prevSignal: AbortSignal | null;
+    prevController: AbortController | null;
+    cleanup: () => void;
+    signal: AbortSignal;
+  } {
+    const prevSignal = this._currentTurnSignal;
+    const prevController = this._currentTurnAbortController;
+    const controller = new AbortController();
+
+    let cleanup = () => {};
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort((signal as AbortSignal & { reason?: unknown }).reason);
+      } else {
+        const onAbort = () => controller.abort((signal as AbortSignal & { reason?: unknown }).reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        cleanup = () => signal.removeEventListener("abort", onAbort);
+      }
+    }
+
+    this._currentTurnAbortController = controller;
+    this._currentTurnSignal = controller.signal;
+
+    return {
+      prevSignal,
+      prevController,
+      cleanup,
+      signal: controller.signal,
+    };
+  }
+
+  private _restoreCurrentTurnSignal(state: {
+    prevSignal: AbortSignal | null;
+    prevController: AbortController | null;
+    cleanup: () => void;
+  }): void {
+    state.cleanup();
+    this._currentTurnSignal = state.prevSignal;
+    this._currentTurnAbortController = state.prevController;
+  }
+
+  // ------------------------------------------------------------------
+  // Turn serialization
+  // ------------------------------------------------------------------
+
+  /**
+   * Wait for any in-flight turn to finish. Safe to call at any time.
+   * Used by resetForNewSession, close, and callers that need to ensure
+   * the previous turn has fully unwound before proceeding.
+   */
+  async waitForTurnComplete(): Promise<void> {
+    while (this._turnInFlight) {
+      try { await this._turnInFlight; } catch { /* ignore errors from aborted turns */ }
+    }
+  }
+
+  /**
+   * Promise-based turn lock. Ensures at most one turn entry point executes
+   * at a time. Callers are serialized: if a turn is in flight, the next
+   * caller waits for it to finish (which happens quickly after abort).
+   */
+  private async _withTurnLock<T>(fn: () => Promise<T>): Promise<T> {
+    await this.waitForTurnComplete();
+    let release!: () => void;
+    this._turnInFlight = new Promise<void>((r) => { release = r; });
+    this._turnRelease = release;
+    try {
+      return await fn();
+    } finally {
+      this._turnInFlight = null;
+      this._turnRelease = null;
+      release();
+    }
+  }
+
   /**
    * Prepare and execute interruption cleanup for the current turn.
    *
@@ -927,6 +1012,8 @@ export class Session {
     if (this._compactInProgress) {
       return { accepted: false, reason: "compact_in_progress" };
     }
+
+    this._currentTurnAbortController?.abort();
 
     let hadActiveAgents = false;
     for (const entry of this._activeAgents.values()) {
@@ -1138,7 +1225,11 @@ export class Session {
    * Leaves storage unbound; session/artifacts directories are created lazily
    * on the first subsequent turn.
    */
-  resetForNewSession(newStore?: any): void {
+  async resetForNewSession(newStore?: any): Promise<void> {
+    // 0. Terminate any in-flight turn before resetting
+    this.requestTurnInterrupt();
+    await this.waitForTurnComplete();
+
     // 1. Kill active sub-agents, reset transient flags
     this._resetTransientState();
 
@@ -1483,6 +1574,10 @@ export class Session {
       this._preferredThinkingLevel,
     );
     this._cacheHitEnabled = this._preferredCacheHitEnabled;
+    if (this._turnCount === 0) {
+      this._updateInitialTokenEstimate();
+      this._notifyLogListeners();
+    }
   }
 
   applyGlobalPreferences(preferences: GlobalTuiPreferences): void {
@@ -1639,63 +1734,66 @@ export class Session {
   }
 
   async runManualSummarize(instruction?: string, options?: { signal?: AbortSignal }): Promise<string> {
-    this._ensureSessionStorageReady();
-    await this._ensureMcp();
+    return this._withTurnLock(async () => {
+      this._ensureSessionStorageReady();
+      await this._ensureMcp();
 
-    const blocker = this._getManualContextCommandBlocker("/summarize");
-    if (blocker) throw new Error(blocker);
+      const blocker = this._getManualContextCommandBlocker("/summarize");
+      if (blocker) throw new Error(blocker);
 
-    const prompt = appendManualInstruction(
-      MANUAL_SUMMARIZE_PROMPT,
-      instruction,
-      "summarize",
-    );
-    return this._runInjectedTurn(
-      "[Manual summarize request]",
-      prompt,
-      { signal: options?.signal, armShowContext: true },
-    );
+      const prompt = appendManualInstruction(
+        MANUAL_SUMMARIZE_PROMPT,
+        instruction,
+        "summarize",
+      );
+      return this._runInjectedTurn(
+        "[Manual summarize request]",
+        prompt,
+        { signal: options?.signal, armShowContext: true },
+      );
+    });
   }
 
   async runManualCompact(instruction?: string, options?: { signal?: AbortSignal }): Promise<void> {
-    this._ensureSessionStorageReady();
+    return this._withTurnLock(async () => {
+      this._ensureSessionStorageReady();
 
-    const blocker = this._getManualContextCommandBlocker("/compact");
-    if (blocker) throw new Error(blocker);
+      const blocker = this._getManualContextCommandBlocker("/compact");
+      if (blocker) throw new Error(blocker);
 
-    this._turnCount += 1;
-    this._appendEntry(
-      createTurnStart(this._nextLogId("turn_start"), this._turnCount),
-      false,
-    );
-    this._appendEntry(
-      createStatus(
-        this._nextLogId("status"),
-        this._turnCount,
-        "[Manual compact requested]",
-        "manual_compact",
-      ),
-      false,
-    );
-    this.onSaveRequest?.();
-
-    const prompt = appendManualInstruction(
-      COMPACT_PROMPT_OUTPUT,
-      instruction,
-      "compact",
-    );
-    const prevAgentState = this._agentState;
-    const prevTurnSignal = this._currentTurnSignal;
-    this._agentState = "working";
-    this._currentTurnSignal = options?.signal ?? null;
-    try {
-      await this._doAutoCompact("output", options?.signal, prompt);
-      this._hintState = "none";
+      this._turnCount += 1;
+      this._appendEntry(
+        createTurnStart(this._nextLogId("turn_start"), this._turnCount),
+        false,
+      );
+      this._appendEntry(
+        createStatus(
+          this._nextLogId("status"),
+          this._turnCount,
+          "[Manual compact requested]",
+          "manual_compact",
+        ),
+        false,
+      );
       this.onSaveRequest?.();
-    } finally {
-      this._currentTurnSignal = prevTurnSignal;
-      this._agentState = prevAgentState;
-    }
+
+      const prompt = appendManualInstruction(
+        COMPACT_PROMPT_OUTPUT,
+        instruction,
+        "compact",
+      );
+      const prevAgentState = this._agentState;
+      const turnSignalState = this._installCurrentTurnSignal(options?.signal);
+      this._agentState = "working";
+      try {
+        await this._doAutoCompact("output", turnSignalState.signal, prompt);
+        this._hintState = "none";
+        this.onSaveRequest?.();
+      } finally {
+        this._restoreCurrentTurnSignal(turnSignalState);
+        this._agentState = prevAgentState;
+      }
+    });
   }
 
   // ==================================================================
@@ -1805,20 +1903,23 @@ export class Session {
   // ==================================================================
 
   async resumePendingTurn(options?: { signal?: AbortSignal }): Promise<string> {
-    if (this._activeAsk) {
-      throw new Error("Cannot resume while an ask is still pending approval.");
-    }
-    const pending = this._pendingTurnState;
-    if (!pending) return "";
+    return this._withTurnLock(async () => {
+      if (this._activeAsk) {
+        throw new Error("Cannot resume while an ask is still pending approval.");
+      }
+      const pending = this._pendingTurnState;
+      if (!pending) return "";
 
-    this._pendingTurnState = null;
-    if (pending.stage === "pre_user_input") {
-      return this.turn(pending.userInput ?? "", options);
-    }
+      this._pendingTurnState = null;
+      if (pending.stage === "pre_user_input") {
+        // Already inside the lock — call the inner turn logic directly
+        return this._turnInner(pending.userInput ?? "", options);
+      }
 
-    const textAccumulator = { text: "" };
-    const reasoningAccumulator = { text: "" };
-    return this._runTurnActivationLoop(options?.signal, textAccumulator, reasoningAccumulator);
+      const textAccumulator = { text: "" };
+      const reasoningAccumulator = { text: "" };
+      return this._runTurnActivationLoop(options?.signal, textAccumulator, reasoningAccumulator);
+    });
   }
 
   private async _runTurnActivationLoop(
@@ -1827,12 +1928,12 @@ export class Session {
     reasoningAccumulator: { text: string },
   ): Promise<string> {
     let finalText = "";
-    const prevTurnSignal = this._currentTurnSignal;
-    this._currentTurnSignal = signal ?? null;
+    const turnSignalState = this._installCurrentTurnSignal(signal);
+    const activeSignal = turnSignalState.signal;
     try {
       let reachedLimit = true;
       for (let activationIdx = 0; activationIdx < MAX_ACTIVATIONS_PER_TURN; activationIdx++) {
-        if (signal?.aborted) break;
+        if (activeSignal.aborted) break;
 
         const t0 = performance.now();
         const logLenBeforeActivation = this._log.length;
@@ -1846,9 +1947,9 @@ export class Session {
 
         let result: ToolLoopResult;
         try {
-          result = await this._runActivation(signal, textAccumulator, reasoningAccumulator);
+          result = await this._runActivation(activeSignal, textAccumulator, reasoningAccumulator);
         } catch (err: unknown) {
-          if ((err as any)?.name === "AbortError" || signal?.aborted) {
+          if ((err as any)?.name === "AbortError" || activeSignal.aborted) {
             this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
               activationCompleted: false,
             });
@@ -1862,7 +1963,7 @@ export class Session {
 
         // Check abort AFTER successful completion — handles providers that
         // don't throw AbortError (stream finishes before abort takes effect).
-        if (signal?.aborted) {
+        if (activeSignal.aborted) {
           this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
             activationCompleted: true,
           });
@@ -1965,8 +2066,8 @@ export class Session {
           }
           this.onSaveRequest?.();
 
-          await this._waitForAnyAgent(signal);
-          if (signal?.aborted) {
+          await this._waitForAnyAgent(activeSignal);
+          if (activeSignal.aborted) {
             this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
               activationCompleted: true,
             });
@@ -2028,9 +2129,9 @@ export class Session {
           }
           const logLenBefore = this._log.length;
           try {
-            await this._doAutoCompact(result.compactScenario, signal);
+            await this._doAutoCompact(result.compactScenario, activeSignal);
           } catch (compactErr) {
-            if ((compactErr as any)?.name === "AbortError" || signal?.aborted) {
+            if ((compactErr as any)?.name === "AbortError" || activeSignal.aborted) {
               // Mark compact-phase entries as discarded
               for (let ci = logLenBefore; ci < this._log.length; ci++) {
                 this._log[ci].discarded = true;
@@ -2066,8 +2167,8 @@ export class Session {
 
         // Wait for active agents (if any and no queued messages yet)
         if (this._hasActiveAgents() && !this._hasQueuedMessages() && !this._hasUndeliveredAgentResults()) {
-          await this._waitForAnyAgent(signal);
-          if (signal?.aborted) {
+          await this._waitForAnyAgent(activeSignal);
+          if (activeSignal.aborted) {
             this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
               activationCompleted: true,
             });
@@ -2087,8 +2188,8 @@ export class Session {
 
         // Still have active agents but nothing pending yet — wait more
         if (this._hasActiveAgents()) {
-          await this._waitForAnyAgent(signal);
-          if (signal?.aborted) {
+          await this._waitForAnyAgent(activeSignal);
+          if (activeSignal.aborted) {
             this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
               activationCompleted: true,
             });
@@ -2107,7 +2208,7 @@ export class Session {
         break;
       }
 
-      if (reachedLimit && !signal?.aborted) {
+      if (reachedLimit && !activeSignal.aborted) {
         console.warn(`Turn reached activation limit (${MAX_ACTIVATIONS_PER_TURN})`);
         if (!finalText) {
           finalText =
@@ -2116,7 +2217,12 @@ export class Session {
         }
       }
     } finally {
-      this._currentTurnSignal = prevTurnSignal;
+      this._restoreCurrentTurnSignal(turnSignalState);
+      // Drain any messages that arrived after the last activation boundary check.
+      // Without this, messages queued during the final activation would be orphaned.
+      if (this._hasQueuedMessages() || this._hasUndeliveredAgentResults()) {
+        this._injectPendingMessages();
+      }
       this._agentState = "idle";
       if (!this._activeAsk && this._hasActiveAgents()) {
         this._forceKillAllAgents();
@@ -2127,12 +2233,29 @@ export class Session {
   }
 
   async turn(userInput: string, options?: { signal?: AbortSignal }): Promise<string> {
+    return this._withTurnLock(() => this._turnInner(userInput, options));
+  }
+
+  /** Inner turn logic, called from within the turn lock. */
+  private async _turnInner(userInput: string, options?: { signal?: AbortSignal }): Promise<string> {
     this._ensureSessionStorageReady();
     await this._ensureMcp();
 
     const signal = options?.signal;
     if (this._pendingTurnState && !this._activeAsk) {
-      return this.resumePendingTurn(options);
+      // Already inside the lock via turn() — handle resume inline to avoid deadlock
+      if (this._activeAsk) {
+        throw new Error("Cannot resume while an ask is still pending approval.");
+      }
+      const pending = this._pendingTurnState;
+      if (!pending) return "";
+      this._pendingTurnState = null;
+      if (pending.stage === "pre_user_input") {
+        return this._turnInner(pending.userInput ?? "", options);
+      }
+      const ta = { text: "" };
+      const ra = { text: "" };
+      return this._runTurnActivationLoop(options?.signal, ta, ra);
     }
 
     let userContent: string | Array<Record<string, unknown>>;
@@ -3401,11 +3524,104 @@ export class Session {
     return parts.join("\n\n---\n\n");
   }
 
+  private _countProjectedMessageTokens(content: unknown): number {
+    if (typeof content === "string") {
+      return gptEncode(content).length;
+    }
+    if (Array.isArray(content)) {
+      return content.reduce((sum, item) => sum + this._countProjectedMessageTokens(item), 0);
+    }
+    if (content && typeof content === "object") {
+      const record = content as Record<string, unknown>;
+      if (typeof record["text"] === "string") {
+        return gptEncode(record["text"]).length;
+      }
+      if (typeof record["content"] === "string") {
+        return gptEncode(record["content"]).length;
+      }
+      if (typeof record["input_text"] === "string") {
+        return gptEncode(record["input_text"]).length;
+      }
+    }
+    return 0;
+  }
+
+  private _estimateToolDefinitionTokens(): number {
+    const tools = Array.isArray(this.primaryAgent.tools) ? this.primaryAgent.tools : [];
+    if (tools.length === 0) return 0;
+
+    try {
+      const provider = (this.primaryAgent as any)._provider as Record<string, unknown> | undefined;
+      const convertTools = provider?.["_convertTools"];
+      if (typeof convertTools === "function") {
+        const converted = convertTools.call(provider, tools);
+        const normalized = Array.isArray(converted)
+          ? converted
+          : converted && typeof converted === "object" && Array.isArray((converted as Record<string, unknown>)["toolsList"])
+          ? (converted as Record<string, unknown>)["toolsList"]
+          : tools;
+        return gptEncode(JSON.stringify(normalized)).length;
+      }
+    } catch {
+      // Fall back to raw tool definitions.
+    }
+
+    return gptEncode(JSON.stringify(tools)).length;
+  }
+
+  private _estimateInitialApiInputTokens(): number {
+    let importantLog = "(empty file)";
+    try {
+      importantLog = this._readImportantLog();
+    } catch {
+      importantLog = "(empty file)";
+    }
+
+    if (this._activePlanCheckpoints.length > 0) {
+      const lines = this._activePlanCheckpoints.map((text, i) =>
+        `- [${this._activePlanChecked[i] ? "x" : " "}] ${text}`
+      );
+      importantLog += `\n\n---\n## Active Plan\n${lines.join("\n")}`;
+    }
+
+    const agentsMd = this._readAgentsMd();
+    const messages = projectToApiMessages(this._log, {
+      resolveImageRef: (refPath) => this._resolveImageRef(refPath),
+      importantLog,
+      agentsMd,
+      requiresAlternatingRoles: (this.primaryAgent as any)._provider.requiresAlternatingRoles,
+    });
+
+    try {
+      return gptCountTokens(messages as any) + this._estimateToolDefinitionTokens();
+    } catch {
+      return messages.reduce((sum, message) => sum + this._countProjectedMessageTokens(message["content"]), 0)
+        + this._estimateToolDefinitionTokens();
+    }
+  }
+
+  private _updateInitialTokenEstimate(): void {
+    if (this._turnCount !== 0) return;
+    const estimate = this._estimateInitialApiInputTokens();
+    this._lastInputTokens = estimate;
+    this._lastTotalTokens = estimate;
+    this._lastCacheReadTokens = 0;
+  }
+
   private _getArtifactsDirIfAvailable(): string | undefined {
     if (!this._store) return undefined;
     const d = this._store.artifactsDir;
     if (d) return d;
     return undefined;
+  }
+
+  private _getPredictedArtifactsDirIfAvailable(): string | undefined {
+    if (!this._store || typeof this._store.predictNextArtifactsDir !== "function") return undefined;
+    try {
+      return this._store.predictNextArtifactsDir();
+    } catch {
+      return undefined;
+    }
   }
 
   private _createMissingSessionDirOrThrow(): void {
@@ -3492,9 +3708,10 @@ export class Session {
   }
 
   private _renderSystemPrompt(rawPrompt: string): string {
+    const predictedArtifacts = this._getPredictedArtifactsDirIfAvailable();
     return rawPrompt
       .replace(/\{PROJECT_ROOT\}/g, this._projectRoot)
-      .replace(/\{SESSION_ARTIFACTS\}/g, this._resolveSessionArtifacts({ allowUnresolved: true }))
+      .replace(/\{SESSION_ARTIFACTS\}/g, predictedArtifacts ?? this._resolveSessionArtifacts({ allowUnresolved: true }))
       .replace(/\{SYSTEM_DATA\}/g, this._resolveSystemData({ allowUnresolved: true }));
   }
 
@@ -3511,6 +3728,7 @@ export class Session {
         break;
       }
     }
+    this._updateInitialTokenEstimate();
   }
 
   // ==================================================================
@@ -5617,6 +5835,8 @@ export class Session {
   // ==================================================================
 
   async close(): Promise<void> {
+    this.requestTurnInterrupt();
+    await this.waitForTurnComplete();
     this._forceKillAllAgents();
     this._forceKillAllShells();
     if (this._mcpManager) {

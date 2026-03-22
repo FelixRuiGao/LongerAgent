@@ -31,9 +31,9 @@ import {
   buildDefaultRegistry,
   registerSkillCommands,
   reRegisterSkillCommands,
-  resolveModelSelection,
 } from "./commands.js";
 import type { PersistedModelSelection } from "./model-selection.js";
+import { applyPersistedModelSelectionToSession } from "./model-restore.js";
 import { hasAnyManagedCredential, isManagedProvider } from "./managed-provider-credentials.js";
 import type { Session as TuiSession } from "./tui/types.js";
 import { setAccent } from "./tui/theme.js";
@@ -287,42 +287,19 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   // Restore model selection from preferences
   try {
-    if (globalPreferences.modelConfigName) {
-      try {
-        session.switchModel(globalPreferences.modelConfigName);
-        session.setPersistedModelSelection?.({
+    if (
+      globalPreferences.modelConfigName
+      || (globalPreferences.modelProvider && (globalPreferences.modelSelectionKey || globalPreferences.modelId))
+    ) {
+      applyPersistedModelSelectionToSession(
+        session,
+        {
           modelConfigName: globalPreferences.modelConfigName,
           modelProvider: globalPreferences.modelProvider,
           modelSelectionKey: globalPreferences.modelSelectionKey,
           modelId: globalPreferences.modelId,
-        } satisfies PersistedModelSelection);
-      } catch {
-        if (globalPreferences.modelProvider && (globalPreferences.modelSelectionKey || globalPreferences.modelId)) {
-          const restored = resolveModelSelection(
-            session,
-            `${globalPreferences.modelProvider}:${globalPreferences.modelSelectionKey ?? globalPreferences.modelId}`,
-          );
-          session.switchModel(restored.selectedConfigName);
-          session.setPersistedModelSelection?.({
-            modelConfigName: restored.selectedConfigName,
-            modelProvider: restored.modelProvider,
-            modelSelectionKey: restored.modelSelectionKey,
-            modelId: restored.modelId,
-          } satisfies PersistedModelSelection);
-        }
-      }
-    } else if (globalPreferences.modelProvider && (globalPreferences.modelSelectionKey || globalPreferences.modelId)) {
-      const restored = resolveModelSelection(
-        session,
-        `${globalPreferences.modelProvider}:${globalPreferences.modelSelectionKey ?? globalPreferences.modelId}`,
+        } satisfies PersistedModelSelection,
       );
-      session.switchModel(restored.selectedConfigName);
-      session.setPersistedModelSelection?.({
-        modelConfigName: restored.selectedConfigName,
-        modelProvider: restored.modelProvider,
-        modelSelectionKey: restored.modelSelectionKey,
-        modelId: restored.modelId,
-      } satisfies PersistedModelSelection);
     }
   } catch (err) {
     console.warn(

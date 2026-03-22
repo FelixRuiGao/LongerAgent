@@ -77,7 +77,68 @@ pub fn rgbaToVec4f(color: RGBA) Vec4f {
     return Vec4f{ color[0], color[1], color[2], color[3] };
 }
 
+pub fn isAnsi256Color(color: RGBA) bool {
+    if (color[0] >= 0.0) return false;
+    if (color[2] != 0.0 or color[3] != 1.0) return false;
+    if (color[1] < 0.0 or color[1] > 255.0) return false;
+    const rounded = @round(color[1]);
+    return @abs(color[1] - rounded) < 0.0001;
+}
+
+pub fn ansi256Index(color: RGBA) u8 {
+    return @intCast(@as(i32, @intFromFloat(@round(std.math.clamp(color[1], 0.0, 255.0)))));
+}
+
+pub fn ansi256ToRgba(index: u8) RGBA {
+    if (index < 16) {
+        return switch (index) {
+            0 => .{ 0.0, 0.0, 0.0, 1.0 },
+            1 => .{ 128.0 / 255.0, 0.0, 0.0, 1.0 },
+            2 => .{ 0.0, 128.0 / 255.0, 0.0, 1.0 },
+            3 => .{ 128.0 / 255.0, 128.0 / 255.0, 0.0, 1.0 },
+            4 => .{ 0.0, 0.0, 128.0 / 255.0, 1.0 },
+            5 => .{ 128.0 / 255.0, 0.0, 128.0 / 255.0, 1.0 },
+            6 => .{ 0.0, 128.0 / 255.0, 128.0 / 255.0, 1.0 },
+            7 => .{ 192.0 / 255.0, 192.0 / 255.0, 192.0 / 255.0, 1.0 },
+            8 => .{ 128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0 },
+            9 => .{ 1.0, 0.0, 0.0, 1.0 },
+            10 => .{ 0.0, 1.0, 0.0, 1.0 },
+            11 => .{ 1.0, 1.0, 0.0, 1.0 },
+            12 => .{ 0.0, 0.0, 1.0, 1.0 },
+            13 => .{ 1.0, 0.0, 1.0, 1.0 },
+            14 => .{ 0.0, 1.0, 1.0, 1.0 },
+            15 => .{ 1.0, 1.0, 1.0, 1.0 },
+            else => unreachable,
+        };
+    }
+
+    if (index < 232) {
+        const paletteIndex: u8 = index - 16;
+        const rIndex: u8 = @intCast(@divTrunc(paletteIndex, 36));
+        const gIndex: u8 = @intCast(@divTrunc(@mod(paletteIndex, 36), 6));
+        const bIndex: u8 = @intCast(@mod(paletteIndex, 6));
+        const steps = [_]f32{ 0.0, 95.0 / 255.0, 135.0 / 255.0, 175.0 / 255.0, 215.0 / 255.0, 1.0 };
+        return .{ steps[rIndex], steps[gIndex], steps[bIndex], 1.0 };
+    }
+
+    const gray_value: f32 = @as(f32, @floatFromInt(8 + (@as(u16, index) - 232) * 10)) / 255.0;
+    return .{ gray_value, gray_value, gray_value, 1.0 };
+}
+
+pub fn colorToRgba(color: RGBA) RGBA {
+    if (isAnsi256Color(color)) {
+        return ansi256ToRgba(ansi256Index(color));
+    }
+    return color;
+}
+
 pub fn rgbaEqual(a: RGBA, b: RGBA, epsilon: f32) bool {
+    const a_indexed = isAnsi256Color(a);
+    const b_indexed = isAnsi256Color(b);
+    if (a_indexed or b_indexed) {
+        return a_indexed and b_indexed and ansi256Index(a) == ansi256Index(b);
+    }
+
     const va = rgbaToVec4f(a);
     const vb = rgbaToVec4f(b);
     const diff = @abs(va - vb);
@@ -101,22 +162,25 @@ inline fn isFullyOpaque(opacity: f32, fg: RGBA, bg: RGBA) bool {
 }
 
 fn blendColors(overlay: RGBA, text: RGBA) RGBA {
-    if (overlay[3] == 1.0) {
-        return overlay;
+    const overlay_rgba = colorToRgba(overlay);
+    const text_rgba = colorToRgba(text);
+
+    if (overlay_rgba[3] == 1.0) {
+        return overlay_rgba;
     }
 
-    if (text[3] == 0.0) {
-        const alpha = overlay[3];
-        const r = overlay[0] * alpha;
-        const g = overlay[1] * alpha;
-        const b = overlay[2] * alpha;
+    if (text_rgba[3] == 0.0) {
+        const alpha = overlay_rgba[3];
+        const r = overlay_rgba[0] * alpha;
+        const g = overlay_rgba[1] * alpha;
+        const b = overlay_rgba[2] * alpha;
         if (r < 0.01 and g < 0.01 and b < 0.01) {
             return .{ 0.0, 0.0, 0.0, 0.0 };
         }
         return .{ r, g, b, alpha };
     }
 
-    const alpha = overlay[3];
+    const alpha = overlay_rgba[3];
     var perceptualAlpha: f32 = undefined;
 
     // For high alpha values (>0.8), use a more aggressive curve
@@ -128,13 +192,13 @@ fn blendColors(overlay: RGBA, text: RGBA) RGBA {
         perceptualAlpha = std.math.pow(f32, alpha, 0.9);
     }
 
-    const overlayVec = Vec3f{ overlay[0], overlay[1], overlay[2] };
-    const textVec = Vec3f{ text[0], text[1], text[2] };
+    const overlayVec = Vec3f{ overlay_rgba[0], overlay_rgba[1], overlay_rgba[2] };
+    const textVec = Vec3f{ text_rgba[0], text_rgba[1], text_rgba[2] };
     const alphaSplat = @as(Vec3f, @splat(perceptualAlpha));
     const oneMinusAlpha = @as(Vec3f, @splat(1.0 - perceptualAlpha));
     const blended = overlayVec * alphaSplat + textVec * oneMinusAlpha;
 
-    const resultAlpha = alpha + text[3] * (1.0 - alpha);
+    const resultAlpha = alpha + text_rgba[3] * (1.0 - alpha);
 
     return .{ blended[0], blended[1], blended[2], resultAlpha };
 }

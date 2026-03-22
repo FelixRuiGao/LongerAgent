@@ -1,5 +1,7 @@
 import { dlopen, toArrayBuffer, JSCallback, ptr, type Pointer } from "bun:ffi"
-import { existsSync, writeFileSync } from "fs"
+import { existsSync, realpathSync, writeFileSync } from "fs"
+import { dirname, join } from "path"
+import { fileURLToPath } from "url"
 import { EventEmitter } from "events"
 import {
   type CursorStyle,
@@ -43,8 +45,29 @@ import type {
 } from "./zig-structs.js"
 import { isBunfsPath } from "./lib/bunfs.js"
 
-const module = await import(`@opentui/core-${process.platform}-${process.arch}/index.ts`)
-let targetLibPath = module.default
+const currentDir = dirname(fileURLToPath(import.meta.url))
+const realCurrentDir = realpathSync(currentDir)
+const repoRoot = process.cwd()
+const zigArch =
+  process.arch === "arm64" ? "aarch64" : process.arch === "x64" ? "x86_64" : process.arch
+const zigOs = process.platform === "darwin" ? "macos" : process.platform
+const localNativeCandidates = [
+  join(currentDir, "zig", "zig-out", "lib", "libopentui.dylib"),
+  join(currentDir, "zig", "lib", `${zigArch}-${zigOs}`, "libopentui.dylib"),
+  join(currentDir, "native", `${process.platform}-${process.arch}`, "libopentui.dylib"),
+  join(realCurrentDir, "zig", "zig-out", "lib", "libopentui.dylib"),
+  join(realCurrentDir, "zig", "lib", `${zigArch}-${zigOs}`, "libopentui.dylib"),
+  join(realCurrentDir, "native", `${process.platform}-${process.arch}`, "libopentui.dylib"),
+  join(repoRoot, "opentui-src", "forked", "core", "zig", "zig-out", "lib", "libopentui.dylib"),
+  join(repoRoot, "opentui-src", "forked", "core", "zig", "lib", `${zigArch}-${zigOs}`, "libopentui.dylib"),
+]
+
+let targetLibPath = localNativeCandidates.find((candidate) => existsSync(candidate))
+
+if (!targetLibPath) {
+  const module = await import(`@opentui/core-${process.platform}-${process.arch}/index.ts`)
+  targetLibPath = module.default
+}
 
 if (isBunfsPath(targetLibPath)) {
   targetLibPath = targetLibPath.replace("../", "")

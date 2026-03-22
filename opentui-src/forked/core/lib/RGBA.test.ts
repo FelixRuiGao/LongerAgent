@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test"
-import { RGBA, hexToRgb, rgbToHex, hsvToRgb, parseColor } from "./RGBA.js"
+import { RGBA, ansi256, ansi256ToRgb, getAnsi256Index, hexToRgb, isAnsi256Color, rgbToHex, hsvToRgb, parseColor } from "./RGBA.js"
 
 describe("RGBA class", () => {
   describe("constructor", () => {
@@ -980,5 +980,29 @@ describe("parseColor", () => {
     expect(rgba.g).toBe(0)
     expect(rgba.b).toBe(1)
     expect(rgba.a).toBe(1)
+  })
+
+  test("creates ansi256 sentinel colors", () => {
+    const color = ansi256(221)
+    expect(color.isAnsi256()).toBe(true)
+    expect(getAnsi256Index(color)).toBe(221)
+    expect(isAnsi256Color(color)).toBe(true)
+    expect(color.toString()).toBe("ansi256(221)")
+  })
+
+  test("converts ansi256 colors to fallback ints", () => {
+    const color = ansi256(117)
+    expect(color.toInts()).toEqual([135, 215, 255, 255])
+  })
+
+  test("compares ansi256 colors by palette index", () => {
+    expect(ansi256(221).equals(ansi256(221))).toBe(true)
+    expect(ansi256(221).equals(ansi256(222))).toBe(false)
+    expect(ansi256(221).equals(RGBA.fromHex("#ffd75f"))).toBe(false)
+  })
+
+  test("computes ansi256 rgb fallback for grayscale and cube entries", () => {
+    expect(ansi256ToRgb(232)).toEqual([8, 8, 8])
+    expect(ansi256ToRgb(46)).toEqual([0, 255, 0])
   })
 })

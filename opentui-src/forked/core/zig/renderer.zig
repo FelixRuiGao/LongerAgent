@@ -619,7 +619,7 @@ pub const CliRenderer = struct {
 
         var currentFg: ?RGBA = null;
         var currentBg: ?RGBA = null;
-        var currentAttributes: i32 = -1;
+        var currentAttributes: ?u32 = null;
         var currentLinkId: u32 = 0;
         var utf8Buf: [4]u8 = undefined;
 
@@ -660,7 +660,7 @@ pub const CliRenderer = struct {
 
                 const fgMatch = currentFg != null and buf.rgbaEqual(currentFg.?, cell.fg, colorEpsilon);
                 const bgMatch = currentBg != null and buf.rgbaEqual(currentBg.?, cell.bg, colorEpsilon);
-                const sameAttributes = fgMatch and bgMatch and @as(i32, @intCast(cell.attributes)) == currentAttributes;
+                const sameAttributes = fgMatch and bgMatch and currentAttributes != null and cell.attributes == currentAttributes.?;
 
                 const linkId = if (hyperlinksEnabled) ansi.TextAttributes.getLinkId(cell.attributes) else 0;
 
@@ -690,25 +690,30 @@ pub const CliRenderer = struct {
 
                     currentFg = cell.fg;
                     currentBg = cell.bg;
-                    currentAttributes = @as(i32, @intCast(cell.attributes));
+                    currentAttributes = cell.attributes;
 
                     ansi.ANSI.moveToOutput(writer, x + 1, y + 1 + self.renderOffset) catch {};
 
-                    const fgR = rgbaComponentToU8(cell.fg[0]);
-                    const fgG = rgbaComponentToU8(cell.fg[1]);
-                    const fgB = rgbaComponentToU8(cell.fg[2]);
+                    const bgA = if (buf.isAnsi256Color(cell.bg)) 1.0 else cell.bg[3];
 
-                    const bgR = rgbaComponentToU8(cell.bg[0]);
-                    const bgG = rgbaComponentToU8(cell.bg[1]);
-                    const bgB = rgbaComponentToU8(cell.bg[2]);
-                    const bgA = cell.bg[3];
-
-                    ansi.ANSI.fgColorOutput(writer, fgR, fgG, fgB) catch {};
+                    if (buf.isAnsi256Color(cell.fg)) {
+                        ansi.ANSI.fgIndexedColorOutput(writer, buf.ansi256Index(cell.fg)) catch {};
+                    } else {
+                        const fgR = rgbaComponentToU8(cell.fg[0]);
+                        const fgG = rgbaComponentToU8(cell.fg[1]);
+                        const fgB = rgbaComponentToU8(cell.fg[2]);
+                        ansi.ANSI.fgColorOutput(writer, fgR, fgG, fgB) catch {};
+                    }
 
                     // If alpha is 0 (transparent), use terminal default background instead of black
                     if (bgA < 0.001) {
                         writer.writeAll("\x1b[49m") catch {};
+                    } else if (buf.isAnsi256Color(cell.bg)) {
+                        ansi.ANSI.bgIndexedColorOutput(writer, buf.ansi256Index(cell.bg)) catch {};
                     } else {
+                        const bgR = rgbaComponentToU8(cell.bg[0]);
+                        const bgG = rgbaComponentToU8(cell.bg[1]);
+                        const bgB = rgbaComponentToU8(cell.bg[2]);
                         ansi.ANSI.bgColorOutput(writer, bgR, bgG, bgB) catch {};
                     }
 

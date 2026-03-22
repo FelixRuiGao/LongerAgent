@@ -89,5 +89,10 @@
   },
   "optionalDependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@opentui/core": "link:./opentui-src/forked/core"
+    }
   }
 }

@@ -28,8 +28,16 @@ pub const ANSI = struct {
         writer.print("\x1b[38;2;{d};{d};{d}m", .{ r, g, b }) catch return AnsiError.WriteFailed;
     }
 
+    pub fn fgIndexedColorOutput(writer: anytype, index: u8) AnsiError!void {
+        writer.print("\x1b[38;5;{d}m", .{index}) catch return AnsiError.WriteFailed;
+    }
+
     pub fn bgColorOutput(writer: anytype, r: u8, g: u8, b: u8) AnsiError!void {
         writer.print("\x1b[48;2;{d};{d};{d}m", .{ r, g, b }) catch return AnsiError.WriteFailed;
+    }
+
+    pub fn bgIndexedColorOutput(writer: anytype, index: u8) AnsiError!void {
+        writer.print("\x1b[48;5;{d}m", .{index}) catch return AnsiError.WriteFailed;
     }
 
     // Text attribute constants

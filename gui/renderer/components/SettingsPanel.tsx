@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useSession } from "../context";
 import { useToast } from "./Toast";
-import { theme, mono, sans, humanModelName, PROVIDER_INFO, extractProvider, formatTokens } from "../theme";
+import { theme, mono, sans, PROVIDER_INFO, formatTokens } from "../theme";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -74,7 +74,7 @@ const TABS: Array<{ id: SettingsTab; label: string }> = [
 // ---------------------------------------------------------------------------
 
 export function SettingsPanel({ open, onClose, initialTab, initialProvider }: SettingsPanelProps): React.ReactElement | null {
-  const { currentModel, tokenInfo, cwd, models } = useSession();
+  const { currentModelDisplay, tokenInfo, cwd } = useSession();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<SettingsTab>("session");
 
@@ -201,9 +201,15 @@ export function SettingsPanel({ open, onClose, initialTab, initialProvider }: Se
 
   if (!open) return null;
 
-  const displayModel = currentModel ? humanModelName(currentModel) : "No model";
-  const providerKey = ((models.find((m) => m.name === currentModel) as any)?.provider || (currentModel ? extractProvider(currentModel) : "")).toLowerCase();
-  const providerInfo = PROVIDER_INFO[providerKey];
+  const displayModel = currentModelDisplay?.modelDetailedLabel ?? "No model";
+  const providerLabel = currentModelDisplay?.providerLabel ?? "";
+  const providerKey = currentModelDisplay?.brandKey ?? "";
+  const providerInfo = currentModelDisplay
+    ? PROVIDER_INFO[currentModelDisplay.brandKey.toLowerCase()] ?? {
+      label: currentModelDisplay.brandLabel,
+      color: theme.muted,
+    }
+    : undefined;
   const budget = tokenInfo.contextBudget || 200_000;
   const pct = Math.min(100, (tokenInfo.totalTokens / budget) * 100);
 
@@ -288,6 +294,7 @@ export function SettingsPanel({ open, onClose, initialTab, initialProvider }: Se
             <SessionTab
               prefs={prefs}
               displayModel={displayModel}
+              providerLabel={providerLabel}
               providerInfo={providerInfo}
               providerKey={providerKey}
               tokenInfo={tokenInfo}
@@ -330,12 +337,13 @@ export function SettingsPanel({ open, onClose, initialTab, initialProvider }: Se
 // ---------------------------------------------------------------------------
 
 function SessionTab({
-  prefs, displayModel, providerInfo, providerKey, tokenInfo, budget, pct, cwd,
+  prefs, displayModel, providerLabel, providerInfo, providerKey, tokenInfo, budget, pct, cwd,
   skills, mcpStatus, mcpLoading,
   onThinkingChange, onCacheToggle, onContextRatioChange, onCompact, onSummarize, onSkillToggle,
 }: {
   prefs: SessionPreferences;
   displayModel: string;
+  providerLabel: string;
   providerInfo: { label: string; color: string } | undefined;
   providerKey: string;
   tokenInfo: { totalTokens: number; contextBudget?: number };
@@ -358,7 +366,7 @@ function SessionTab({
       <SettingsSection title="Session">
         <div style={{ fontFamily: mono, fontSize: 11, color: theme.secondary, lineHeight: 2 }}>
           <SettingsRow label="Model" value={displayModel} />
-          <SettingsRow label="Provider" value={providerInfo?.label || providerKey || "—"} />
+          <SettingsRow label="Provider" value={providerLabel || providerInfo?.label || providerKey || "—"} />
           <SettingsRow label="Context" value={`${formatTokens(tokenInfo.totalTokens)} / ${formatTokens(budget)} (${Math.round(pct)}%)`} />
           {cwd && <SettingsRow label="Directory" value={cwd.replace(/^\/Users\/[^/]+/, "~")} />}
         </div>

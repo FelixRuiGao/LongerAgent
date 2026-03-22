@@ -1,5 +1,4 @@
 import { hasOAuthTokens } from "./auth/openai-oauth.js";
-import { formatScopedModelName } from "./config.js";
 import {
   PROVIDER_PRESETS,
   buildProviderPresetRawConfig,
@@ -7,6 +6,7 @@ import {
   findProviderPresetModel,
 } from "./provider-presets.js";
 import { isManagedProvider } from "./managed-provider-credentials.js";
+import { describeModel } from "./model-presentation.js";
 
 export type ModelEntryLike = {
   name: string;
@@ -142,9 +142,15 @@ export function resolveModelSelection(
   const knownNames = new Set<string>((config?.modelNames as string[]) ?? []);
   if (knownNames.has(selectedConfigName)) {
     const existing = config.getModel(selectedConfigName);
+    const descriptor = describeModel({
+      configName: selectedConfigName,
+      providerId: existing.provider,
+      selectionKey: existing.model,
+      modelId: existing.model,
+    });
     return {
       selectedConfigName,
-      selectedHint: formatScopedModelName(existing.provider, existing.model),
+      selectedHint: descriptor.scopedDetailedLabel,
       modelProvider: existing.provider,
       modelSelectionKey: existing.model,
       modelId: existing.model,
@@ -222,9 +228,15 @@ export function resolveModelSelection(
     selectedConfigName = runtimeName;
   }
 
+  const descriptor = describeModel({
+    configName: selectedConfigName,
+    providerId: parsed.provider,
+    selectionKey,
+    modelId: resolvedModel,
+  });
   return {
     selectedConfigName,
-    selectedHint: formatScopedModelName(parsed.provider, resolvedModel),
+    selectedHint: descriptor.scopedDetailedLabel,
     modelProvider: parsed.provider,
     modelSelectionKey: selectionKey,
     modelId: resolvedModel,
@@ -241,9 +253,15 @@ export function resolvePersistedModelSelection(
   if (configName) {
     try {
       const existing = session.config.getModel(configName);
+      const descriptor = describeModel({
+        configName,
+        providerId: existing.provider,
+        selectionKey: selection.modelSelectionKey?.trim() || existing.model,
+        modelId: existing.model,
+      });
       return {
         selectedConfigName: configName,
-        selectedHint: formatScopedModelName(existing.provider, existing.model),
+        selectedHint: descriptor.scopedDetailedLabel,
         modelProvider: existing.provider,
         modelSelectionKey: selection.modelSelectionKey?.trim() || existing.model,
         modelId: existing.model,

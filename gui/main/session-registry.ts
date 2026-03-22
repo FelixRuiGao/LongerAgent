@@ -15,8 +15,9 @@ import { Session } from "../../src/session.js";
 import { SessionStore, loadLog, validateAndRepairLog, saveLog } from "../../src/persistence.js";
 import { ProgressReporter } from "../../src/progress.js";
 import { projectToTuiEntries } from "../../src/log-projection.js";
-import { resolveModelSelection } from "../../src/commands.js";
 import type { PersistedModelSelection } from "../../src/model-selection.js";
+import { applyPersistedModelSelectionToSession } from "../../src/model-restore.js";
+import { getCurrentModelDescriptor } from "../../src/model-presentation.js";
 import type { SessionState, TokenInfo, ConversationEntry } from "../shared/ipc-protocol.js";
 import type { PendingAskUi } from "../../src/ask.js";
 import type { SkillMeta } from "../../src/skills/loader.js";
@@ -103,6 +104,7 @@ export class SessionRegistry {
       state: m.state,
       title: m.session.getDisplayName?.() ?? "",
       currentModel: m.session.currentModelConfigName ?? "",
+      currentModelDisplay: getCurrentModelDescriptor(m.session),
     }));
   }
 
@@ -244,6 +246,7 @@ export class SessionRegistry {
       this._win.webContents.send("session:modelChanged", {
         sessionId: id,
         model: managed.session.currentModelConfigName ?? "",
+        display: getCurrentModelDescriptor(managed.session),
       });
 
       // Push ask
@@ -413,42 +416,19 @@ export class SessionRegistry {
   private _restoreModelSelection(session: Session): void {
     const gp = this._shared.globalPreferences;
     try {
-      if (gp.modelConfigName) {
-        try {
-          session.switchModel!(gp.modelConfigName);
-          (session as any).setPersistedModelSelection?.({
+      if (
+        gp.modelConfigName
+        || (gp.modelProvider && (gp.modelSelectionKey || gp.modelId))
+      ) {
+        applyPersistedModelSelectionToSession(
+          session,
+          {
             modelConfigName: gp.modelConfigName,
             modelProvider: gp.modelProvider,
             modelSelectionKey: gp.modelSelectionKey,
             modelId: gp.modelId,
-          } satisfies PersistedModelSelection);
-        } catch {
-          if (gp.modelProvider && (gp.modelSelectionKey || gp.modelId)) {
-            const restored = resolveModelSelection(
-              session,
-              `${gp.modelProvider}:${gp.modelSelectionKey ?? gp.modelId}`,
-            );
-            session.switchModel!(restored.selectedConfigName);
-            (session as any).setPersistedModelSelection?.({
-              modelConfigName: restored.selectedConfigName,
-              modelProvider: restored.modelProvider,
-              modelSelectionKey: restored.modelSelectionKey,
-              modelId: restored.modelId,
-            } satisfies PersistedModelSelection);
-          }
-        }
-      } else if (gp.modelProvider && (gp.modelSelectionKey || gp.modelId)) {
-        const restored = resolveModelSelection(
-          session,
-          `${gp.modelProvider}:${gp.modelSelectionKey ?? gp.modelId}`,
+          } satisfies PersistedModelSelection,
         );
-        session.switchModel!(restored.selectedConfigName);
-        (session as any).setPersistedModelSelection?.({
-          modelConfigName: restored.selectedConfigName,
-          modelProvider: restored.modelProvider,
-          modelSelectionKey: restored.modelSelectionKey,
-          modelId: restored.modelId,
-        } satisfies PersistedModelSelection);
       }
     } catch (err) {
       console.warn("Failed to restore model:", err instanceof Error ? err.message : String(err));
