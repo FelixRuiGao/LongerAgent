@@ -74,11 +74,11 @@ export function generateToolSummary(
   return `${agentName} is calling ${toolName}`;
 }
 
-function compactDisplayValue(value: unknown, maxLen = 48): string {
+function compactDisplayValue(value: unknown): string {
   if (typeof value === "string") {
     const normalized = value.replace(/\s+/g, " ").trim();
     if (!normalized) return '""';
-    return normalized.length > maxLen ? `${normalized.slice(0, maxLen - 3)}...` : normalized;
+    return normalized;
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
@@ -100,7 +100,7 @@ export function generateToolCallDisplay(
   const file = compactDisplayValue(toolArgs["file"]);
   const pattern = compactDisplayValue(toolArgs["pattern"]);
   const url = compactDisplayValue(toolArgs["url"]);
-  const command = compactDisplayValue(toolArgs["command"], 60);
+  const command = compactDisplayValue(toolArgs["command"]);
   const name = compactDisplayValue(toolArgs["name"]);
   const id = compactDisplayValue(toolArgs["id"]);
   const shell = compactDisplayValue(toolArgs["shell"]);
@@ -571,6 +571,7 @@ export async function asyncRunToolLoop(
       }
 
       const summary = toolSummaries.get(tc.id) ?? "";
+      const execStartMs = Date.now();
 
       // Execute tool with exception safety
       let toolOutput: ToolResult | string;
@@ -692,6 +693,7 @@ export async function asyncRunToolLoop(
           isError: resolved.content.startsWith("ERROR:"),
           contextId: toolResultContextId,
           toolMetadata: mergedMetadata,
+          execStartMs,
           previewText: preview?.text,
           previewDim: preview?.dim,
         },

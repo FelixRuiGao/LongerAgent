@@ -178,6 +178,10 @@ function buildSubAgentRollup(entries: LogEntry[]): ConversationEntry | null {
 /**
  * Build a map of toolCallId → elapsed time (ms) by pairing
  * tool_call and tool_result entries.
+ *
+ * Prefers execStartMs (actual tool execution start) from tool_result metadata
+ * over the tool_call entry timestamp, which for parallel calls all share
+ * roughly the same value (when they were logged, not when they ran).
  */
 function buildToolElapsedMap(entries: LogEntry[]): Map<string, number> {
   const callTimestamps = new Map<string, number>();
@@ -191,8 +195,14 @@ function buildToolElapsedMap(entries: LogEntry[]): Map<string, number> {
       }
     } else if (entry.type === "tool_result") {
       const id = entry.meta["toolCallId"];
-      if (typeof id === "string" && callTimestamps.has(id)) {
-        elapsed.set(id, entry.timestamp - callTimestamps.get(id)!);
+      if (typeof id === "string") {
+        const execStart = entry.meta["execStartMs"];
+        const startMs = typeof execStart === "number"
+          ? execStart
+          : callTimestamps.get(id);
+        if (startMs !== undefined) {
+          elapsed.set(id, entry.timestamp - startMs);
+        }
       }
     }
   }

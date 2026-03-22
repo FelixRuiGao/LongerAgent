@@ -10,7 +10,7 @@ import fs from "node:fs/promises";
 import { existsSync, statSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 import type { ToolDef } from "../providers/base.js";
 import { ToolResult } from "../providers/base.js";
@@ -656,7 +656,7 @@ async function toolReadFile(
 // list_dir
 // ------------------------------------------------------------------
 
-function toolListDir(dirPath = "."): string {
+async function toolListDir(dirPath = "."): Promise<string> {
   if (!existsSync(dirPath)) {
     return `ERROR: Directory not found: ${dirPath}`;
   }
@@ -667,48 +667,49 @@ function toolListDir(dirPath = "."): string {
 
   const lines: string[] = [];
 
-  function walk(dir: string, prefix: string, depth: number): void {
+  async function walk(dir: string, prefix: string, depth: number): Promise<void> {
     if (depth > 2) return;
     let entries: string[];
     try {
-      entries = readdirSync(dir);
+      entries = await fs.readdir(dir);
     } catch {
       return;
     }
 
     // Sort: directories first, then files, alphabetical
-    const withStats = entries
-      .filter(
-        (name) =>
-          !name.startsWith(".") &&
-          name !== "node_modules" &&
-          name !== "__pycache__",
-      )
-      .map((name) => {
-        const full = path.join(dir, name);
-        let isDir = false;
-        try {
-          isDir = statSync(full).isDirectory();
-        } catch {
-          // skip inaccessible
-        }
-        return { name, full, isDir };
-      })
-      .sort((a, b) => {
-        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
+    const withStats = (await Promise.all(
+      entries
+        .filter(
+          (name) =>
+            !name.startsWith(".") &&
+            name !== "node_modules" &&
+            name !== "__pycache__",
+        )
+        .map(async (name) => {
+          const full = path.join(dir, name);
+          let isDir = false;
+          try {
+            isDir = (await fs.stat(full)).isDirectory();
+          } catch {
+            // skip inaccessible
+          }
+          return { name, full, isDir };
+        }),
+    )).sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
 
     for (const entry of withStats) {
       const marker = entry.isDir ? "[DIR] " : "";
       lines.push(`${prefix}${marker}${entry.name}`);
       if (entry.isDir) {
-        walk(entry.full, prefix + "  ", depth + 1);
+        await walk(entry.full, prefix + "  ", depth + 1);
       }
     }
   }
 
-  walk(dirPath, "", 0);
+  await walk(dirPath, "", 0);
   return lines.length > 0 ? lines.join("\n") : "(empty directory)";
 }
 
@@ -1335,11 +1336,11 @@ export function buildBashEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function toolBash(
+async function toolBash(
   command: string,
   timeout = BASH_DEFAULT_TIMEOUT,
   cwd = "",
-): string {
+): Promise<string> {
   // Enforce timeout bounds
   if (typeof timeout !== "number" || timeout < 1) {
     timeout = BASH_DEFAULT_TIMEOUT;
@@ -1355,38 +1356,65 @@ function toolBash(
     runCwd = cwd;
   }
 
-  const result = spawnSync("sh", ["-c", command], {
-    cwd: runCwd,
-    timeout: timeout * 1000,
-    encoding: "utf-8",
-    maxBuffer: 10 * 1024 * 1024, // 10 MB buffer
-    env: buildBashEnv(),
-    killSignal: BASH_TIMEOUT_KILL_SIGNAL,
+  return new Promise<string>((resolve) => {
+    const child = spawn("sh", ["-c", command], {
+      cwd: runCwd,
+      env: buildBashEnv(),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutLen = 0;
+    let stderrLen = 0;
+    const maxBuffer = 10 * 1024 * 1024; // 10 MB
+    let killed = false;
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stdoutLen < maxBuffer) {
+        stdoutChunks.push(chunk);
+        stdoutLen += chunk.length;
+      }
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderrLen < maxBuffer) {
+        stderrChunks.push(chunk);
+        stderrLen += chunk.length;
+      }
+    });
+
+    const timer = setTimeout(() => {
+      killed = true;
+      try { child.kill(BASH_TIMEOUT_KILL_SIGNAL as NodeJS.Signals); } catch {}
+    }, timeout * 1000);
+
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (killed || signal === "SIGTERM" || signal === BASH_TIMEOUT_KILL_SIGNAL) {
+        resolve(
+          `ERROR: Command timed out after ${timeout}s (max allowed: ${BASH_MAX_TIMEOUT}s). ` +
+          `Shell process was terminated (${BASH_TIMEOUT_KILL_SIGNAL}); child-process tree termination is best-effort.`
+        );
+        return;
+      }
+      const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+      const parts: string[] = [];
+      if (stdout) {
+        parts.push(`STDOUT:\n${truncateOutput(stdout, BASH_MAX_OUTPUT_CHARS)}`);
+      }
+      if (stderr) {
+        parts.push(`STDERR:\n${truncateOutput(stderr, BASH_MAX_OUTPUT_CHARS)}`);
+      }
+      parts.push(`EXIT CODE: ${code ?? 1}`);
+      resolve(parts.join("\n"));
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve(`ERROR: ${err.message}`);
+    });
   });
-
-  if (result.error) {
-    if (
-      (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT" ||
-      result.signal === "SIGTERM" ||
-      result.signal === BASH_TIMEOUT_KILL_SIGNAL
-    ) {
-      return (
-        `ERROR: Command timed out after ${timeout}s (max allowed: ${BASH_MAX_TIMEOUT}s). ` +
-        `Shell process was terminated (${BASH_TIMEOUT_KILL_SIGNAL}); child-process tree termination is best-effort.`
-      );
-    }
-    return `ERROR: ${result.error.message}`;
-  }
-
-  const parts: string[] = [];
-  if (result.stdout) {
-    parts.push(`STDOUT:\n${truncateOutput(result.stdout, BASH_MAX_OUTPUT_CHARS)}`);
-  }
-  if (result.stderr) {
-    parts.push(`STDERR:\n${truncateOutput(result.stderr, BASH_MAX_OUTPUT_CHARS)}`);
-  }
-  parts.push(`EXIT CODE: ${result.status ?? 1}`);
-  return parts.join("\n");
 }
 
 // ------------------------------------------------------------------
@@ -1678,7 +1706,7 @@ function simpleUnifiedDiff(
 // test
 // ------------------------------------------------------------------
 
-function toolTest(command = "python -m pytest", timeout = 60): string {
+async function toolTest(command = "python -m pytest", timeout = 60): Promise<string> {
   return toolBash(command, timeout);
 }
 
@@ -1929,7 +1957,7 @@ const GLOB_SKIP_DIRS = new Set([
   "dist", ".tox", ".mypy_cache", ".pytest_cache", ".venv", "venv",
 ]);
 
-function toolGlob(pattern: string, searchPath: string): string {
+async function toolGlob(pattern: string, searchPath: string): Promise<string> {
   if (!existsSync(searchPath)) {
     return `ERROR: Path not found: ${searchPath}`;
   }
@@ -1939,14 +1967,14 @@ function toolGlob(pattern: string, searchPath: string): string {
   const results: Array<{ path: string; mtime: number }> = [];
   let filesScanned = 0;
 
-  function walk(dir: string, depth: number, relPrefix: string): void {
+  async function walk(dir: string, depth: number, relPrefix: string): Promise<void> {
     if (depth > GLOB_MAX_DEPTH) return;
     if (results.length >= GLOB_MAX_RESULTS) return;
     if (filesScanned >= GLOB_MAX_FILES_SCANNED) return;
 
     let entries: string[];
     try {
-      entries = readdirSync(dir);
+      entries = await fs.readdir(dir);
     } catch {
       return;
     }
@@ -1963,13 +1991,13 @@ function toolGlob(pattern: string, searchPath: string): string {
 
       let stat;
       try {
-        stat = statSync(full);
+        stat = await fs.stat(full);
       } catch {
         continue;
       }
 
       if (stat.isDirectory()) {
-        walk(full, depth + 1, rel);
+        await walk(full, depth + 1, rel);
       } else if (stat.isFile()) {
         filesScanned++;
         if (regex.test(rel)) {
@@ -1979,7 +2007,7 @@ function toolGlob(pattern: string, searchPath: string): string {
     }
   }
 
-  walk(searchPath, 0, "");
+  await walk(searchPath, 0, "");
 
   if (results.length === 0) {
     return "No files found matching the pattern.";
@@ -2023,7 +2051,7 @@ function matchFileType(filename: string, typeFilter: string): boolean {
   return ext === typeFilter.toLowerCase();
 }
 
-function toolGrep(pattern: string, searchPath: string, options: GrepOptions): string {
+async function toolGrep(pattern: string, searchPath: string, options: GrepOptions): Promise<string> {
   if (!existsSync(searchPath)) {
     return `ERROR: Path not found: ${searchPath}`;
   }
@@ -2082,10 +2110,10 @@ function toolGrep(pattern: string, searchPath: string, options: GrepOptions): st
     return true;
   }
 
-  function processFile(filePath: string): void {
+  async function processFile(filePath: string): Promise<void> {
     let raw: Buffer;
     try {
-      raw = readFileSync(filePath);
+      raw = await fs.readFile(filePath);
     } catch {
       return;
     }
@@ -2114,7 +2142,7 @@ function toolGrep(pattern: string, searchPath: string, options: GrepOptions): st
     }
   }
 
-  function walkForGrep(dir: string, depth: number): void {
+  async function walkForGrep(dir: string, depth: number): Promise<void> {
     if (shouldStop()) return;
     if (depth > SEARCH_MAX_DEPTH) {
       stats.depthLimitHits += 1;
@@ -2123,7 +2151,7 @@ function toolGrep(pattern: string, searchPath: string, options: GrepOptions): st
 
     let entries: string[];
     try {
-      entries = readdirSync(dir);
+      entries = await fs.readdir(dir);
     } catch {
       return;
     }
@@ -2134,13 +2162,13 @@ function toolGrep(pattern: string, searchPath: string, options: GrepOptions): st
       const full = path.join(dir, name);
       let stat;
       try {
-        stat = statSync(full);
+        stat = await fs.stat(full);
       } catch {
         continue;
       }
 
       if (stat.isDirectory()) {
-        walkForGrep(full, depth + 1);
+        await walkForGrep(full, depth + 1);
       } else if (stat.isFile()) {
         if (!shouldIncludeFile(name)) continue;
         if (getSensitiveFileReadReason(full)) {
@@ -2163,7 +2191,7 @@ function toolGrep(pattern: string, searchPath: string, options: GrepOptions): st
         }
         stats.bytesScanned += stat.size;
 
-        processFile(full);
+        await processFile(full);
       }
     }
   }
@@ -2172,10 +2200,10 @@ function toolGrep(pattern: string, searchPath: string, options: GrepOptions): st
   const pathStat = statSync(searchPath);
   if (pathStat.isFile()) {
     if (shouldIncludeFile(path.basename(searchPath))) {
-      processFile(searchPath);
+      await processFile(searchPath);
     }
   } else {
-    walkForGrep(searchPath, 0);
+    await walkForGrep(searchPath, 0);
   }
 
   // Format output based on mode
@@ -2204,7 +2232,7 @@ function toolGrep(pattern: string, searchPath: string, options: GrepOptions): st
         // Need to re-read file for context lines
         let fileLines: string[];
         try {
-          fileLines = readFileSync(fm.file, "utf-8").split("\n");
+          fileLines = (await fs.readFile(fm.file, "utf-8")).split("\n");
         } catch {
           continue;
         }
@@ -2292,7 +2320,7 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         return formatToolError("read_file", e);
       }
     },
-    list_dir: (args) => {
+    list_dir: async (args) => {
       try {
         const a = expectArgsObject("list_dir", args);
         const requestedPath = optionalStringArg("list_dir", a, "path", ".");
@@ -2302,7 +2330,7 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
           ctx,
           { mustExist: true, expectDirectory: true },
         );
-        return toolListDir(dirPath);
+        return await toolListDir(dirPath);
       } catch (e) {
         return formatToolError("list_dir", e);
       }
@@ -2359,7 +2387,7 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         return `ERROR: apply_patch verification failed: ${e instanceof Error ? e.message : String(e)}`;
       }
     },
-    bash: (args) => {
+    bash: async (args) => {
       try {
         const a = expectArgsObject("bash", args);
         const command = requiredStringArg("bash", a, "command", { nonEmpty: true, maxLen: 20_000 });
@@ -2374,7 +2402,7 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
             { mustExist: true, expectDirectory: true },
           );
         }
-        return toolBash(command, timeout ?? BASH_DEFAULT_TIMEOUT, cwd);
+        return await toolBash(command, timeout ?? BASH_DEFAULT_TIMEOUT, cwd);
       } catch (e) {
         return formatToolError("bash", e);
       }
@@ -2410,12 +2438,12 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         return formatToolError("diff", e);
       }
     },
-    test: (args) => {
+    test: async (args) => {
       try {
         const a = expectArgsObject("test", args);
         const command = optionalStringArg("test", a, "command", "python -m pytest");
         const timeout = optionalIntegerArg("test", a, "timeout");
-        return toolTest(command, timeout ?? 60);
+        return await toolTest(command, timeout ?? 60);
       } catch (e) {
         return formatToolError("test", e);
       }
@@ -2428,7 +2456,7 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         return formatToolError("time", e);
       }
     },
-    glob: (args) => {
+    glob: async (args) => {
       try {
         const a = expectArgsObject("glob", args);
         const pattern = requiredStringArg("glob", a, "pattern", { nonEmpty: true });
@@ -2439,12 +2467,12 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
           ctx,
           { mustExist: true, expectDirectory: true },
         );
-        return toolGlob(pattern, globPath);
+        return await toolGlob(pattern, globPath);
       } catch (e) {
         return formatToolError("glob", e);
       }
     },
-    grep: (args) => {
+    grep: async (args) => {
       try {
         const a = expectArgsObject("grep", args);
         const pattern = requiredStringArg("grep", a, "pattern", { nonEmpty: true, maxLen: SEARCH_MAX_PATTERN_LENGTH });
@@ -2464,7 +2492,7 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         const caseInsensitive = a["-i"] === true;
         const showLineNumbers = a["-n"] !== false; // default true
         const headLimit = optionalIntegerArg("grep", a, "head_limit") ?? 0;
-        return toolGrep(pattern, searchPath, {
+        return await toolGrep(pattern, searchPath, {
           glob: globFilter || undefined,
           fileType: fileType || undefined,
           outputMode,

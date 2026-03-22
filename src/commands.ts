@@ -345,7 +345,8 @@ function buildResumeOptionLabel(
   summary: string | undefined,
 ): string {
   const date = (created || "").slice(0, 16);
-  return `${index + 1}. ${date}  ${turns ?? 0} turns  ${truncateDisplayText(summary || "", 25)}`;
+  const normalized = (summary || "").replace(/\s+/g, " ").trim();
+  return `${index + 1}. ${date}  ${turns ?? 0} turns  ${normalized}`;
 }
 
 function truncateDisplayText(text: string, maxChars: number): string {
@@ -1036,14 +1037,9 @@ export function registerSkillCommands(
     if (!skill.userInvocable) continue;
 
     const captured = skill; // capture for closure
-    const desc =
-      captured.description.length > 60
-        ? captured.description.slice(0, 57) + "..."
-        : captured.description;
-
     registry.register({
       name: "/" + captured.name,
-      description: desc,
+      description: captured.description,
       handler: async (ctx: CommandContext, args: string) => {
         const content = resolveSkillContent(captured, args);
         const tagged = `[SKILL: ${captured.name}]\n\n${content}`;

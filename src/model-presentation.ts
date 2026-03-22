@@ -80,7 +80,11 @@ const MODEL_LABEL_OVERRIDES: Record<string, string> = {
   "glm-4-7": "GLM-4.7",
   "glm-4-7-flash": "GLM-4.7 Flash",
   "minimax-m2-1": "MiniMax M2.1",
+  "minimax-m2-1-highspeed": "MiniMax M2.1 Highspeed",
   "minimax-m2-5": "MiniMax M2.5",
+  "minimax-m2-5-highspeed": "MiniMax M2.5 Highspeed",
+  "minimax-m2-7": "MiniMax M2.7",
+  "minimax-m2-7-highspeed": "MiniMax M2.7 Highspeed",
   "minimax-m1": "MiniMax M1",
 };
 
@@ -98,7 +102,11 @@ const SLUG_FRAGMENTS: Array<[RegExp, string]> = [
   [/glm-5\b/i, "GLM-5"],
   [/glm-4\.7-flash/i, "GLM-4.7 Flash"],
   [/glm-4\.7/i, "GLM-4.7"],
+  [/minimax-m2\.7-highspeed/i, "MiniMax M2.7 Highspeed"],
+  [/minimax-m2\.7/i, "MiniMax M2.7"],
+  [/minimax-m2\.5-highspeed/i, "MiniMax M2.5 Highspeed"],
   [/minimax-m2\.5/i, "MiniMax M2.5"],
+  [/minimax-m2\.1-highspeed/i, "MiniMax M2.1 Highspeed"],
   [/minimax-m2\.1/i, "MiniMax M2.1"],
   [/minimax-m1/i, "MiniMax M1"],
 ];

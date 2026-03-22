@@ -36,6 +36,7 @@ import {
   getCommandPickerVisibleRange,
   isCommandPickerActive,
   moveCommandPickerSelection,
+  setCommandPickerSelection,
   type CommandPickerState,
 } from "../src/tui/command-picker.js";
 import {
@@ -43,12 +44,14 @@ import {
   getCheckboxPickerVisibleRange,
   isCheckboxPickerActive,
   moveCheckboxSelection,
+  setCheckboxPickerSelection,
   submitCheckboxPicker,
   toggleCheckboxItem,
   type CheckboxPickerState,
 } from "../src/tui/checkbox-picker.js";
 import {
   RGBA,
+  StyledText,
   SyntaxStyle,
   type InputRenderable,
   type KeyBinding,
@@ -98,6 +101,7 @@ const BG = "#0d0c0f";
 const COLORS = {
   background: BG,
   panel: BG,
+  userBg: "#1f1c26",       // lifted background for user messages
   // Structural
   border: "#2a2630",
   separator: "#2a2630",
@@ -116,12 +120,13 @@ const COLORS = {
   green: "#73a942",
   cyan: "#6aa8a0",
   thinking: "#8a7e90",
+  toolTime: "#8a8078",     // tool call elapsed time
   // Phase indicators — each maps to a logo gradient stop
-  readyStatus: "#6aa8a0",
+  readyStatus: "#fb8500",
   thinkingStatus: "#a010a0",
   workingStatus: "#e81860",
   generatingStatus: "#ffb703",
-  waitingStatus: "#fb8500",
+  waitingStatus: "#e8c468",
   closingStatus: "#4d4843",
   errorStatus: "#f05030",
 } as const;
@@ -134,9 +139,9 @@ const SPINNER_INTERVAL_MS = 80;
 const CTRL_C_EXIT_WINDOW_MS = 2000;
 const FIXED_CLOSE_DELAY_MS = 1500;
 const INPUT_MAX_VISIBLE_LINES = 10;
-const COMMAND_PICKER_MAX_VISIBLE = 10;
-const CHECKBOX_PICKER_MAX_VISIBLE = 15;
-const PROMPT_SELECT_MAX_VISIBLE = 10;
+function computePickerMaxVisible(terminalHeight: number): number {
+  return Math.max(5, Math.floor(terminalHeight * 0.4 - 4));
+}
 const SIDEBAR_MIN_WIDTH = 30;
 const SIDEBAR_MAX_WIDTH = 48;
 const MIN_TERMINAL_WIDTH_FOR_SIDEBAR = 90;
@@ -583,6 +588,16 @@ function formatElapsed(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function LiveTimer({ startedAt, color }: { startedAt: number; color: string }): React.ReactElement {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 100);
+    return () => clearInterval(timer);
+  }, []);
+  const elapsed = Date.now() - startedAt;
+  return <text fg={color} content={` (${formatElapsed(elapsed)})`} flexShrink={0} />;
+}
+
 function ConversationEntryView(
   {
     entry,
@@ -603,15 +618,18 @@ function ConversationEntryView(
   switch (entry.kind) {
     case "user":
       return (
-        <box flexDirection="row" paddingTop={1} paddingBottom={1}>
-          <text fg={colors.accent} bold content="❯ " />
-          <text fg={colors.text} bold content={entry.text} />
-          {entry.queued ? <text fg={colors.orange} content=" [queued]" /> : null}
+        <box>
+          <box height={1} />
+          <box backgroundColor={colors.userBg} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
+            <text fg={colors.text} bold content={entry.text} wrapMode="word" width="100%" />
+            {entry.queued ? <text fg={colors.orange} content=" [queued]" /> : null}
+          </box>
+          <box height={1} />
         </box>
       );
     case "assistant":
       return (
-        <box paddingLeft={1} paddingTop={1}>
+        <box paddingLeft={2} paddingTop={1}>
           {markdownMode === "raw" ? (
             <text fg={colors.text} content={entry.text} />
           ) : (
@@ -633,12 +651,17 @@ function ConversationEntryView(
           )}
         </box>
       );
-    case "reasoning":
+    case "reasoning": {
+      const thinkingStyled = new StyledText([
+        { __isChunk: true, text: "Thinking: ", fg: RGBA.fromHex(colors.thinkingStatus), attributes: 1 },
+        { __isChunk: true, text: entry.text.replace(/^\n+/, ""), fg: RGBA.fromHex(colors.thinking) },
+      ]);
       return (
-        <box paddingLeft={needsSpacing ? 1 : 0} paddingTop={needsSpacing ? 1 : 0}>
-          <text fg={colors.thinking} content={entry.text} />
+        <box paddingLeft={2} paddingTop={needsSpacing ? 1 : 0}>
+          <text content={thinkingStyled} wrapMode="word" width="100%" />
         </box>
       );
+    }
     case "tool_call":
       {
         const trimmed = entry.text.trim();
@@ -647,11 +670,13 @@ function ConversationEntryView(
         const toolName = typeof entry.meta?.toolName === "string" ? entry.meta.toolName : parsedToolName;
         const restSource = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1);
         const rest = restSource.replace(/\s+/g, " ").trim();
+        const isLive = entry.elapsedMs === undefined && entry.startedAt !== undefined;
         const timeDisplay = entry.elapsedMs !== undefined ? formatElapsed(entry.elapsedMs) : null;
         return (
-          <box flexDirection="row" width="100%" paddingLeft={1}>
+          <box flexDirection="row" width="100%" paddingLeft={2}>
             <text fg={colors.purple} content={toolName} flexShrink={0} />
-            {timeDisplay ? <text fg={colors.muted} content={` ${timeDisplay}`} flexShrink={0} /> : null}
+            {isLive ? <LiveTimer startedAt={entry.startedAt!} color={colors.dim} /> : null}
+            {timeDisplay ? <text fg={colors.toolTime} content={` (${timeDisplay})`} flexShrink={0} /> : null}
             {rest ? (
               <text
                 fg={colors.muted}
@@ -667,7 +692,7 @@ function ConversationEntryView(
       }
     case "tool_result":
       return (
-        <box flexDirection="column" paddingLeft={3}>
+        <box flexDirection="column" paddingLeft={4}>
           {entry.text.split("\n").map((line, index) => (
             <text
               key={`tool-result-${index}`}
@@ -679,38 +704,38 @@ function ConversationEntryView(
       );
     case "progress":
       return (
-        <box paddingLeft={1}>
+        <box paddingLeft={2}>
           <text fg={colors.muted} content={entry.text} />
         </box>
       );
     case "status":
     case "compact_mark":
       return (
-        <box paddingTop={1}>
+        <box paddingLeft={2} paddingTop={1}>
           <text fg={colors.orange} content={entry.text} />
         </box>
       );
     case "error":
       return (
-        <box paddingTop={1}>
+        <box paddingLeft={2} paddingTop={1}>
           <text fg={colors.red} bold content={`[!] ${entry.text}`} />
         </box>
       );
     case "sub_agent_rollup":
       return (
-        <box flexDirection="column" paddingLeft={1}>
+        <box flexDirection="column" paddingLeft={2}>
           <text fg={colors.dim} content={entry.text} />
         </box>
       );
     case "sub_agent_done":
       return (
-        <box paddingLeft={1}>
+        <box paddingLeft={2}>
           <text fg={colors.dim} content={entry.text} />
         </box>
       );
     case "interrupted_marker":
       return (
-        <box paddingLeft={1}>
+        <box paddingLeft={2}>
           <text fg={colors.orange} content={entry.text} />
         </box>
       );
@@ -729,6 +754,7 @@ function StatusStrip(
     hint,
     showContext,
     colors,
+    onModelClick,
   }: {
     modelName: string;
     modelColor: string;
@@ -738,9 +764,11 @@ function StatusStrip(
     hint?: string | null;
     showContext: boolean;
     colors: OpenTuiPalette;
+    onModelClick?: () => void;
   },
 ): React.ReactElement {
   const [frame, setFrame] = useState(0);
+  const [modelHover, setModelHover] = useState(false);
 
   useEffect(() => {
     if (phase === "idle" || phase === "error" || phase === "closing") return;
@@ -783,7 +811,14 @@ function StatusStrip(
           <text fg={colors.dim} content="shutting down..." />
         ) : (
           <>
-            <text fg={modelColor} content={modelName} />
+            <box
+              backgroundColor={modelHover ? colors.border : "transparent"}
+              onMouseOver={() => setModelHover(true)}
+              onMouseOut={() => setModelHover(false)}
+              onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onModelClick?.(); }}
+            >
+              <text fg={modelColor} content={modelName} />
+            </box>
             {showContext ? (
               <>
                 <text fg={colors.separator} content=" │ " />
@@ -935,21 +970,43 @@ function SidebarView(
   );
 }
 
+function truncateToWidth(text: string, maxWidth: number): string {
+  const textWidth = Bun.stringWidth(text);
+  if (textWidth <= maxWidth) return text;
+  // Need to truncate — reserve 3 chars for "..."
+  const target = maxWidth - 3;
+  if (target <= 0) return "...".slice(0, maxWidth);
+  let w = 0;
+  let i = 0;
+  for (const ch of text) {
+    const cw = Bun.stringWidth(ch) || 1;
+    if (w + cw > target) return text.slice(0, i) + "...";
+    w += cw;
+    i += ch.length;
+  }
+  return text;
+}
+
 function CommandOverlayView(
   {
     overlay,
     colors,
-    availableWidth,
+    contentWidth,
+    maxVisible,
+    onItemClick,
   }: {
     overlay: CommandOverlayState;
     colors: OpenTuiPalette;
-    availableWidth: number;
+    contentWidth: number;
+    maxVisible: number;
+    onItemClick: (index: number) => void;
   },
 ): React.ReactElement | null {
   if (!overlay.visible || overlay.items.length === 0) return null;
-  const contentWidth = Math.max(8, availableWidth - 4);
-  const overlayHeight = overlay.items.reduce((sum, item, index) =>
-    sum + countWrappedDisplayLines(`${index === overlay.selected ? "> " : "  "}${item}`, contentWidth), 0) + 2;
+  const [hovered, setHovered] = useState(-1);
+  const { start, end } = getVisibleWindow(overlay.items.length, overlay.selected, maxVisible);
+  const visibleItems = overlay.items.slice(start, end);
+  const overlayHeight = visibleItems.length + 2;
 
   return (
     <box
@@ -961,46 +1018,58 @@ function CommandOverlayView(
       width="100%"
       height={overlayHeight}
       flexShrink={0}
+      selectable={false}
+      onMouseOut={() => setHovered(-1)}
     >
-      {overlay.items.map((item, index) => (
-        <text
-          key={`overlay-${index}`}
-          fg={index === overlay.selected ? colors.accent : colors.dim}
-          content={`${index === overlay.selected ? "> " : "  "}${item}`}
-          wrapMode="word"
-        />
-      ))}
+      {visibleItems.map((item, index) => {
+        const actualIndex = start + index;
+        const selected = actualIndex === overlay.selected;
+        const isHovered = actualIndex === hovered;
+        const prefix = selected ? "> " : "  ";
+        return (
+          <box
+            key={`overlay-${actualIndex}`}
+            width="100%"
+            backgroundColor={isHovered ? colors.border : "transparent"}
+            onMouseOver={() => setHovered(actualIndex)}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onItemClick(actualIndex); }}
+          >
+            <text
+              fg={selected ? colors.accent : colors.dim}
+              content={truncateToWidth(`${prefix}${item}`, contentWidth)}
+            />
+          </box>
+        );
+      })}
     </box>
   );
 }
 
 function CommandPickerView(
   {
-    picker,
+    picker: pickerProp,
     colors,
-    availableWidth,
+    contentWidth,
+    maxVisible,
+    onItemClick,
   }: {
     picker: CommandPickerState | null;
     colors: OpenTuiPalette;
-    availableWidth: number;
+    contentWidth: number;
+    maxVisible: number;
+    onItemClick: (index: number) => void;
   },
 ): React.ReactElement | null {
-  if (!isCommandPickerActive(picker)) return null;
+  if (!isCommandPickerActive(pickerProp)) return null;
+  const [hovered, setHovered] = useState(-1);
 
+  // Override maxVisible at render time so terminal resize is reflected
+  const picker = { ...pickerProp, maxVisible };
   const level = getCommandPickerLevel(picker);
   const path = getCommandPickerPath(picker);
   const { start, end } = getCommandPickerVisibleRange(picker);
   const visibleOptions = level.options.slice(start, end);
-  const contentWidth = Math.max(8, availableWidth - 4);
-  const titleHeight = countWrappedDisplayLines(picker.commandName, contentWidth);
-  const pathHeight = path.length > 0
-    ? countWrappedDisplayLines(`  ${path.join(" · ")}`, contentWidth)
-    : 0;
-  const optionsHeight = visibleOptions.reduce((sum, item, index) => {
-    const actualIndex = start + index;
-    return sum + countWrappedDisplayLines(`${actualIndex === level.selected ? "> " : "  "}${item.label}`, contentWidth);
-  }, 0);
-  const pickerHeight = titleHeight + pathHeight + optionsHeight + 2;
+  const pickerHeight = 1 + visibleOptions.length + 2;
 
   return (
     <box
@@ -1012,20 +1081,29 @@ function CommandPickerView(
       width="100%"
       height={pickerHeight}
       flexShrink={0}
+      selectable={false}
+      onMouseOut={() => setHovered(-1)}
     >
-      <text fg={colors.accent} content={picker.commandName} wrapMode="word" />
       {path.length > 0 ? (
-        <text fg={colors.dim} content={`  ${path.join(" · ")}`} wrapMode="word" />
-      ) : null}
+        <text fg={colors.accent} content={truncateToWidth(`${picker.commandName} › ${path.join(" › ")}`, contentWidth)} />
+      ) : (
+        <text fg={colors.accent} content={truncateToWidth(picker.commandName, contentWidth)} />
+      )}
       {visibleOptions.map((item, index) => {
         const actualIndex = start + index;
+        const selected = actualIndex === level.selected;
+        const isHovered = actualIndex === hovered;
+        const prefix = selected ? "> " : "  ";
         return (
-          <text
-            key={`picker-${actualIndex}`}
-            fg={actualIndex === level.selected ? colors.accent : colors.dim}
-            content={`${actualIndex === level.selected ? "> " : "  "}${item.label}`}
-            wrapMode="word"
-          />
+          <box
+            key={`picker-d${picker.stack.length}-${actualIndex}`}
+            width="100%"
+            backgroundColor={isHovered ? colors.border : "transparent"}
+            onMouseOver={() => setHovered(actualIndex)}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onItemClick(actualIndex); }}
+          >
+            <text fg={selected ? colors.accent : colors.dim} content={truncateToWidth(`${prefix}${item.label}`, contentWidth)} />
+          </box>
         );
       })}
     </box>
@@ -1036,26 +1114,22 @@ function CheckboxPickerView(
   {
     picker,
     colors,
-    availableWidth,
+    contentWidth,
+    onItemClick,
+    onScroll,
   }: {
     picker: CheckboxPickerState | null;
     colors: OpenTuiPalette;
-    availableWidth: number;
+    contentWidth: number;
+    onItemClick: (index: number) => void;
   },
 ): React.ReactElement | null {
   if (!isCheckboxPickerActive(picker)) return null;
+  const [hovered, setHovered] = useState(-1);
 
   const { start, end } = getCheckboxPickerVisibleRange(picker);
   const visibleItems = picker.items.slice(start, end);
-  const contentWidth = Math.max(8, availableWidth - 4);
-  const titleHeight = countWrappedDisplayLines(picker.title, contentWidth);
-  const itemsHeight = visibleItems.reduce((sum, item, index) => {
-    const actualIndex = start + index;
-    const checkbox = item.checked ? "[x]" : "[ ]";
-    return sum + countWrappedDisplayLines(`${actualIndex === picker.selected ? "> " : "  "}${checkbox} ${item.label}`, contentWidth);
-  }, 0);
-  const footerHeight = countWrappedDisplayLines("Space toggle · Enter confirm · Esc cancel", contentWidth);
-  const pickerHeight = titleHeight + itemsHeight + footerHeight + 2;
+  const pickerHeight = 1 + visibleItems.length + 1 + 2;
 
   return (
     <box
@@ -1067,21 +1141,32 @@ function CheckboxPickerView(
       width="100%"
       height={pickerHeight}
       flexShrink={0}
+      selectable={false}
+      onMouseOut={() => setHovered(-1)}
     >
-      <text fg={colors.accent} content={picker.title} wrapMode="word" />
+      <text fg={colors.accent} content={truncateToWidth(picker.title, contentWidth)} />
       {visibleItems.map((item, index) => {
         const actualIndex = start + index;
+        const selected = actualIndex === picker.selected;
+        const isHovered = actualIndex === hovered;
         const checkbox = item.checked ? "[x]" : "[ ]";
+        const prefix = selected ? "> " : "  ";
         return (
-          <text
+          <box
             key={`checkbox-${actualIndex}`}
-            fg={actualIndex === picker.selected ? colors.accent : colors.dim}
-            content={`${actualIndex === picker.selected ? "> " : "  "}${checkbox} ${item.label}`}
-            wrapMode="word"
-          />
+            width="100%"
+            backgroundColor={isHovered ? colors.border : "transparent"}
+            onMouseOver={() => setHovered(actualIndex)}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onItemClick(actualIndex); }}
+          >
+            <text
+              fg={selected ? colors.accent : colors.dim}
+              content={truncateToWidth(`${prefix}${checkbox} ${item.label}`, contentWidth)}
+            />
+          </box>
         );
       })}
-      <text fg={colors.dim} content="Space toggle · Enter confirm · Esc cancel" wrapMode="word" />
+      <text fg={colors.dim} content={truncateToWidth("Space toggle · Enter confirm · Esc cancel", contentWidth)} />
     </box>
   );
 }
@@ -1090,27 +1175,26 @@ function PromptSelectView(
   {
     prompt,
     colors,
-    availableWidth,
+    contentWidth,
+    maxVisible,
+    onItemClick,
+    onScroll,
   }: {
     prompt: PromptSelectState | null;
     colors: OpenTuiPalette;
-    availableWidth: number;
+    contentWidth: number;
+    maxVisible: number;
+    onItemClick: (index: number) => void;
   },
 ): React.ReactElement | null {
   if (!prompt || prompt.options.length === 0) return null;
+  const [hovered, setHovered] = useState(-1);
 
-  const { start, end } = getVisibleWindow(prompt.options.length, prompt.selected, PROMPT_SELECT_MAX_VISIBLE);
+  const { start, end } = getVisibleWindow(prompt.options.length, prompt.selected, maxVisible);
   const visibleOptions = prompt.options.slice(start, end);
   const selectedOption = prompt.options[clamp(prompt.selected, 0, prompt.options.length - 1)];
   const description = selectedOption?.description?.trim();
-  const contentWidth = Math.max(8, availableWidth - 4);
-  const messageHeight = countWrappedDisplayLines(prompt.message, contentWidth);
-  const optionsHeight = visibleOptions.reduce((sum, option, index) => {
-    const actualIndex = start + index;
-    return sum + countWrappedDisplayLines(`${actualIndex === prompt.selected ? "> " : "  "}${option.label}`, contentWidth);
-  }, 0);
-  const descriptionHeight = description ? countWrappedDisplayLines(description, contentWidth) : 0;
-  const promptHeight = messageHeight + optionsHeight + descriptionHeight + 2;
+  const promptHeight = 1 + visibleOptions.length + (description ? 1 : 0) + 2;
 
   return (
     <box
@@ -1122,20 +1206,28 @@ function PromptSelectView(
       width="100%"
       height={promptHeight}
       flexShrink={0}
+      selectable={false}
+      onMouseOut={() => setHovered(-1)}
     >
-      <text fg={colors.yellow} content={prompt.message} wrapMode="word" />
+      <text fg={colors.yellow} content={truncateToWidth(prompt.message, contentWidth)} />
       {visibleOptions.map((option, index) => {
         const actualIndex = start + index;
+        const selected = actualIndex === prompt.selected;
+        const isHovered = actualIndex === hovered;
+        const prefix = selected ? "> " : "  ";
         return (
-          <text
+          <box
             key={`prompt-select-${actualIndex}`}
-            fg={actualIndex === prompt.selected ? colors.accent : colors.dim}
-            content={`${actualIndex === prompt.selected ? "> " : "  "}${option.label}`}
-            wrapMode="word"
-          />
+            width="100%"
+            backgroundColor={isHovered ? colors.border : "transparent"}
+            onMouseOver={() => setHovered(actualIndex)}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onItemClick(actualIndex); }}
+          >
+            <text fg={selected ? colors.accent : colors.dim} content={truncateToWidth(`${prefix}${option.label}`, contentWidth)} />
+          </box>
         );
       })}
-      {description ? <text fg={colors.dim} content={description} wrapMode="word" /> : null}
+      {description ? <text fg={colors.dim} content={truncateToWidth(description, contentWidth)} /> : null}
     </box>
   );
 }
@@ -1785,6 +1877,8 @@ export function OpenTuiApp({
     });
   }, [commandRegistry, session, store]);
 
+  const pickerMaxVisible = computePickerMaxVisible(terminal.height);
+
   const startCommandPicker = useCallback((cmdName: string): boolean => {
     const command = commandRegistry.lookup(cmdName);
     const options = buildCommandOptions(cmdName);
@@ -1801,7 +1895,7 @@ export function OpenTuiApp({
             value: option.value,
             checked: option.checked !== false,
           })),
-          Math.min(CHECKBOX_PICKER_MAX_VISIBLE, options.length),
+          Math.min(pickerMaxVisible, options.length),
         ),
       );
       return true;
@@ -1811,11 +1905,11 @@ export function OpenTuiApp({
       createCommandPicker(
         cmdName,
         options,
-        cmdName === "/resume" ? COMMAND_PICKER_MAX_VISIBLE : Math.min(COMMAND_PICKER_MAX_VISIBLE, options.length),
+        pickerMaxVisible,
       ),
     );
     return true;
-  }, [buildCommandOptions, commandRegistry]);
+  }, [buildCommandOptions, commandRegistry, pickerMaxVisible]);
 
   const updateInputOverlay = useCallback((value: string, cursorOffset: number) => {
     if (commandPicker || checkboxPicker || promptSelect || promptSecret) return;
@@ -1832,7 +1926,7 @@ export function OpenTuiApp({
         setCommandOverlay((current) => ({
           mode: "command",
           visible: true,
-          items: matches.map((command) => `${command.name}  ${command.description}`),
+          items: matches.map((command) => `${command.name.padEnd(20)}${command.description}`),
           values: matches.map((command) => command.name),
           selected: current.mode === "command"
             ? clamp(current.selected, 0, Math.max(0, matches.length - 1))
@@ -2302,6 +2396,66 @@ export function OpenTuiApp({
     setCommandPicker(null);
     void handleSubmit(result.command);
   }, [commandPicker, handleSubmit]);
+
+  const clickCommandPickerItem = useCallback((index: number) => {
+    if (!commandPicker) return;
+    const withSelection = setCommandPickerSelection(commandPicker, index);
+    const result = acceptCommandPickerSelection(withSelection);
+    if (!result) {
+      setCommandPicker(null);
+      return;
+    }
+    if (result.kind === "drill_down") {
+      setCommandPicker(result.picker);
+      return;
+    }
+    setCommandPicker(null);
+    void handleSubmit(result.command);
+  }, [commandPicker, handleSubmit]);
+
+  const clickCheckboxPickerItem = useCallback((index: number) => {
+    setCheckboxPicker((current) => {
+      if (!current) return current;
+      const withSelection = setCheckboxPickerSelection(current, index);
+      return toggleCheckboxItem(withSelection);
+    });
+  }, []);
+
+  const clickOverlayItem = useCallback((index: number) => {
+    const selectedValue = commandOverlay.values[index];
+    if (!selectedValue) {
+      setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+      return;
+    }
+
+    if (commandOverlay.mode === "file") {
+      // Set selection and let the standard accept handle file references
+      setCommandOverlay((current) => ({ ...current, selected: index }));
+      acceptInputOverlaySelection();
+      return;
+    }
+
+    const command = commandRegistry.lookup(selectedValue);
+    setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+    if (command?.options && startCommandPicker(selectedValue)) {
+      if (inputRef.current) {
+        inputRef.current.setText("");
+        inputRef.current.extmarks.clear();
+      }
+      resetTurnPasteState();
+      lastInputValueRef.current = "";
+      setDraftValue("");
+      setInputVisibleLines(1);
+      return;
+    }
+    void handleSubmit(selectedValue);
+  }, [commandOverlay, commandRegistry, startCommandPicker, handleSubmit, acceptInputOverlaySelection, resetTurnPasteState]);
+
+  const clickPromptSelectItem = useCallback((index: number) => {
+    if (!promptSelect) return;
+    const option = promptSelect.options[clamp(index, 0, promptSelect.options.length - 1)];
+    resolvePromptSelect(option?.value);
+  }, [promptSelect, resolvePromptSelect]);
 
   const submitCheckboxPickerSelection = useCallback(async () => {
     if (!checkboxPicker) return;
@@ -2848,10 +3002,8 @@ export function OpenTuiApp({
   const modelNameColor = resolveModelNameColor(modelDescriptor, colors);
   const sidebarVisible = terminal.width >= MIN_TERMINAL_WIDTH_FOR_SIDEBAR;
   const sidebarWidth = sidebarVisible ? getSidebarWidth(terminal.width) : 0;
-  const leftColumnWidth = Math.max(
-    24,
-    terminal.width - 4 - (sidebarVisible ? sidebarWidth + 1 : 0),
-  );
+  // Picker content width: terminal - outer padding(4) - row gap+sidebar border(2) - sidebar - picker border(2) - picker padding(2)
+  const pickerContentWidth = terminal.width - 10 - (sidebarVisible ? sidebarWidth : 0);
   const showLogoInScroll = terminal.height >= MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER
     && terminal.width >= MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER;
 
@@ -2866,6 +3018,11 @@ export function OpenTuiApp({
       paddingLeft={2}
       paddingRight={2}
       gap={1}
+      onMouseDown={() => {
+        if (commandOverlay.visible) setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        if (commandPicker) setCommandPicker(null);
+        if (checkboxPicker) setCheckboxPicker(null);
+      }}
     >
       <box flexDirection="row" flexGrow={1} gap={1}>
         <box flexDirection="column" flexGrow={1} gap={1}>
@@ -2928,10 +3085,33 @@ export function OpenTuiApp({
               colors={colors}
             />
           ) : null}
-          <CommandOverlayView overlay={commandOverlay} colors={colors} availableWidth={leftColumnWidth} />
-          <CommandPickerView picker={commandPicker} colors={colors} availableWidth={leftColumnWidth} />
-          <CheckboxPickerView picker={checkboxPicker} colors={colors} availableWidth={leftColumnWidth} />
-          <PromptSelectView prompt={promptSelect} colors={colors} availableWidth={leftColumnWidth} />
+          <CommandOverlayView
+            overlay={commandOverlay}
+            colors={colors}
+            contentWidth={pickerContentWidth}
+            maxVisible={pickerMaxVisible}
+            onItemClick={clickOverlayItem}
+          />
+          <CommandPickerView
+            picker={commandPicker}
+            colors={colors}
+            contentWidth={pickerContentWidth}
+            maxVisible={pickerMaxVisible}
+            onItemClick={clickCommandPickerItem}
+          />
+          <CheckboxPickerView
+            picker={checkboxPicker}
+            colors={colors}
+            contentWidth={pickerContentWidth}
+            onItemClick={clickCheckboxPickerItem}
+          />
+          <PromptSelectView
+            prompt={promptSelect}
+            colors={colors}
+            contentWidth={pickerContentWidth}
+            maxVisible={pickerMaxVisible}
+            onItemClick={clickPromptSelectItem}
+          />
           <PromptSecretView
             prompt={promptSecret}
             inputRef={promptSecretInputRef}
@@ -3005,6 +3185,7 @@ export function OpenTuiApp({
             hint={hint}
             showContext={!sidebarVisible}
             colors={colors}
+            onModelClick={() => void handleSubmit("/model")}
           />
           <box paddingLeft={1}>
             <text fg={colors.muted} content={shortenPath(process.cwd())} wrapMode="truncate" />

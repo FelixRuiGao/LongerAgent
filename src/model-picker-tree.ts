@@ -113,7 +113,8 @@ function buildLeafLabel(node: ModelPickerTreeNode): string {
 }
 
 function buildBranchLabel(node: ModelPickerTreeNode): string {
-  return node.isCurrent ? `${node.label}  (current)` : node.label;
+  // Don't show (current) on branch nodes — individual model children have their own markers
+  return node.label;
 }
 
 export function toCommandPickerOptions(nodes: ModelPickerTreeNode[]): Array<{ label: string; value: string; children?: any[] }> {

@@ -49,7 +49,11 @@ const GLM_MODELS = [
 
 const MINIMAX_MODELS = [
   { key: "MiniMax-M2.1", id: "MiniMax-M2.1", label: "MiniMax M2.1" },
+  { key: "MiniMax-M2.1-highspeed", id: "MiniMax-M2.1-highspeed", label: "MiniMax M2.1 Highspeed" },
   { key: "MiniMax-M2.5", id: "MiniMax-M2.5", label: "MiniMax M2.5" },
+  { key: "MiniMax-M2.5-highspeed", id: "MiniMax-M2.5-highspeed", label: "MiniMax M2.5 Highspeed" },
+  { key: "MiniMax-M2.7", id: "MiniMax-M2.7", label: "MiniMax M2.7" },
+  { key: "MiniMax-M2.7-highspeed", id: "MiniMax-M2.7-highspeed", label: "MiniMax M2.7 Highspeed" },
 ] satisfies ProviderPresetModel[];
 
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
@@ -209,6 +213,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       // MiniMax
       { key: "minimax/minimax-m2.1", id: "minimax/minimax-m2.1", label: "MiniMax M2.1" },
       { key: "minimax/minimax-m2.5", id: "minimax/minimax-m2.5", label: "MiniMax M2.5" },
+      { key: "minimax/minimax-m2.7", id: "minimax/minimax-m2.7", label: "MiniMax M2.7" },
       // GLM / Zhipu (Z.ai)
       { key: "z-ai/glm-5", id: "z-ai/glm-5", label: "GLM-5" },
       { key: "z-ai/glm-5-turbo", id: "z-ai/glm-5-turbo", label: "GLM-5 Turbo" },

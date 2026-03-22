@@ -116,6 +116,33 @@ export function moveCommandPickerSelection(
   };
 }
 
+export function setCommandPickerSelection(
+  picker: CommandPickerState,
+  index: number,
+): CommandPickerState {
+  const level = getCommandPickerLevel(picker);
+  const count = level.options.length;
+  if (count === 0) return picker;
+
+  const selected = clampSelection(index, level.options);
+  const maxVisible = Math.max(1, picker.maxVisible);
+  let visibleStart = clampVisibleStart(level.visibleStart, count, maxVisible);
+  if (selected < visibleStart) {
+    visibleStart = selected;
+  } else if (selected >= visibleStart + maxVisible) {
+    visibleStart = selected - maxVisible + 1;
+  }
+  visibleStart = clampVisibleStart(visibleStart, count, maxVisible);
+
+  return {
+    ...picker,
+    stack: [
+      ...picker.stack.slice(0, -1),
+      { ...level, selected, visibleStart },
+    ],
+  };
+}
+
 export function exitCommandPickerLevel(picker: CommandPickerState): CommandPickerState | null {
   if (picker.stack.length <= 1) return null;
   return {

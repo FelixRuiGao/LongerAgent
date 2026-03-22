@@ -319,6 +319,7 @@ export function createToolResult(
     isError: boolean;
     contextId?: string;
     toolMetadata?: Record<string, unknown>;
+    execStartMs?: number;
     previewText?: string;
     /** When true, TUI renders the preview in dim/gray style. */
     previewDim?: boolean;
@@ -333,6 +334,7 @@ export function createToolResult(
   if (opts.toolMetadata && Object.keys(opts.toolMetadata).length > 0) {
     meta.toolMetadata = opts.toolMetadata;
   }
+  if (opts.execStartMs !== undefined) meta.execStartMs = opts.execStartMs;
   if (opts.previewDim) meta.tuiDim = true;
   return baseEntry(id, "tool_result", turnIndex, {
     roundIndex,

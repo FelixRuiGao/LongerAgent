@@ -112,6 +112,26 @@ export function moveCheckboxSelection(
   };
 }
 
+export function setCheckboxPickerSelection(
+  picker: CheckboxPickerState,
+  index: number,
+): CheckboxPickerState {
+  const count = picker.items.length;
+  if (count === 0) return picker;
+
+  const selected = clampSelection(index, count);
+  const maxVisible = Math.max(1, picker.maxVisible);
+  let visibleStart = clampVisibleStart(picker.visibleStart, count, maxVisible);
+  if (selected < visibleStart) {
+    visibleStart = selected;
+  } else if (selected >= visibleStart + maxVisible) {
+    visibleStart = selected - maxVisible + 1;
+  }
+  visibleStart = clampVisibleStart(visibleStart, count, maxVisible);
+
+  return { ...picker, selected, visibleStart };
+}
+
 export function toggleCheckboxItem(
   picker: CheckboxPickerState,
 ): CheckboxPickerState {

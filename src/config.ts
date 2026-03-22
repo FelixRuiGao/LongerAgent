@@ -93,13 +93,17 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
   "glm-4.7-flash": 200_000,
   // MiniMax
   "MiniMax-M2.1": 200_000,
+  "MiniMax-M2.1-highspeed": 200_000,
   "MiniMax-M2.5": 204_800,
   "MiniMax-M2.5-highspeed": 204_800,
+  "MiniMax-M2.7": 204_800,
+  "MiniMax-M2.7-highspeed": 204_800,
   "MiniMax-M1-40k": 1_000_000,
   "MiniMax-M1-80k": 1_000_000,
   // MiniMax — lowercase aliases for OpenRouter (minimax/minimax-m2.5 → minimax-m2.5)
   "minimax-m2.1": 200_000,
   "minimax-m2.5": 204_800,
+  "minimax-m2.7": 204_800,
   "minimax-m1": 1_000_000,
 };
 
@@ -128,10 +132,12 @@ export const KNOWN_THINKING_MODELS: Set<string> = new Set([
   // GLM
   "glm-5", "glm-5-turbo", "glm-4.7", "glm-4.7-flash",
   // MiniMax
-  "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.1",
+  "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
+  "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
+  "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
   "MiniMax-M1-40k", "MiniMax-M1-80k",
   // MiniMax — lowercase aliases for OpenRouter
-  "minimax-m2.5", "minimax-m2.1", "minimax-m1",
+  "minimax-m2.1", "minimax-m2.5", "minimax-m2.7", "minimax-m1",
 ]);
 
 export const KNOWN_NO_WEB_SEARCH_MODELS: Set<string> = new Set([
@@ -174,13 +180,17 @@ export const KNOWN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "glm-4.7-flash": 128_000,
   // MiniMax
   "MiniMax-M2.1": 8_192,
+  "MiniMax-M2.1-highspeed": 8_192,
   "MiniMax-M2.5": 196_608,
   "MiniMax-M2.5-highspeed": 196_608,
+  "MiniMax-M2.7": 131_072,
+  "MiniMax-M2.7-highspeed": 131_072,
   "MiniMax-M1-40k": 40_000,
   "MiniMax-M1-80k": 80_000,
   // MiniMax — lowercase aliases for OpenRouter
   "minimax-m2.1": 8_192,
   "minimax-m2.5": 196_608,
+  "minimax-m2.7": 131_072,
   "minimax-m1": 80_000,
 };
 
@@ -217,10 +227,12 @@ export const KNOWN_THINKING_LEVELS: Record<string, string[]> = {
   // Kimi
   "kimi-k2.5": ["off", "on"], "kimi-k2-thinking": ["off", "on"],
   // MiniMax (not configurable)
+  "MiniMax-M2.1": ["on"], "MiniMax-M2.1-highspeed": ["on"],
   "MiniMax-M2.5": ["on"], "MiniMax-M2.5-highspeed": ["on"],
-  "MiniMax-M2.1": ["on"], "MiniMax-M1-40k": ["on"], "MiniMax-M1-80k": ["on"],
+  "MiniMax-M2.7": ["on"], "MiniMax-M2.7-highspeed": ["on"],
+  "MiniMax-M1-40k": ["on"], "MiniMax-M1-80k": ["on"],
   // MiniMax — lowercase aliases for OpenRouter
-  "minimax-m2.5": ["on"], "minimax-m2.1": ["on"], "minimax-m1": ["on"],
+  "minimax-m2.1": ["on"], "minimax-m2.5": ["on"], "minimax-m2.7": ["on"], "minimax-m1": ["on"],
 };
 
 /** Return available thinking levels for a model, or empty array if not a thinking model. */

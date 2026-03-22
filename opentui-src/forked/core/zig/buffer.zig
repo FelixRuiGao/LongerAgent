@@ -1224,6 +1224,11 @@ pub const OptimizedBuffer = struct {
         const virtual_lines = view.getVirtualLines();
         if (virtual_lines.len == 0) return;
 
+        // [DEBUG:CRASH-DIAG] Log only on suspicious coords — remove after crash is resolved (see Docs/DEBUG-drawTextBuffer.md)
+        if (x < -1000 or y < -1000 or x > 10000 or y > 10000) {
+            logger.warn("[drawTextBufferInternal] suspicious coords: x={d} y={d} vlines={d} buf=({d}x{d})", .{ x, y, virtual_lines.len, self.width, self.height });
+        }
+
         const firstVisibleLine: u32 = if (y < 0) @intCast(-y) else 0;
         const bufferBottomY = self.height;
         const lastPossibleLine = if (y >= @as(i32, @intCast(bufferBottomY)))
@@ -1305,7 +1310,8 @@ pub const OptimizedBuffer = struct {
 
                 if (currentX >= @as(i32, @intCast(self.width))) {
                     globalCharPos += vchunk.width;
-                    currentX += @intCast(vchunk.width);
+                    // Use saturating add to prevent i32 overflow panic
+                    currentX = currentX +| @as(i32, @intCast(@min(vchunk.width, @as(u32, std.math.maxInt(i32)))));
                     continue;
                 }
                 const col_end = vchunk.grapheme_start + vchunk.width;
@@ -1513,19 +1519,32 @@ pub const OptimizedBuffer = struct {
                         drawBg = temp;
                     }
 
+                    // Guard: skip rendering if coordinates are negative (prevents @intCast panic)
+                    // [DEBUG:CRASH-DIAG] Log when guard triggers — remove after crash is resolved (see Docs/DEBUG-drawTextBuffer.md)
+                    if (currentX < 0 or currentY < 0) {
+                        logger.warn("[drawTextBufferInternal] negative coord guard: currentX={d} currentY={d} g_width={d} col={d} slice_idx={d}", .{ currentX, currentY, g_width, col, slice_idx });
+                        globalCharPos += g_width;
+                        currentX += @as(i32, @intCast(g_width));
+                        column_in_line += g_width;
+                        col += g_width;
+                        continue;
+                    }
+
                     if (grapheme_bytes.len == 1 and grapheme_bytes[0] == '\t') {
                         const tab_indicator = view.getTabIndicator();
                         const tab_indicator_color = view.getTabIndicatorColor();
 
                         var tab_col: u32 = 0;
                         while (tab_col < g_width) : (tab_col += 1) {
-                            if (currentX + @as(i32, @intCast(tab_col)) >= @as(i32, @intCast(self.width))) break;
+                            const tabX = currentX + @as(i32, @intCast(tab_col));
+                            if (tabX < 0) continue;
+                            if (tabX >= @as(i32, @intCast(self.width))) break;
 
                             const char = if (tab_col == 0 and tab_indicator != null) tab_indicator.? else DEFAULT_SPACE_CHAR;
                             const fg = if (tab_col == 0 and tab_indicator_color != null) tab_indicator_color.? else drawFg;
 
                             try self.setCellWithAlphaBlending(
-                                @intCast(currentX + @as(i32, @intCast(tab_col))),
+                                @intCast(tabX),
                                 @intCast(currentY),
                                 char,
                                 fg,
