@@ -350,6 +350,32 @@ describe("Textarea - Scroll Tests", () => {
       editor.destroy()
     })
 
+    it("should coalesce rapid wheel bursts until the next render", async () => {
+      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
+        initialValue: Array.from({ length: 50 }, (_, i) => `Line ${i}`).join("\n"),
+        width: 40,
+        height: 10,
+        selectable: true,
+      })
+
+      editor.editBuffer.gotoLine(0)
+      await renderOnce()
+
+      for (let i = 0; i < 5; i++) {
+        await currentMouse.scroll(editor.x + 5, editor.y + 5, "down")
+      }
+
+      const viewportBefore = editor.editorView.getViewport()
+      expect(viewportBefore.offsetY).toBe(0)
+
+      await renderOnce()
+
+      const viewportAfter = editor.editorView.getViewport()
+      expect(viewportAfter.offsetY).toBe(5)
+
+      editor.destroy()
+    })
+
     it("should scroll up on mouse wheel up", async () => {
       const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
         initialValue: Array.from({ length: 50 }, (_, i) => `Line ${i}`).join("\n"),

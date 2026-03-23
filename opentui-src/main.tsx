@@ -1,4 +1,12 @@
 import { ensureOpenTuiWorkerPatch } from "./ensure-opentui-worker-patch.js";
+import {
+  getLongerAgentAssistantRenderer,
+  getLongerAgentOpenTuiDiagPath,
+  isLongerAgentMarkdownPatchDisabled,
+  isLongerAgentOpenTuiDiagEnabled,
+  resetLongerAgentOpenTuiDiagLog,
+  writeLongerAgentOpenTuiDiag,
+} from "./forked/core/lib/diagnostic.js";
 
 interface ParsedArgs {
   templates?: string;
@@ -6,6 +14,17 @@ interface ParsedArgs {
 }
 
 const SESSION_CLOSE_TIMEOUT_MS = 150;
+
+function resolveRendererThreadSetting(): boolean {
+  const override = process.env.LONGERAGENT_OPENTUI_USE_THREAD?.trim().toLowerCase();
+  if (override === "1" || override === "true") return true;
+  if (override === "0" || override === "false") return false;
+
+  // Native render threading has been unstable on macOS in LongerAgent's
+  // high-frequency streaming UI. Prefer the single-threaded renderer there
+  // unless the user explicitly opts back in.
+  return process.platform !== "darwin";
+}
 
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = { verbose: false };
@@ -36,7 +55,22 @@ async function main(): Promise<void> {
 
   process.env.OPENTUI_FORCE_EXPLICIT_WIDTH = "false";
   const args = parseArgs(process.argv.slice(2));
+  if (isLongerAgentOpenTuiDiagEnabled()) {
+    resetLongerAgentOpenTuiDiagLog({
+      cwd: process.cwd(),
+      diagPath: getLongerAgentOpenTuiDiagPath(),
+      platform: process.platform,
+      assistantRenderer: getLongerAgentAssistantRenderer(),
+      markdownPatchDisabled: isLongerAgentMarkdownPatchDisabled(),
+    });
+  }
   const runtime = await bootstrapOpenTuiRuntime(args);
+  const useThread = resolveRendererThreadSetting();
+  writeLongerAgentOpenTuiDiag("main.bootstrap", {
+    verbose: args.verbose,
+    templates: args.templates ?? null,
+    useThread,
+  });
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     useKittyKeyboard: {},
@@ -44,6 +78,7 @@ async function main(): Promise<void> {
     openConsoleOnError: false,
     useConsole: false,
     backgroundColor: "transparent",
+    useThread,
   });
 
   const root = createRoot(renderer);
@@ -68,6 +103,9 @@ async function main(): Promise<void> {
   };
 
   const handleFatal = (err: unknown) => {
+    writeLongerAgentOpenTuiDiag("main.fatal", {
+      error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+    });
     cleanupTerminalAfterFatal();
     console.error("Fatal OpenTUI error:", err);
     process.exit(1);
@@ -79,6 +117,9 @@ async function main(): Promise<void> {
   const exit = async (farewell?: string) => {
     if (exiting) return;
     exiting = true;
+    writeLongerAgentOpenTuiDiag("main.exit", {
+      farewell: farewell ?? null,
+    });
 
     // 1. Restore terminal immediately
     try {
@@ -125,6 +166,9 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
+  writeLongerAgentOpenTuiDiag("main.catch", {
+    error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+  });
   console.error("Fatal OpenTUI error:", err);
   process.exit(1);
 });

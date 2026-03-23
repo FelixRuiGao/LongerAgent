@@ -120,6 +120,8 @@ export class ScrollBoxRenderable extends BoxRenderable {
 
   private scrollAccumulatorX: number = 0
   private scrollAccumulatorY: number = 0
+  private pendingWheelDeltaX: number = 0
+  private pendingWheelDeltaY: number = 0
 
   private _autoHideMs: number = 0
   private _autoHideTimer: ReturnType<typeof setTimeout> | undefined
@@ -450,6 +452,29 @@ export class ScrollBoxRenderable extends BoxRenderable {
     this.handleAutoScroll(deltaTime)
   }
 
+  public onLifecyclePass = () => {
+    if (this.pendingWheelDeltaX === 0 && this.pendingWheelDeltaY === 0) {
+      return
+    }
+
+    this.scrollAccumulatorX += this.pendingWheelDeltaX
+    this.scrollAccumulatorY += this.pendingWheelDeltaY
+    this.pendingWheelDeltaX = 0
+    this.pendingWheelDeltaY = 0
+
+    const integerScrollX = Math.trunc(this.scrollAccumulatorX)
+    if (integerScrollX !== 0) {
+      this.scrollLeft += integerScrollX
+      this.scrollAccumulatorX -= integerScrollX
+    }
+
+    const integerScrollY = Math.trunc(this.scrollAccumulatorY)
+    if (integerScrollY !== 0) {
+      this.scrollTop += integerScrollY
+      this.scrollAccumulatorY -= integerScrollY
+    }
+  }
+
   public scrollBy(delta: number | { x: number; y: number }, unit: ScrollUnit = "absolute"): void {
     if (typeof delta === "number") {
       this.verticalScrollBar.scrollBy(delta, unit)
@@ -560,11 +585,34 @@ export class ScrollBoxRenderable extends BoxRenderable {
     return this.content.getChildren()
   }
 
+  private canConsumeScrollDirection(direction: string | undefined): boolean {
+    const maxScrollTop = Math.max(0, this.scrollHeight - this.viewport.height)
+    const maxScrollLeft = Math.max(0, this.scrollWidth - this.viewport.width)
+
+    if (direction === "up") {
+      return this.scrollTop > 0
+    }
+    if (direction === "down") {
+      return this.scrollTop < maxScrollTop
+    }
+    if (direction === "left") {
+      return this.scrollLeft > 0
+    }
+    if (direction === "right") {
+      return this.scrollLeft < maxScrollLeft
+    }
+
+    return false
+  }
+
   protected onMouseEvent(event: MouseEvent): void {
     if (event.type === "scroll") {
       let dir = event.scroll?.direction
       if (event.modifiers.shift)
         dir = dir === "up" ? "left" : dir === "down" ? "right" : dir === "right" ? "down" : "up"
+
+      const canConsume = this.canConsumeScrollDirection(dir)
+      if (!canConsume) return
 
       const baseDelta = event.scroll?.delta ?? 0
       const now = Date.now()
@@ -572,33 +620,13 @@ export class ScrollBoxRenderable extends BoxRenderable {
       const scrollAmount = baseDelta * multiplier
 
       if (dir === "up") {
-        this.scrollAccumulatorY -= scrollAmount
-        const integerScroll = Math.trunc(this.scrollAccumulatorY)
-        if (integerScroll !== 0) {
-          this.scrollTop += integerScroll
-          this.scrollAccumulatorY -= integerScroll
-        }
+        this.pendingWheelDeltaY -= scrollAmount
       } else if (dir === "down") {
-        this.scrollAccumulatorY += scrollAmount
-        const integerScroll = Math.trunc(this.scrollAccumulatorY)
-        if (integerScroll !== 0) {
-          this.scrollTop += integerScroll
-          this.scrollAccumulatorY -= integerScroll
-        }
+        this.pendingWheelDeltaY += scrollAmount
       } else if (dir === "left") {
-        this.scrollAccumulatorX -= scrollAmount
-        const integerScroll = Math.trunc(this.scrollAccumulatorX)
-        if (integerScroll !== 0) {
-          this.scrollLeft += integerScroll
-          this.scrollAccumulatorX -= integerScroll
-        }
+        this.pendingWheelDeltaX -= scrollAmount
       } else if (dir === "right") {
-        this.scrollAccumulatorX += scrollAmount
-        const integerScroll = Math.trunc(this.scrollAccumulatorX)
-        if (integerScroll !== 0) {
-          this.scrollLeft += integerScroll
-          this.scrollAccumulatorX -= integerScroll
-        }
+        this.pendingWheelDeltaX += scrollAmount
       }
 
       // Only mark as manual scroll if there's meaningful scrollable content
@@ -607,6 +635,10 @@ export class ScrollBoxRenderable extends BoxRenderable {
       if (maxScrollTop > 1 || maxScrollLeft > 1) {
         this._hasManualScroll = true
       }
+
+      event.stopPropagation()
+      event.preventDefault()
+      this.requestRender()
     }
 
     if (event.type === "drag" && event.isDragging) {

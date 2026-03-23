@@ -65,8 +65,18 @@ pub const TextChunk = struct {
         return self.width == 0;
     }
 
+    /// [DEBUG:STALE-CHUNK] Bounds guard — if this fires, a TextChunk references
+    /// bytes beyond its MemRegistry buffer (stale chunk after buffer replace/shrink).
+    /// Remove guard after root cause is identified.
     pub fn getBytes(self: *const TextChunk, mem_registry: *const MemRegistry) []const u8 {
         const mem_buf = mem_registry.get(self.mem_id) orelse return &[_]u8{};
+        if (self.byte_end > mem_buf.len or self.byte_start > mem_buf.len or self.byte_start > self.byte_end) {
+            @import("logger.zig").warn(
+                "[STALE-CHUNK] mem_id={d} byte_start={d} byte_end={d} buf_len={d} width={d} flags=0x{x:0>2}",
+                .{ self.mem_id, self.byte_start, self.byte_end, mem_buf.len, self.width, self.flags },
+            );
+            return &[_]u8{};
+        }
         return mem_buf[self.byte_start..self.byte_end];
     }
 

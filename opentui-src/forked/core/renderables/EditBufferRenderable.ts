@@ -62,6 +62,8 @@ export abstract class EditBufferRenderable extends Renderable implements LineInf
   private _autoScrollAccumulator: number = 0
   private _scrollSpeed: number = 16
   private _keyboardSelectionActive: boolean = false
+  private _pendingWheelDeltaX: number = 0
+  private _pendingWheelDeltaY: number = 0
 
   public readonly editBuffer: EditBuffer
   public readonly editorView: EditorView
@@ -358,35 +360,53 @@ export abstract class EditBufferRenderable extends Renderable implements LineInf
     }
   }
 
+  protected canConsumeScrollDirection(direction: string | undefined): boolean {
+    const viewport = this.editorView.getViewport()
+    const totalVirtualLines = this.editorView.getTotalVirtualLineCount()
+    const maxOffsetY = Math.max(0, totalVirtualLines - viewport.height)
+
+    if (direction === "up") {
+      return viewport.offsetY > 0
+    }
+    if (direction === "down") {
+      return viewport.offsetY < maxOffsetY
+    }
+    if (this._wrapMode === "none") {
+      if (direction === "left") {
+        return viewport.offsetX > 0
+      }
+      if (direction === "right") {
+        return true
+      }
+    }
+
+    return false
+  }
+
   protected handleScroll(event: any): void {
     if (!event.scroll) return
 
     const { direction, delta } = event.scroll
-    const viewport = this.editorView.getViewport()
+    const canConsume = this.canConsumeScrollDirection(direction)
+    if (!canConsume) return
 
     if (direction === "up") {
-      const newOffsetY = Math.max(0, viewport.offsetY - delta)
-      this.editorView.setViewport(viewport.offsetX, newOffsetY, viewport.width, viewport.height, true)
-      this.requestRender()
+      this._pendingWheelDeltaY -= delta
     } else if (direction === "down") {
-      const totalVirtualLines = this.editorView.getTotalVirtualLineCount()
-      const maxOffsetY = Math.max(0, totalVirtualLines - viewport.height)
-      const newOffsetY = Math.min(viewport.offsetY + delta, maxOffsetY)
-      this.editorView.setViewport(viewport.offsetX, newOffsetY, viewport.width, viewport.height, true)
-      this.requestRender()
+      this._pendingWheelDeltaY += delta
     }
 
     if (this._wrapMode === "none") {
       if (direction === "left") {
-        const newOffsetX = Math.max(0, viewport.offsetX - delta)
-        this.editorView.setViewport(newOffsetX, viewport.offsetY, viewport.width, viewport.height, true)
-        this.requestRender()
+        this._pendingWheelDeltaX -= delta
       } else if (direction === "right") {
-        const newOffsetX = viewport.offsetX + delta
-        this.editorView.setViewport(newOffsetX, viewport.offsetY, viewport.width, viewport.height, true)
-        this.requestRender()
+        this._pendingWheelDeltaX += delta
       }
     }
+
+    event.stopPropagation()
+    event.preventDefault()
+    this.requestRender()
   }
 
   protected onResize(width: number, height: number): void {
@@ -488,6 +508,31 @@ export abstract class EditBufferRenderable extends Renderable implements LineInf
 
   protected override onUpdate(deltaTime: number): void {
     super.onUpdate(deltaTime)
+
+    if (this._pendingWheelDeltaX !== 0 || this._pendingWheelDeltaY !== 0) {
+      const pendingX = this._pendingWheelDeltaX
+      const pendingY = this._pendingWheelDeltaY
+      this._pendingWheelDeltaX = 0
+      this._pendingWheelDeltaY = 0
+
+      const viewport = this.editorView.getViewport()
+      let nextOffsetX = viewport.offsetX
+      let nextOffsetY = viewport.offsetY
+
+      if (pendingY !== 0) {
+        const totalVirtualLines = this.editorView.getTotalVirtualLineCount()
+        const maxOffsetY = Math.max(0, totalVirtualLines - viewport.height)
+        nextOffsetY = Math.max(0, Math.min(viewport.offsetY + pendingY, maxOffsetY))
+      }
+
+      if (this._wrapMode === "none" && pendingX !== 0) {
+        nextOffsetX = Math.max(0, viewport.offsetX + pendingX)
+      }
+
+      if (nextOffsetX !== viewport.offsetX || nextOffsetY !== viewport.offsetY) {
+        this.editorView.setViewport(nextOffsetX, nextOffsetY, viewport.width, viewport.height, true)
+      }
+    }
 
     if (this._autoScrollVelocity !== 0 && this.hasSelection()) {
       const deltaSeconds = deltaTime / 1000

@@ -144,8 +144,8 @@ export const SUMMARIZE_CONTEXT_TOOL: ToolDef = {
 export const CHECK_STATUS_TOOL: ToolDef = {
   name: "check_status",
   description:
-    "Check for new messages, sub-agent status, and background shell status. " +
-    "Returns user messages, system notifications, sub-agent reports, and tracked shell summaries.",
+    "View sub-agent status and background shell status. " +
+    "Returns agent reports (working, completed, errored) and tracked shell summaries.",
   parameters: {
     type: "object",
     properties: {},
@@ -183,6 +183,29 @@ export const WAIT_TOOL: ToolDef = {
     required: ["seconds"],
   },
   summaryTemplate: "{agent} is waiting",
+};
+
+export const SEND_TOOL: ToolDef = {
+  name: "send",
+  description:
+    "Send a message to an interactive sub-agent or team member. " +
+    "The message is delivered asynchronously — you get a confirmation, not a reply. " +
+    "The target agent auto-activates if idle.",
+  parameters: {
+    type: "object",
+    properties: {
+      to: {
+        type: "string",
+        description: "Target agent ID.",
+      },
+      content: {
+        type: "string",
+        description: "Message content.",
+      },
+    },
+    required: ["to", "content"],
+  },
+  summaryTemplate: "{agent} sent message to {to}",
 };
 
 export const PLAN_TOOL: ToolDef = {

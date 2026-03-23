@@ -1,5 +1,6 @@
 const std = @import("std");
 const link = @import("../link.zig");
+const test_allocators = @import("test-allocators.zig");
 
 const LinkPool = link.LinkPool;
 const LinkPoolError = link.LinkPoolError;
@@ -8,6 +9,19 @@ const LinkTracker = link.LinkTracker;
 test "LinkPool - can initialize and cleanup" {
     var pool = LinkPool.init(std.testing.allocator);
     pool.deinit();
+}
+
+test "LinkPool - works with allocator that misaligns byte slices" {
+    var misaligning = test_allocators.MisalignU8Allocator.init(std.testing.allocator);
+    var pool = LinkPool.init(misaligning.allocator());
+    defer pool.deinit();
+
+    const url = "https://example.com/alignment";
+    const id = try pool.alloc(url);
+    try pool.incref(id);
+    defer pool.decref(id) catch {};
+
+    try std.testing.expectEqualSlices(u8, url, try pool.get(id));
 }
 
 test "LinkPool - alloc and get URL" {

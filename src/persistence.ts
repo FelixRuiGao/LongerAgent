@@ -531,6 +531,8 @@ export interface GlobalTuiPreferences {
   localProviders?: Record<string, LocalProviderConfig>;
   /** Context window multiplier (0.0–1.0). Effective context = contextLength × contextRatio. Default 1.0. */
   contextRatio?: number;
+  /** Whether to show the Codex usage card in the sidebar. Default true. */
+  showCodexUsage?: boolean;
 }
 
 export function createGlobalTuiPreferences(

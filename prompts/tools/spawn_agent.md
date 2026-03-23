@@ -186,7 +186,41 @@ After receiving results, extract key findings, then compress:
 - Don't continue working after spawning unless you have a truly independent task.
 - Don't act on assumptions while waiting — if your next step depends on results, wait.
 - Don't over-parallelize — each result needs attention to digest and compress.
-- Don't call `check_status` in a loop — use `wait` instead.
+### Interactive Agents
+
+Add `interactive: true` to a task spec to create a multi-turn agent that survives beyond its initial task:
+
+```yaml
+tasks:
+  - id: reviewer
+    template: explorer
+    interactive: true
+    task: |
+      Review the current state of the auth module...
+```
+
+After completing its initial task, an interactive agent enters idle state. Use `send(to="reviewer", content="...")` to send follow-up messages — the agent auto-activates for a new turn. Use `wait(agent="reviewer")` to get its response.
+
+### Agent Teams
+
+Add `team:` to the call file to create a named team. All team members are automatically interactive and get the `send` tool for cross-agent communication:
+
+```yaml
+team: research-squad
+agents:
+  - id: researcher
+    template: explorer
+    task: |
+      Explore the provider system. When done, send your findings to implementer.
+  - id: implementer
+    template: executor
+    task: |
+      Wait for researcher's findings. Implement the changes based on what you receive.
+```
+
+Team members can `send` to each other and to `"primary"`. Their turn output is auto-delivered to you (the primary agent). Communication is async — `send` returns immediately, the recipient is activated automatically.
+
+To add members to an existing team later, use the same `team:` name in a new call file.
 
 ### Patience with Sub-Agents
 

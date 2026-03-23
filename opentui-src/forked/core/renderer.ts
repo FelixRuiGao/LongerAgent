@@ -22,6 +22,12 @@ import { destroySingleton, hasSingleton, singleton } from "./lib/singleton.js"
 import { getObjectsInViewport } from "./lib/objects-in-viewport.js"
 import { KeyHandler, InternalKeyHandler } from "./lib/KeyHandler.js"
 import { env, registerEnvVar } from "./lib/env.js"
+import {
+  isLongerAgentOpenTuiDiagEnabled,
+  previewLatin1Hex,
+  previewLatin1Sequence,
+  writeLongerAgentOpenTuiDiag,
+} from "./lib/diagnostic.js"
 import { getTreeSitterClient } from "./lib/tree-sitter/index.js"
 import {
   createTerminalPalette,
@@ -427,6 +433,15 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private capturedRenderable?: Renderable
   private lastOverRenderableNum: number = 0
   private lastOverRenderable?: Renderable
+  private activeScrollTarget?: Renderable | null
+  private activeScrollGestureUntilMs: number = 0
+  private readonly scrollGestureReuseWindowMs = 48
+  private diagScrollBurstCount: number = 0
+  private diagScrollBurstStartedAtMs: number = 0
+  private diagLastAutoDumpAtMs: number = 0
+  private readonly diagScrollBurstWindowMs = 120
+  private readonly diagScrollBurstDumpThreshold = 10
+  private readonly diagScrollBurstDumpCooldownMs = 1000
 
   private currentSelection: Selection | null = null
   private selectionContainers: Renderable[] = []
@@ -477,6 +492,9 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private _debugModeEnabled: boolean = env.OTUI_DEBUG
 
   private handleError: (error: Error) => void = ((error: Error) => {
+    writeLongerAgentOpenTuiDiag("renderer.error", {
+      error: { name: error.name, message: error.message, stack: error.stack },
+    })
     console.error(error)
 
     if (this._openConsoleOnError) {
@@ -515,6 +533,9 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }).bind(this)
 
   private warningHandler: (warning: any) => void = ((warning: any) => {
+    writeLongerAgentOpenTuiDiag("renderer.warning", {
+      warning: warning instanceof Error ? { name: warning.name, message: warning.message, stack: warning.stack } : String(warning),
+    })
     console.warn(JSON.stringify(warning.message, null, 2))
   }).bind(this)
 
@@ -1089,6 +1110,11 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.stdinParser.push(data)
       this.drainStdinParser()
     } catch (error) {
+      writeLongerAgentOpenTuiDiag("stdin.parser.throw", {
+        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
+        chunkLength: data.length,
+        chunkHex: data.subarray(0, 64).toString("hex"),
+      })
       this.handleStdinParserFailure(error)
     }
   }).bind(this)
@@ -1196,6 +1222,19 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         this._keyHandler.processParsedKey(event.key)
         return
       case "mouse":
+        writeLongerAgentOpenTuiDiag("stdin.mouse", {
+          rawPreview: previewLatin1Sequence(event.raw),
+          rawHex: previewLatin1Hex(event.raw),
+          encoding: event.encoding,
+          mouse: {
+            type: event.event.type,
+            button: event.event.button,
+            x: event.event.x,
+            y: event.event.y,
+            modifiers: event.event.modifiers,
+            scroll: event.event.scroll,
+          },
+        })
         if (this._useMouse && this.processSingleMouseEvent(event.event)) {
           return
         }
@@ -1218,6 +1257,9 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }
 
   private handleStdinParserFailure(error: unknown): void {
+    writeLongerAgentOpenTuiDiag("stdin.parser.failure", {
+      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
+    })
     if (!this.hasLoggedStdinParserError) {
       this.hasLoggedStdinParserError = true
       if (process.env.NODE_ENV !== "test") {
@@ -1281,6 +1323,91 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     return event
   }
 
+  private clearScrollGesture(): void {
+    this.activeScrollTarget = undefined
+    this.activeScrollGestureUntilMs = 0
+  }
+
+  private describeRenderable(renderable: Renderable | null | undefined): Record<string, unknown> | null {
+    if (!renderable) return null
+
+    const node = renderable as Renderable & { id?: string; width?: number; height?: number }
+    return {
+      num: node.num,
+      id: node.id ?? null,
+      type: node.constructor?.name ?? "Renderable",
+      x: node.x,
+      y: node.y,
+      width: node.width ?? null,
+      height: node.height ?? null,
+      focused: node.focused ?? false,
+      destroyed: node.isDestroyed,
+    }
+  }
+
+  private maybeDumpDiagStateForScrollBurst(mouseEvent: RawMouseEvent): void {
+    if (!isLongerAgentOpenTuiDiagEnabled()) return
+    if (mouseEvent.type !== "scroll") return
+
+    const now = this.clock.now()
+    if (this.diagScrollBurstStartedAtMs === 0 || now - this.diagScrollBurstStartedAtMs > this.diagScrollBurstWindowMs) {
+      this.diagScrollBurstStartedAtMs = now
+      this.diagScrollBurstCount = 0
+    }
+
+    this.diagScrollBurstCount += 1
+
+    if (
+      this.diagScrollBurstCount < this.diagScrollBurstDumpThreshold ||
+      now - this.diagLastAutoDumpAtMs < this.diagScrollBurstDumpCooldownMs
+    ) {
+      return
+    }
+
+    this.diagLastAutoDumpAtMs = now
+    const timestamp = Date.now()
+    this.dumpHitGrid()
+    this.dumpBuffers(timestamp)
+    writeLongerAgentOpenTuiDiag("renderer.diag_dump", {
+      reason: "scroll-burst",
+      burstCount: this.diagScrollBurstCount,
+      clockNow: now,
+      bufferTimestamp: timestamp,
+      cwd: process.cwd(),
+      expectedHitGridFile: `hitgrid_${Math.floor(Date.now() / 1000)}.txt`,
+      expectedBufferPrefix: `buffer_dump/*_${timestamp}.txt`,
+    })
+  }
+
+  private resolveScrollTarget(mouseEvent: RawMouseEvent): Renderable | null {
+    const now = this.clock.now()
+    const cachedTarget = this.activeScrollTarget
+
+    if (cachedTarget && !cachedTarget.isDestroyed && now <= this.activeScrollGestureUntilMs) {
+      this.activeScrollGestureUntilMs = now + this.scrollGestureReuseWindowMs
+      return cachedTarget
+    }
+
+    const maybeRenderableId = this.hitTest(mouseEvent.x, mouseEvent.y)
+    const maybeRenderable = Renderable.renderablesByNumber.get(maybeRenderableId)
+    const fallbackTarget =
+      this._currentFocusedRenderable &&
+      !this._currentFocusedRenderable.isDestroyed &&
+      this._currentFocusedRenderable.focused
+        ? this._currentFocusedRenderable
+        : null
+    const scrollTarget = maybeRenderable ?? fallbackTarget
+
+    if (scrollTarget) {
+      this.activeScrollTarget = scrollTarget
+      this.activeScrollGestureUntilMs = now + this.scrollGestureReuseWindowMs
+      return scrollTarget
+    }
+
+    this.clearScrollGesture()
+    return null
+  }
+
   private processSingleMouseEvent(mouseEvent: RawMouseEvent): boolean {
     if (this._splitHeight > 0) {
       if (mouseEvent.y < this.renderOffset) {
@@ -1309,15 +1436,15 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     }
 
     if (mouseEvent.type === "scroll") {
-      const maybeRenderableId = this.hitTest(mouseEvent.x, mouseEvent.y)
-      const maybeRenderable = Renderable.renderablesByNumber.get(maybeRenderableId)
-      const fallbackTarget =
-        this._currentFocusedRenderable &&
-        !this._currentFocusedRenderable.isDestroyed &&
-        this._currentFocusedRenderable.focused
-          ? this._currentFocusedRenderable
-          : null
-      const scrollTarget = maybeRenderable ?? fallbackTarget
+      this.maybeDumpDiagStateForScrollBurst(mouseEvent)
+      const scrollTarget = this.resolveScrollTarget(mouseEvent)
+      writeLongerAgentOpenTuiDiag("renderer.mouse.scroll", {
+        pointer: { x: mouseEvent.x, y: mouseEvent.y },
+        scroll: mouseEvent.scroll ?? null,
+        cachedScrollTarget: this.describeRenderable(this.activeScrollTarget ?? null),
+        resolvedScrollTarget: this.describeRenderable(scrollTarget),
+        focusedRenderable: this.describeRenderable(this._currentFocusedRenderable),
+      })
 
       if (scrollTarget) {
         const event = new MouseEvent(scrollTarget, mouseEvent)
@@ -1326,10 +1453,22 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       return true
     }
 
+    this.clearScrollGesture()
+
     const maybeRenderableId = this.hitTest(mouseEvent.x, mouseEvent.y)
     const sameElement = maybeRenderableId === this.lastOverRenderableNum
     this.lastOverRenderableNum = maybeRenderableId
     const maybeRenderable = Renderable.renderablesByNumber.get(maybeRenderableId)
+    if (mouseEvent.type !== "move" || !sameElement) {
+      writeLongerAgentOpenTuiDiag("renderer.mouse.pointer", {
+        type: mouseEvent.type,
+        pointer: { x: mouseEvent.x, y: mouseEvent.y },
+        hitId: maybeRenderableId,
+        sameElement,
+        hitRenderable: this.describeRenderable(maybeRenderable),
+        capturedRenderable: this.describeRenderable(this.capturedRenderable),
+      })
+    }
 
     if (
       mouseEvent.type === "down" &&
@@ -1464,6 +1603,12 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.lastOverRenderableNum = hitId
       return
     }
+    writeLongerAgentOpenTuiDiag("renderer.hover.recheck", {
+      pointer: { x: this._latestPointer.x, y: this._latestPointer.y },
+      previous: this.describeRenderable(lastOver),
+      next: this.describeRenderable(hitRenderable),
+      hitId,
+    })
 
     const baseEvent: RawMouseEvent = {
       type: "move",
@@ -2037,6 +2182,10 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
         // Check if hit grid changed and recheck hover state if needed
         if (this._useMouse && this.lib.getHitGridDirty(this.rendererPtr)) {
+          writeLongerAgentOpenTuiDiag("renderer.hitgrid.dirty", {
+            pointer: this._hasPointer ? { x: this._latestPointer.x, y: this._latestPointer.y } : null,
+            renderablesTracked: Renderable.renderablesByNumber.size,
+          })
           this.recheckHoverState()
         }
 

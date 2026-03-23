@@ -35,7 +35,7 @@ function makeSessionLike(projectRoot: string): any {
   s._currentPhasePlan = undefined;
   s._turnInFlight = null;
   s._turnRelease = null;
-  s._messageQueue = [];
+  s._inbox = [];
   s._activeAgents = new Map();
   s._log = [];
   s._idAllocator = new LogIdAllocator();

@@ -1919,6 +1919,77 @@ describe("stdin routing", () => {
     }
   })
 
+  test("scroll burst reuses hit-test target within one gesture", async () => {
+    const { renderer, renderOnce, clock } = await createRoutingRenderer()
+    try {
+      const target = new MouseTarget(renderer, {
+        id: "target-scroll-burst-cache",
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: renderer.width,
+        height: renderer.height,
+      })
+      renderer.root.add(target)
+      await renderOnce()
+
+      let scrollCount = 0
+      const originalHitTest = renderer.hitTest.bind(renderer)
+      let hitTestCount = 0
+      renderer.hitTest = ((x: number, y: number) => {
+        hitTestCount += 1
+        return originalHitTest(x, y)
+      }) as typeof renderer.hitTest
+
+      target.onMouseScroll = () => {
+        scrollCount += 1
+      }
+
+      renderer.stdin.emit("data", Buffer.from("\x1b[<64;10;5M"))
+      renderer.stdin.emit("data", Buffer.from("\x1b[<64;10;5M"))
+      renderer.stdin.emit("data", Buffer.from("\x1b[<65;10;5M"))
+      advanceClock(clock)
+
+      expect(scrollCount).toBe(3)
+      expect(hitTestCount).toBe(1)
+    } finally {
+      renderer.destroy()
+    }
+  })
+
+  test("scroll burst cache expires after inactivity", async () => {
+    const { renderer, renderOnce, clock } = await createRoutingRenderer()
+    try {
+      const target = new MouseTarget(renderer, {
+        id: "target-scroll-burst-expiry",
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: renderer.width,
+        height: renderer.height,
+      })
+      renderer.root.add(target)
+      await renderOnce()
+
+      const originalHitTest = renderer.hitTest.bind(renderer)
+      let hitTestCount = 0
+      renderer.hitTest = ((x: number, y: number) => {
+        hitTestCount += 1
+        return originalHitTest(x, y)
+      }) as typeof renderer.hitTest
+
+      renderer.stdin.emit("data", Buffer.from("\x1b[<64;10;5M"))
+      advanceClock(clock)
+      advanceClock(clock, 100)
+      renderer.stdin.emit("data", Buffer.from("\x1b[<64;10;5M"))
+      advanceClock(clock)
+
+      expect(hitTestCount).toBe(2)
+    } finally {
+      renderer.destroy()
+    }
+  })
+
   test("mouse state resets when mouse mode toggles", async () => {
     const { renderer, renderOnce, clock } = await createRoutingRenderer()
     try {

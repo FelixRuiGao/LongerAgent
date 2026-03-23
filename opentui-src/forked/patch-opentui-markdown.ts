@@ -9,6 +9,10 @@ import {
 import type { ColorInput, TextChunk } from "@opentui/core";
 import type { MarkedToken, Tokens } from "marked";
 import { execSync } from "node:child_process";
+import {
+  isLongerAgentMarkdownPatchDisabled,
+  writeLongerAgentOpenTuiDiag,
+} from "./core/lib/diagnostic.js";
 
 const PATCH_FLAG = Symbol.for("longeragent.opentui.markdown.patch.v4");
 const INNER_TEXT = Symbol.for("longeragent.codeblock.text");
@@ -194,8 +198,17 @@ type WrappedBox = InstanceType<typeof BoxRenderable> & {
 
 const proto = MarkdownRenderable.prototype as MarkdownRenderablePatched & Record<PropertyKey, unknown>;
 
-if (!proto[PATCH_FLAG]) {
+if (isLongerAgentMarkdownPatchDisabled()) {
+  writeLongerAgentOpenTuiDiag("markdown.patch", {
+    applied: false,
+    reason: "disabled-by-env",
+  });
+} else if (!proto[PATCH_FLAG]) {
   proto[PATCH_FLAG] = true;
+  writeLongerAgentOpenTuiDiag("markdown.patch", {
+    applied: true,
+    version: "v4",
+  });
 
   proto.getInterBlockMargin = function getInterBlockMarginPatched(): number {
     return 0;

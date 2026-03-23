@@ -631,8 +631,8 @@ describe("session storage lifecycle", () => {
       const killShell = vi.fn();
       let woke = false;
 
-      (session as any)._messageQueue = [
-        { source: "sub-agent", content: "queued result", timestamp: Date.now() },
+      (session as any)._inbox = [
+        { from: "sub-agent", to: "primary", content: "queued result", timestamp: Date.now() },
       ];
       (session as any)._waitResolver = () => {
         woke = true;
@@ -690,7 +690,7 @@ describe("session storage lifecycle", () => {
       expect((session as any)._activeAgents.size).toBe(0);
       expect(killShell).toHaveBeenCalledWith("SIGTERM");
       expect((session as any)._activeShells.size).toBe(0);
-      expect((session as any)._messageQueue).toEqual([]);
+      expect((session as any)._inbox).toEqual([]);
       expect(woke).toBe(true);
       expect((session as any)._waitResolver).toBeNull();
       expect((session as any)._activeAsk).toBeNull();
@@ -717,13 +717,13 @@ describe("session storage lifecycle", () => {
       const session = makeSession(projectRoot, store);
 
       (session as any)._compactInProgress = true;
-      (session as any)._messageQueue = [
-        { source: "system", content: "queued", timestamp: Date.now() },
+      (session as any)._inbox = [
+        { from: "system", to: "primary", content: "queued", timestamp: Date.now() },
       ];
 
       const decision = session.requestTurnInterrupt();
       expect(decision).toEqual({ accepted: false, reason: "compact_in_progress" });
-      expect((session as any)._messageQueue.length).toBe(1);
+      expect((session as any)._inbox.length).toBe(1);
       expect((session as any)._interruptSnapshot).toBeNull();
     } finally {
       rmSync(baseDir, { recursive: true, force: true });

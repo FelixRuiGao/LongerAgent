@@ -49,6 +49,7 @@ import {
   SUMMARIZE_CONTEXT_TOOL,
   ASK_TOOL,
   PLAN_TOOL,
+  SEND_TOOL,
 } from "./tools/comm.js";
 import {
   BASH_BACKGROUND_TOOL,
@@ -239,8 +240,19 @@ const SYSTEM_PREFIXES = [
 
 const COMM_TOOL_NAMES = new Set([
   "spawn_agent", "kill_agent", "check_status", "wait", "show_context", "summarize_context", "ask", "skill", "reload_skills",
-  "bash_background", "bash_output", "kill_shell", "plan",
+  "bash_background", "bash_output", "kill_shell", "plan", "send",
 ]);
+
+// ------------------------------------------------------------------
+// AgentMessage — message envelope for push delivery & future routing
+// ------------------------------------------------------------------
+
+interface AgentMessage {
+  from: string;        // "user" | "system" | agent name
+  to: string;          // "primary" (future: agent name for team routing)
+  content: string;
+  timestamp: number;
+}
 
 // ------------------------------------------------------------------
 // AgentEntry — tracked sub-agent state
@@ -260,6 +272,25 @@ interface AgentEntry {
   phase: "thinking" | "generating" | "tool_calling" | "idle";
   recentActivity: string[];   // ring buffer, max 3, human-readable summaries
   toolCallCount: number;
+
+  // --- Persistent agent fields (Phase 2+) ---
+  interactive: boolean;          // one-shot (false) vs multi-turn (true)
+  teamId: string | null;         // team membership (Phase 4)
+  log: LogEntry[];               // persistent conversation log
+  idAllocator: LogIdAllocator;   // persistent ID allocator
+  persistDir: string;            // artifacts/agents/<id>/
+  agent: Agent;                  // Agent instance (provider + tools)
+  systemPrompt: string;          // initial system prompt (for team roster)
+  task: string;                  // initial task description
+  inbox: AgentMessage[];         // per-agent inbox (Phase 3)
+  agentState: "idle" | "working"; // per-agent state machine (Phase 3)
+  turnBudget: number;            // auto-activation turn budget (Phase 3)
+  turnBudgetRemaining: number;   // remaining auto-activation budget
+}
+
+interface AgentTeam {
+  id: string;
+  members: Set<string>;
 }
 
 interface SubAgentResult {
@@ -417,6 +448,7 @@ export class Session {
 
   // Sub-agents
   private _activeAgents = new Map<string, AgentEntry>();
+  private _teams = new Map<string, AgentTeam>();
   private _subAgentCounter = 0;
   private _activeShells = new Map<string, BackgroundShellEntry>();
   private _shellCounter = 0;
@@ -432,8 +464,9 @@ export class Session {
   // Agent runtime state (for message delivery mode selection)
   private _agentState: "working" | "idle" | "waiting" = "idle";
 
-  // Message queue (check_status pull model)
-  private _messageQueue: Array<{ source: string; content: string; timestamp: number }> = [];
+  // Inbox: holds messages for push delivery into tool results.
+  // AgentMessage envelope includes from/to for future agent-to-agent routing.
+  private _inbox: AgentMessage[] = [];
   private _currentTurnSignal: AbortSignal | null = null;
   private _currentTurnAbortController: AbortController | null = null;
   private _interruptSnapshot: InterruptSnapshot | null = null;
@@ -699,34 +732,35 @@ export class Session {
    * Unified message delivery entry point.
    * Routes based on _agentState:
    *   idle    → direct injection into _log
-   *   working → queue (delivered via tool_result notification or activation boundary drain)
-   *   waiting → queue + wake wait
+   *   working → inbox (delivered via tool_result push or activation boundary drain)
+   *   waiting → inbox + wake wait
    */
-  private _deliverMessage(source: "user" | "system" | "sub-agent", content: string): void {
+  private _deliverMessage(msg: AgentMessage): void {
     if (this._agentState === "idle") {
-      this._injectMessageDirect(source, content);
+      this._injectMessageDirect(msg);
       return;
     }
     // working / waiting → enqueue
-    this._messageQueue.push({ source, content, timestamp: Date.now() });
+    this._inbox.push(msg);
     if (this._agentState === "waiting") {
       this._wakeWait();
     }
   }
 
   /**
-   * Public wrapper for TUI to deliver messages (replaces enqueueUserMessage).
+   * Public wrapper for TUI / GUI to deliver messages.
+   * Preserves the original (source, content) signature for external callers.
    */
   deliverMessage(source: "user" | "system" | "sub-agent", content: string): void {
-    this._deliverMessage(source, content);
+    this._deliverMessage({ from: source, to: "primary", content, timestamp: Date.now() });
   }
 
   /**
    * Direct injection (idle-state safety net).
    */
-  private _injectMessageDirect(source: string, content: string): void {
+  private _injectMessageDirect(msg: AgentMessage): void {
     const ctxId = this._allocateContextId();
-    const formatted = `[Message from ${source}]\n${content}`;
+    const formatted = `[Message from ${msg.from}]\n${msg.content}`;
     // v2 log (source of truth)
     this._appendEntry(
       createUserMessageEntry(
@@ -741,10 +775,10 @@ export class Session {
   }
 
   /**
-   * Check whether the message queue has pending messages.
+   * Check whether the inbox has pending messages.
    */
-  private _hasQueuedMessages(): boolean {
-    return this._messageQueue.length > 0;
+  private _hasInboxMessages(): boolean {
+    return this._inbox.length > 0;
   }
 
   /**
@@ -824,25 +858,25 @@ export class Session {
    */
   private _buildDeliveryContent(opts?: { drainQueue?: boolean }): string {
     const drainQueue = opts?.drainQueue ?? true;
-    const queued = drainQueue ? this._messageQueue : [...this._messageQueue];
-    // 1. Drain queue, group by source
-    const bySource: Record<string, string[]> = {};
+    const queued = drainQueue ? this._inbox : [...this._inbox];
+    // 1. Drain inbox, group by sender
+    const byFrom: Record<string, string[]> = {};
     for (const msg of queued) {
-      if (!bySource[msg.source]) bySource[msg.source] = [];
-      bySource[msg.source].push(msg.content);
+      if (!byFrom[msg.from]) byFrom[msg.from] = [];
+      byFrom[msg.from].push(msg.content);
     }
     if (drainQueue) {
-      this._messageQueue = [];
+      this._inbox = [];
     }
 
     // 2. Build three-section format
     const sections: string[] = [];
 
     sections.push("# User");
-    sections.push(bySource["user"]?.join("\n\n") ?? "No new message.");
+    sections.push(byFrom["user"]?.join("\n\n") ?? "No new message.");
 
     sections.push("# System");
-    sections.push(bySource["system"]?.join("\n\n") ?? "No new message.");
+    sections.push(byFrom["system"]?.join("\n\n") ?? "No new message.");
 
     // 3. Sub-Agent section: always use live report when agents exist
     sections.push("# Sub-Agent");
@@ -880,32 +914,43 @@ export class Session {
   }
 
   /**
-   * Build a notification summary line for pending messages (counts only, no content).
+   * Build notification content for push delivery into tool results.
+   * Drains the inbox and marks agent results as delivered.
    * Returns null if nothing pending.
    */
-  private _buildNotificationSummary(): string | null {
-    const hasMsgs = this._messageQueue.length > 0;
+  private _buildNotificationContent(): string | null {
+    const hasMsgs = this._inbox.length > 0;
     const hasAgentResults = this._hasUndeliveredAgentResults();
     if (!hasMsgs && !hasAgentResults) return null;
 
-    const parts: string[] = [];
-    if (hasMsgs) {
-      const counts: Record<string, number> = {};
-      for (const msg of this._messageQueue) {
-        counts[msg.source] = (counts[msg.source] || 0) + 1;
+    const sections: string[] = [];
+
+    // 1. Drain inbox, group by sender
+    if (this._inbox.length > 0) {
+      const byFrom: Record<string, string[]> = {};
+      for (const msg of this._inbox) {
+        (byFrom[msg.from] ??= []).push(msg.content);
       }
-      for (const [src, n] of Object.entries(counts)) {
-        parts.push(`${n} new message${n > 1 ? "s" : ""} from ${src}`);
+      this._inbox = [];
+      for (const [from, msgs] of Object.entries(byFrom)) {
+        sections.push(`[Message from ${from}]\n${msgs.join("\n\n")}`);
       }
     }
+
+    // 2. Consume agent results (sweep + mark delivered)
     if (hasAgentResults) {
-      let count = 0;
-      for (const entry of this._activeAgents.values()) {
-        if ((entry.status === "finished" || entry.status === "error") && !entry.delivered) count++;
+      this._sweepSettledAgents();
+      for (const [name, entry] of this._activeAgents) {
+        if ((entry.status === "finished" || entry.status === "error") && !entry.delivered) {
+          sections.push(this._formatAgentOutput({
+            name, status: entry.status, text: entry.resultText, elapsed: entry.elapsed,
+          }));
+          entry.delivered = true;
+        }
       }
-      parts.push(`${count} agent result${count > 1 ? "s" : ""} ready`);
     }
-    return `\n\n[Message Notification]\n${parts.join(", ")}. Use \`check_status\` to read.`;
+
+    return `\n\n[Incoming Messages]\n${sections.join("\n\n---\n\n")}`;
   }
 
   // Wait wake-up signal
@@ -1023,7 +1068,7 @@ export class Session {
       }
     }
     const hadActiveShells = this._hasRunningShells();
-    const hadUnconsumed = this._hasQueuedMessages() || this._hasUndeliveredAgentResults();
+    const hadUnconsumed = this._hasInboxMessages() || this._hasUndeliveredAgentResults();
 
     this._interruptSnapshot = {
       turnIndex: this._turnCount,
@@ -1038,7 +1083,7 @@ export class Session {
 
     this._activeAsk = null;
     this._pendingTurnState = null;
-    this._messageQueue = [];
+    this._inbox = [];
     this._wakeWait();
     if (this._activeAgents.size > 0) {
       this._forceKillAllAgents();
@@ -1063,7 +1108,7 @@ export class Session {
     this._compactInProgress = false;
     this._hintState = "none";
     this._agentState = "idle";
-    this._messageQueue = [];
+    this._inbox = [];
     this._waitResolver = null;
     this._interruptSnapshot = null;
     this._activeAsk = null;
@@ -1295,6 +1340,7 @@ export class Session {
       plan: (args) => this._execPlan(args),
       skill: (args) => this._execSkill(args),
       reload_skills: () => this._execReloadSkills(),
+      send: (args) => this._execSend(args),
       $web_search: (args) => toolBuiltinWebSearchPassthrough(args as Record<string, unknown>),
     };
   }
@@ -1305,6 +1351,7 @@ export class Session {
       SPAWN_AGENT_TOOL, KILL_AGENT_TOOL, CHECK_STATUS_TOOL, WAIT_TOOL,
       SHOW_CONTEXT_TOOL, SUMMARIZE_CONTEXT_TOOL,
       ASK_TOOL, PLAN_TOOL,
+      // SEND_TOOL is injected dynamically when interactive agents exist
     ]) {
       if (!existing.has(toolDef.name)) {
         this.primaryAgent.tools.push(toolDef);
@@ -1319,6 +1366,23 @@ export class Session {
   /** Read-only access to loaded skills (for command registration). */
   get skills(): ReadonlyMap<string, SkillMeta> {
     return this._skills;
+  }
+
+  // ==================================================================
+  // Sub-agent introspection (for TUI/GUI)
+  // ==================================================================
+
+  getAgentLog(agentId: string): readonly LogEntry[] | null {
+    const entry = this._activeAgents.get(agentId);
+    return entry ? entry.log : null;
+  }
+
+  getActiveAgentIds(): Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> {
+    const result: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> = [];
+    for (const [id, entry] of this._activeAgents) {
+      result.push({ id, status: entry.agentState === "working" ? "working" : entry.status, interactive: entry.interactive, teamId: entry.teamId });
+    }
+    return result;
   }
 
   get mcpManager(): MCPClientManager | undefined {
@@ -1680,7 +1744,7 @@ export class Session {
     if (this._hasRunningShells()) {
       return `Cannot run ${command} while background shells are still running.`;
     }
-    if (this._hasQueuedMessages()) {
+    if (this._hasInboxMessages()) {
       return `Cannot run ${command} while queued messages are waiting to be delivered.`;
     }
     if (this._hasUndeliveredAgentResults()) {
@@ -2124,7 +2188,7 @@ export class Session {
         this.onSaveRequest?.();
 
         if (result.compactNeeded && result.compactScenario) {
-          if (this._hasQueuedMessages() || this._hasUndeliveredAgentResults() || this._hasActiveAgents()) {
+          if (this._hasInboxMessages() || this._hasUndeliveredAgentResults() || this._hasActiveAgents()) {
             this._injectPendingMessages();
           }
           const logLenBefore = this._log.length;
@@ -2166,7 +2230,7 @@ export class Session {
         }
 
         // Wait for active agents (if any and no queued messages yet)
-        if (this._hasActiveAgents() && !this._hasQueuedMessages() && !this._hasUndeliveredAgentResults()) {
+        if (this._hasActiveAgents() && !this._hasInboxMessages() && !this._hasUndeliveredAgentResults()) {
           await this._waitForAnyAgent(activeSignal);
           if (activeSignal.aborted) {
             this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
@@ -2181,7 +2245,7 @@ export class Session {
         }
 
         // ★ ACTIVATION BOUNDARY DRAIN — unified exit point ★
-        if (this._hasQueuedMessages() || this._hasUndeliveredAgentResults()) {
+        if (this._hasInboxMessages() || this._hasUndeliveredAgentResults()) {
           this._injectPendingMessages();
           continue;  // new activation to process injected messages
         }
@@ -2220,12 +2284,12 @@ export class Session {
       this._restoreCurrentTurnSignal(turnSignalState);
       // Drain any messages that arrived after the last activation boundary check.
       // Without this, messages queued during the final activation would be orphaned.
-      if (this._hasQueuedMessages() || this._hasUndeliveredAgentResults()) {
+      if (this._hasInboxMessages() || this._hasUndeliveredAgentResults()) {
         this._injectPendingMessages();
       }
       this._agentState = "idle";
       if (!this._activeAsk && this._hasActiveAgents()) {
-        this._forceKillAllAgents();
+        this._cleanupNonInteractiveAgents();
       }
     }
 
@@ -2767,7 +2831,7 @@ export class Session {
       this._cacheHitEnabled,
       this._compactInProgress ? undefined : (() => this.onSaveRequest?.()),
       this._beforeToolExecute,
-      () => this._buildNotificationSummary(),
+      () => this._buildNotificationContent(),
       !suppressStreaming,
       emitRetryAttempt,
       emitRetrySuccess,
@@ -3937,10 +4001,10 @@ export class Session {
     const level1Ratio = this._thresholds.summarize_hint_level1 / 100;
 
     if (ratio >= level2Ratio && this._hintState !== "level2_sent") {
-      this._deliverMessage("system", HINT_LEVEL2_PROMPT(pct));
+      this._deliverMessage({ from: "system", to: "primary", content: HINT_LEVEL2_PROMPT(pct), timestamp: Date.now() });
       this._hintState = "level2_sent";
     } else if (ratio >= level1Ratio && this._hintState === "none") {
-      this._deliverMessage("system", HINT_LEVEL1_PROMPT(pct));
+      this._deliverMessage({ from: "system", to: "primary", content: HINT_LEVEL1_PROMPT(pct), timestamp: Date.now() });
       this._hintState = "level1_sent";
     }
   }
@@ -4072,10 +4136,10 @@ export class Session {
       entry.status = "failed";
       entry.exitCode = 1;
       entry.signal = null;
-      this._deliverMessage(
-        "system",
-        `Background shell '${shellId}' failed to start: ${error}. Use \`bash_output(id="${shellId}")\` to inspect ${logPath}.`,
-      );
+      this._deliverMessage({
+        from: "system", to: "primary", timestamp: Date.now(),
+        content: `Background shell '${shellId}' failed to start: ${error}. Use \`bash_output(id="${shellId}")\` to inspect ${logPath}.`,
+      });
     });
     child.on("close", (code, signal) => {
       entry.exitCode = code;
@@ -4092,10 +4156,10 @@ export class Session {
         : entry.status === "exited"
           ? "completed successfully"
           : `failed (exit ${code ?? 1})`;
-      this._deliverMessage(
-        "system",
-        `Background shell '${shellId}' ${statusText}. Use \`bash_output(id="${shellId}")\` to inspect logs at ${logPath}.`,
-      );
+      this._deliverMessage({
+        from: "system", to: "primary", timestamp: Date.now(),
+        content: `Background shell '${shellId}' ${statusText}. Use \`bash_output(id="${shellId}")\` to inspect logs at ${logPath}.`,
+      });
     });
 
     return new ToolResult({
@@ -4259,14 +4323,22 @@ export class Session {
       );
     }
 
-    const tasksSpec = (callFile["tasks"] as Array<Record<string, unknown>>) ?? [];
+    // Team support: `team:` field makes all agents interactive
+    const teamName = ((callFile["team"] as string) ?? "").trim() || null;
+
+    const tasksSpec = (callFile["agents"] ?? callFile["tasks"]) as Array<Record<string, unknown>> ?? [];
     if (!tasksSpec.length) {
-      return new ToolResult({ content: "Error: call file has no 'tasks' section." });
+      return new ToolResult({ content: "Error: call file has no 'tasks' (or 'agents') section." });
     }
 
     const spawned: string[] = [];
     const spawnedInfo: Array<{ numericId: number; taskId: string; template: string; task: string }> = [];
     const errors: string[] = [];
+
+    // Create or look up team
+    if (teamName && !this._teams.has(teamName)) {
+      this._teams.set(teamName, { id: teamName, members: new Set() });
+    }
 
     for (const spec of tasksSpec) {
       const taskId = ((spec["id"] as string) ?? "").trim();
@@ -4274,6 +4346,7 @@ export class Session {
       const templatePath = ((spec["template_path"] as string) ?? "").trim();
       const taskDesc = ((spec["task"] as string) ?? "").trim();
       const includeLog = spec["include_important_log"] !== false;
+      const isInteractive = teamName ? true : (spec["interactive"] === true);
 
       if (!taskId || !taskDesc) {
         errors.push("Skipped entry: missing 'id' or 'task'.");
@@ -4308,12 +4381,57 @@ export class Session {
         continue;
       }
 
+      // Inject SEND_TOOL ToolDef for team agents so the LLM can see it.
+      // Team agents get send tool for cross-agent communication.
+      // Non-team interactive agents don't get send — their turn output
+      // auto-delivers to primary, and they don't need cross-agent communication.
+      if (teamName && !agent.tools.some((t) => t.name === "send")) {
+        agent.tools.push(SEND_TOOL);
+      }
+
+      // Give primary agent the send tool when interactive agents exist
+      // (so primary can send follow-up messages to interactive agents)
+      if (isInteractive && !this.primaryAgent.tools.some((t) => t.name === "send")) {
+        this.primaryAgent.tools.push(SEND_TOOL);
+      }
+
       const extraMessages = this._buildSubAgentContext(includeLog);
       this._subAgentCounter += 1;
       const numericId = this._subAgentCounter;
 
+      // Persistent agent storage
+      const persistDir = join(this._resolveSessionArtifacts(), "agents", taskId);
+      mkdirSync(persistDir, { recursive: true });
+
+      // Team membership: add send tool for team members, inject team roster
+      if (teamName) {
+        const team = this._teams.get(teamName)!;
+        // Broadcast new member to existing team members
+        for (const memberId of team.members) {
+          const memberEntry = this._activeAgents.get(memberId);
+          if (memberEntry) {
+            const broadcastMsg: AgentMessage = {
+              from: "system", to: memberId, timestamp: Date.now(),
+              content: `[Team Update] New member joined: ${taskId} (${templateLabel}) — "${taskDesc.slice(0, 120)}"`,
+            };
+            if (memberEntry.agentState === "idle") {
+              // Don't auto-activate for broadcasts — just queue
+              memberEntry.inbox.push(broadcastMsg);
+            } else {
+              memberEntry.inbox.push(broadcastMsg);
+            }
+          }
+        }
+        team.members.add(taskId);
+      }
+
+      const agentLog: LogEntry[] = [];
+      const agentIdAllocator = new LogIdAllocator();
       const abortController = new AbortController();
-      const promise = this._runSubAgent(taskId, agent, taskDesc, numericId, extraMessages, abortController.signal);
+      const promise = this._runSubAgent(
+        taskId, agent, taskDesc, numericId, extraMessages, abortController.signal,
+        agentLog, agentIdAllocator, isInteractive, teamName,
+      );
 
       this._activeAgents.set(taskId, {
         promise,
@@ -4328,6 +4446,19 @@ export class Session {
         phase: "idle",
         recentActivity: [],
         toolCallCount: 0,
+        // Persistent fields
+        interactive: isInteractive,
+        teamId: teamName,
+        log: agentLog,
+        idAllocator: agentIdAllocator,
+        persistDir,
+        agent,
+        systemPrompt: agent.systemPrompt,
+        task: taskDesc,
+        inbox: [],
+        agentState: "working",
+        turnBudget: 20,
+        turnBudgetRemaining: 20,
       });
       spawned.push(taskId);
       spawnedInfo.push({ numericId, taskId, template: templateLabel, task: taskDesc });
@@ -4386,7 +4517,19 @@ export class Session {
   private _execKillAgent(args: Record<string, unknown>): ToolResult {
     const idsArg = this._argRequiredStringArray("kill_agent", args, "ids");
     if (idsArg instanceof ToolResult) return idsArg;
-    const ids = idsArg;
+    let ids = idsArg;
+
+    // Support team: if first id matches a team name, expand to all members
+    const teamArg = ((args["team"] as string) ?? "").trim();
+    if (teamArg) {
+      const team = this._teams.get(teamArg);
+      if (team) {
+        ids = [...team.members];
+      } else {
+        return new ToolResult({ content: `Team '${teamArg}' not found.` });
+      }
+    }
+
     if (!ids.length) {
       return new ToolResult({ content: "No agent IDs specified." });
     }
@@ -4400,8 +4543,18 @@ export class Session {
         notFound.push(name);
         continue;
       }
-      this._activeAgents.delete(name);
+      this._persistAgentLog(entry);
       entry.abortController.abort();
+      entry.status = "killed";
+      this._activeAgents.delete(name);
+      // Remove from team
+      if (entry.teamId) {
+        const team = this._teams.get(entry.teamId);
+        if (team) {
+          team.members.delete(name);
+          if (team.members.size === 0) this._teams.delete(entry.teamId);
+        }
+      }
       killed.push(name);
 
       if (this._progress) {
@@ -4424,6 +4577,208 @@ export class Session {
     return new ToolResult({ content: parts.join(" ") });
   }
 
+  // ==================================================================
+  // send tool — async message to interactive/team agent
+  // ==================================================================
+
+  private _execSend(args: Record<string, unknown>): ToolResult {
+    const to = ((args["to"] as string) ?? "").trim();
+    const content = ((args["content"] as string) ?? "").trim();
+    if (!to || !content) {
+      return new ToolResult({ content: "Error: 'to' and 'content' are required." });
+    }
+
+    const entry = this._activeAgents.get(to);
+    if (!entry) {
+      return new ToolResult({ content: `Agent '${to}' not found.` });
+    }
+    if (!entry.interactive) {
+      return new ToolResult({ content: `Agent '${to}' is one-shot and cannot receive messages.` });
+    }
+    if (entry.status === "killed") {
+      return new ToolResult({ content: `Agent '${to}' has been terminated.` });
+    }
+
+    // Reset turn budget on explicit primary send
+    entry.turnBudgetRemaining = entry.turnBudget;
+
+    this._deliverToAgent(to, { from: "primary", to, content, timestamp: Date.now() });
+    return new ToolResult({ content: `Message sent to '${to}'.` });
+  }
+
+  /**
+   * Deliver a message to an interactive agent's inbox.
+   * If the agent is idle, auto-activates it.
+   */
+  private _deliverToAgent(agentName: string, msg: AgentMessage): void {
+    const entry = this._activeAgents.get(agentName);
+    if (!entry || !entry.interactive) return;
+
+    if (entry.agentState === "idle" && entry.turnBudgetRemaining > 0) {
+      // Inject message into agent log as user_message, then activate
+      const ctxId = allocateContextId(new Set<string>());
+      const formatted = `[Message from ${msg.from}]\n${msg.content}`;
+      entry.log.push(createUserMessageEntry(
+        entry.idAllocator.next("user_message"),
+        0,
+        formatted,
+        formatted,
+        ctxId,
+      ));
+      entry.turnBudgetRemaining--;
+      this._activateInteractiveAgent(agentName, entry);
+    } else {
+      // Working or budget exhausted → queue in agent inbox (push model will inject)
+      entry.inbox.push(msg);
+    }
+  }
+
+  /**
+   * Auto-activate an interactive agent for a new turn.
+   */
+  private _activateInteractiveAgent(agentName: string, entry: AgentEntry): void {
+    entry.agentState = "working";
+    entry.status = "working";
+    entry.startTime = performance.now();
+    entry.delivered = false;
+    entry.resultText = "";
+    entry.phase = "idle";
+    entry.recentActivity = [];
+
+    const abortController = new AbortController();
+    entry.abortController = abortController;
+
+    // Build sub-agent notification callback for its inbox push
+    const getAgentNotification = (): string | null => {
+      if (entry.inbox.length === 0) return null;
+      const sections: string[] = [];
+      const byFrom: Record<string, string[]> = {};
+      for (const m of entry.inbox) {
+        (byFrom[m.from] ??= []).push(m.content);
+      }
+      entry.inbox = [];
+      for (const [from, msgs] of Object.entries(byFrom)) {
+        sections.push(`[Message from ${from}]\n${msgs.join("\n\n")}`);
+      }
+      return `\n\n[Incoming Messages]\n${sections.join("\n\n---\n\n")}`;
+    };
+
+    // Build executors — same as one-shot but with send for team members
+    const subExecutors: Record<string, ToolExecutor> = {};
+    for (const toolName of [
+      "$web_search", "read_file", "list_dir", "glob", "grep",
+      "edit_file", "write_file", "diff", "web_fetch",
+    ]) {
+      if (this._toolExecutors[toolName]) {
+        subExecutors[toolName] = this._toolExecutors[toolName];
+      }
+    }
+    // Team members get send tool
+    if (entry.teamId) {
+      subExecutors["send"] = (args: Record<string, unknown>) => {
+        const sendTo = ((args["to"] as string) ?? "").trim();
+        const sendContent = ((args["content"] as string) ?? "").trim();
+        if (!sendTo || !sendContent) {
+          return new ToolResult({ content: "Error: 'to' and 'content' are required." });
+        }
+        if (sendTo === "primary") {
+          return new ToolResult({ content: "Cannot send to primary — your turn output is automatically delivered. Use send only for teammates." });
+        }
+        const team = this._teams.get(entry.teamId!);
+        if (!team || !team.members.has(sendTo)) {
+          return new ToolResult({ content: `Agent '${sendTo}' is not in your team.` });
+        }
+        this._deliverToAgent(sendTo, { from: agentName, to: sendTo, content: sendContent, timestamp: Date.now() });
+        return new ToolResult({ content: `Message sent to '${sendTo}'.` });
+      };
+    }
+
+    const runtime = createEphemeralLogState([], {
+      requiresAlternatingRoles: (entry.agent as any)._provider?.requiresAlternatingRoles,
+      externalEntries: entry.log,
+      externalIdAllocator: entry.idAllocator,
+    });
+
+    const MAX_SUB_AGENT_ACTIVATIONS = 15;
+    const compactCheck = this._buildSubAgentCompactCheck(entry.agent);
+
+    entry.promise = (async () => {
+      const t0 = performance.now();
+      try {
+        let finalText = "";
+        for (let i = 0; i < MAX_SUB_AGENT_ACTIVATIONS; i++) {
+          if (abortController.signal.aborted) throw new DOMException("Aborted", "AbortError");
+
+          const result = await entry.agent.asyncRunWithMessages(
+            runtime.getMessages,
+            runtime.appendEntry,
+            runtime.allocId,
+            0,
+            runtime.computeNextRoundIndex(),
+            subExecutors, undefined,
+            undefined, undefined, abortController.signal,
+            undefined, compactCheck,
+            undefined, undefined, undefined, undefined, undefined,
+            getAgentNotification,
+            false,
+          );
+
+          if (!result.compactNeeded) {
+            if (result.text) finalText = stripContextTags(result.text);
+            break;
+          }
+          // Compact: simplified — just run compact phase
+          const continuation = await this._runSubAgentCompactPhase(
+            entry.agent, runtime, subExecutors,
+            (ri: number) => runtime.allocateContextId(),
+            result.compactScenario ?? "output",
+            undefined, abortController.signal,
+          );
+          runtime.appendEntry(createCompactMarker(runtime.allocId("compact_marker"), 0, 0, result.lastTotalTokens ?? 0, 0));
+          runtime.appendEntry(createCompactContext(runtime.allocId("compact_context"), 0,
+            continuation + "\n\nContinue from where you left off.", runtime.allocateContextId(), 0));
+        }
+
+        // Deliver final output to primary
+        if (finalText) {
+          this._deliverMessage({ from: agentName, to: "primary", content: finalText, timestamp: Date.now() });
+        }
+
+        entry.elapsed = (performance.now() - t0) / 1000;
+        entry.status = "finished";
+        entry.resultText = finalText;
+        entry.agentState = "idle";
+        this._persistAgentLog(entry);
+
+        // Check if more messages arrived during execution
+        if (entry.inbox.length > 0 && entry.turnBudgetRemaining > 0) {
+          // Drain inbox into log and re-activate
+          const nextMsg = entry.inbox.shift()!;
+          const ctxId = allocateContextId(new Set<string>());
+          const formatted = `[Message from ${nextMsg.from}]\n${nextMsg.content}`;
+          entry.log.push(createUserMessageEntry(
+            entry.idAllocator.next("user_message"), 0, formatted, formatted, ctxId,
+          ));
+          entry.turnBudgetRemaining--;
+          this._activateInteractiveAgent(agentName, entry);
+        }
+
+        return { name: agentName, status: "completed", text: finalText, usage: {}, elapsed: entry.elapsed };
+      } catch (e: any) {
+        entry.elapsed = (performance.now() - t0) / 1000;
+        if (e?.name === "AbortError" || abortController.signal.aborted) {
+          entry.status = "killed";
+          entry.agentState = "idle";
+          return { name: agentName, status: "killed", text: "(killed)", usage: {}, elapsed: entry.elapsed };
+        }
+        entry.status = "error";
+        entry.agentState = "idle";
+        entry.resultText = `Sub-agent error: ${e}`;
+        return { name: agentName, status: "error", text: entry.resultText, usage: {}, elapsed: entry.elapsed };
+      }
+    })();
+  }
+
   private async _execCheckStatus(_args: Record<string, unknown>): Promise<ToolResult> {
     // Non-blocking sweep: check if any working agents have settled
     this._sweepSettledAgents();
@@ -4436,8 +4791,39 @@ export class Session {
   /**
    * Non-blocking sweep: check if any working agents have settled.
    */
+  /**
+   * Unified settle: update status, agentState, and persist log.
+   * Called from _sweepSettledAgents, settleEntry (in wait), and _execWait tail sweep.
+   */
+  private _settleAgentEntry(name: string, entry: AgentEntry, result?: SubAgentResult, error?: unknown): void {
+    entry.elapsed = this._getElapsed(entry);
+    if (result) {
+      entry.status = result.status === "completed" ? "finished" : (result.status as "finished" | "error");
+      entry.resultText = result.text;
+    } else {
+      entry.status = "error";
+      entry.resultText = `Sub-agent error: ${error}`;
+    }
+    // Sync agentState for interactive agents so _deliverToAgent can re-activate
+    if (entry.interactive) {
+      entry.agentState = "idle";
+      this._persistAgentLog(entry);
+      // If messages accumulated in inbox during the run, auto-activate
+      if (entry.inbox.length > 0 && entry.turnBudgetRemaining > 0) {
+        const nextMsg = entry.inbox.shift()!;
+        const ctxId = allocateContextId(new Set<string>());
+        const formatted = `[Message from ${nextMsg.from}]\n${nextMsg.content}`;
+        entry.log.push(createUserMessageEntry(
+          entry.idAllocator.next("user_message"), 0, formatted, formatted, ctxId,
+        ));
+        entry.turnBudgetRemaining--;
+        this._activateInteractiveAgent(name, entry);
+      }
+    }
+  }
+
   private _sweepSettledAgents(): void {
-    for (const [, entry] of this._activeAgents) {
+    for (const [name, entry] of this._activeAgents) {
       if (entry.status !== "working") continue;
       // Zero-delay race to check if promise has settled
       const settled = Promise.race([
@@ -4447,19 +4833,10 @@ export class Session {
         ),
         new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
       ]);
-      // Note: this is async but we fire-and-forget since the status update
-      // will be visible on next check. For immediate results, use _execWait.
       void settled.then((r) => {
         if (r === "pending") return;
         const res = r as { result?: SubAgentResult; error?: unknown };
-        entry.elapsed = this._getElapsed(entry);
-        if (res.result) {
-          entry.status = res.result.status === "completed" ? "finished" : (res.result.status as "finished" | "error");
-          entry.resultText = res.result.text;
-        } else {
-          entry.status = "error";
-          entry.resultText = `Sub-agent error: ${res.error}`;
-        }
+        this._settleAgentEntry(name, entry, res.result, res.error);
       });
     }
   }
@@ -4494,7 +4871,7 @@ export class Session {
       throwIfTurnAborted();
     }
 
-    if (this._activeAgents.size === 0 && !this._hasTrackedShells() && !this._hasQueuedMessages()) {
+    if (this._activeAgents.size === 0 && !this._hasTrackedShells() && !this._hasInboxMessages()) {
       this._agentState = "working";
       return new ToolResult({ content: "No tracked workers and no messages queued." });
     }
@@ -4550,14 +4927,7 @@ export class Session {
     const settleEntry = (entryName: string, result?: SubAgentResult, error?: unknown) => {
       const entry = this._activeAgents.get(entryName);
       if (!entry) return;
-      entry.elapsed = this._getElapsed(entry);
-      if (result) {
-        entry.status = result.status === "completed" ? "finished" : (result.status as "finished" | "error");
-        entry.resultText = result.text;
-      } else {
-        entry.status = "error";
-        entry.resultText = `Sub-agent error: ${error}`;
-      }
+      this._settleAgentEntry(entryName, entry, result, error);
 
       // v2 log: sub_agent_end
       const elapsedSec = entry.elapsed;
@@ -4712,7 +5082,7 @@ export class Session {
     this._waitResolver = null;
 
     // Non-blocking sweep: check if other working agents have also settled
-    for (const [, entry] of this._activeAgents) {
+    for (const [name, entry] of this._activeAgents) {
       if (entry.status !== "working") continue;
       const zeroTimeout = new Promise<"pending">((resolve) =>
         setTimeout(() => resolve("pending"), 0),
@@ -4724,21 +5094,14 @@ export class Session {
       const r = await Promise.race([check, zeroTimeout]);
       if (r !== "pending") {
         const res = r as { result?: SubAgentResult; error?: unknown };
-        entry.elapsed = this._getElapsed(entry);
-        if (res.result) {
-          entry.status = res.result.status === "completed" ? "finished" : (res.result.status as "finished" | "error");
-          entry.resultText = res.result.text;
-        } else {
-          entry.status = "error";
-          entry.resultText = `Sub-agent error: ${res.error}`;
-        }
+        this._settleAgentEntry(name, entry, res.result, res.error);
       }
     }
 
     this._agentState = "working";
 
     // Build return value with unified delivery content
-    const hasNewContent = this._hasQueuedMessages() || this._hasUndeliveredAgentResults();
+    const hasNewContent = this._hasInboxMessages() || this._hasUndeliveredAgentResults();
     let header: string;
     if (wakeReason === "message") {
       header = `Waited — new message arrived.`;
@@ -4854,8 +5217,70 @@ export class Session {
           });
         }
       }
+      // Persist agent log before clearing
+      this._persistAgentLog(entry);
     }
     this._activeAgents.clear();
+    this._teams.clear();
+  }
+
+  /**
+   * At turn end: kill one-shot agents, preserve interactive/team agents as idle.
+   */
+  private _cleanupNonInteractiveAgents(): void {
+    const toRemove: string[] = [];
+    for (const [name, entry] of this._activeAgents) {
+      if (entry.interactive) {
+        // Interactive agents survive — if working, let them finish
+        // (their promise will settle and result will be delivered via push)
+        if (entry.status !== "working") {
+          entry.agentState = "idle";
+        }
+        continue;
+      }
+      // One-shot: abort if still working, remove
+      if (entry.status === "working") {
+        entry.abortController.abort();
+        if (this._progress) {
+          this._progress.emit({
+            step: this._turnCount, agent: name, action: "agent_killed",
+            message: `  [#${entry.numericId} ${name}] killed`,
+            level: "normal" as ProgressLevel,
+            timestamp: Date.now() / 1000,
+            usage: {}, extra: { sub_agent_id: entry.numericId },
+          });
+        }
+      }
+      this._persistAgentLog(entry);
+      toRemove.push(name);
+    }
+    for (const name of toRemove) {
+      this._activeAgents.delete(name);
+    }
+  }
+
+  /**
+   * Persist a sub-agent's log to disk.
+   */
+  private _persistAgentLog(entry: AgentEntry): void {
+    if (!entry.log?.length || !entry.persistDir) return;
+    try {
+      mkdirSync(entry.persistDir, { recursive: true });
+      const metaPath = join(entry.persistDir, "meta.json");
+      const logPath = join(entry.persistDir, "log.json");
+      writeFileSync(metaPath, JSON.stringify({
+        template: entry.template,
+        interactive: entry.interactive,
+        teamId: entry.teamId,
+        status: entry.status,
+        task: entry.task,
+        numericId: entry.numericId,
+        createdAt: new Date().toISOString(),
+      }));
+      writeFileSync(logPath, JSON.stringify(entry.log));
+    } catch (e) {
+      console.warn(`Failed to persist agent log for ${entry.persistDir}:`, e);
+    }
   }
 
   private _forceKillAllShells(): void {
@@ -4956,17 +5381,10 @@ export class Session {
   }
 
   private _applySubAgentConstraints(agent: Agent): void {
+    // Strip comm tools — send is re-added later for interactive/team agents
     agent.tools = agent.tools.filter((t) => !COMM_TOOL_NAMES.has(t.name));
-    agent.systemPrompt +=
-      "\n\n[SUB-AGENT CONSTRAINTS]\n" +
-      "You are a sub-agent executing a bounded task. Rules:\n" +
-      "- Focus on your assigned task and report findings clearly.\n" +
-      "- Your final output message will be delivered to the primary agent " +
-      "as your result.\n" +
-      "  Intermediate tool calls and their results will NOT be visible " +
-      "to the primary agent.\n" +
-      "  Make sure your final output contains all relevant findings " +
-      "and conclusions.";
+    // Lifecycle-specific constraints are injected via _buildSubAgentSystemPrompt,
+    // not here — to avoid one-shot language leaking into interactive agents.
   }
 
   private _getSubAgentModelConfig(): ModelConfig {
@@ -5003,6 +5421,66 @@ export class Session {
     return extra;
   }
 
+  /**
+   * Build a sub-agent's full system prompt by layering:
+   * 1. Template system_prompt.md (role/capabilities)
+   * 2. Mode-specific prompt (oneshot / interactive)
+   * 3. Team prompt (if in a team)
+   */
+  private _buildSubAgentSystemPrompt(
+    basePrompt: string,
+    interactive: boolean,
+    teamId: string | null,
+  ): string {
+    const parts = [basePrompt];
+
+    // Mode-specific layer
+    try {
+      const modeFile = interactive ? "interactive.md" : "oneshot.md";
+      const modePrompt = this._readPromptFile(`sub-agent/${modeFile}`);
+      if (modePrompt) parts.push(modePrompt);
+    } catch { /* optional */ }
+
+    // Team layer
+    if (teamId) {
+      try {
+        let teamPrompt = this._readPromptFile("sub-agent/team.md");
+        if (teamPrompt) {
+          const team = this._teams.get(teamId);
+          const roster = team
+            ? [...team.members].map((memberId) => {
+                const entry = this._activeAgents.get(memberId);
+                return entry
+                  ? `- **${memberId}** (${entry.template}): ${entry.task.slice(0, 100)}`
+                  : `- **${memberId}**`;
+              }).join("\n")
+            : "(team roster unavailable)";
+          teamPrompt = teamPrompt
+            .replace("{TEAM_ID}", teamId)
+            .replace("{TEAM_ROSTER}", roster);
+          parts.push(teamPrompt);
+        }
+      } catch { /* optional */ }
+    }
+
+    return parts.join("\n\n");
+  }
+
+  /**
+   * Read a prompt file from the prompts directories.
+   */
+  private _readPromptFile(relativePath: string): string {
+    if (this._promptsDirs) {
+      for (const dir of this._promptsDirs) {
+        const fullPath = join(dir, relativePath);
+        try {
+          return readFileSync(fullPath, "utf-8").trim();
+        } catch { /* try next */ }
+      }
+    }
+    return "";
+  }
+
   private async _runSubAgent(
     name: string,
     agent: Agent,
@@ -5010,6 +5488,10 @@ export class Session {
     agentId: number,
     extraMessages?: Array<Record<string, unknown>>,
     signal?: AbortSignal,
+    persistentLog?: LogEntry[],
+    persistentIdAllocator?: LogIdAllocator,
+    interactive?: boolean,
+    teamId?: string | null,
   ): Promise<SubAgentResult> {
     const subExtra = { sub_agent_id: agentId };
     const MAX_SUB_AGENT_ACTIVATIONS = 15;
@@ -5119,9 +5601,13 @@ export class Session {
         throw new DOMException("Aborted", "AbortError");
       }
 
-      // Build sub-agent ephemeral log state
+      // Build sub-agent system prompt with mode-specific layers
+      const fullSystemPrompt = this._buildSubAgentSystemPrompt(
+        agent.systemPrompt, interactive ?? false, teamId ?? null,
+      );
+      // Build sub-agent log state (persistent-backed when available)
       const initialMessages: Array<Record<string, unknown>> = [
-        { role: "system", content: agent.systemPrompt },
+        { role: "system", content: fullSystemPrompt },
       ];
       if (extraMessages) {
         initialMessages.push(...extraMessages);
@@ -5129,6 +5615,8 @@ export class Session {
       initialMessages.push({ role: "user", content: task });
       const runtime = createEphemeralLogState(initialMessages, {
         requiresAlternatingRoles: (agent as any)._provider.requiresAlternatingRoles,
+        externalEntries: persistentLog,
+        externalIdAllocator: persistentIdAllocator,
       });
       const roundContextIds = new Map<number, string>();
       const getSubAgentRoundContextId = (roundIndex: number): string => {
@@ -5161,6 +5649,26 @@ export class Session {
         if (this._toolExecutors[toolName]) {
           subExecutors[toolName] = this._toolExecutors[toolName];
         }
+      }
+
+      // Team members get send executor for cross-agent communication
+      if (teamId) {
+        subExecutors["send"] = (args: Record<string, unknown>) => {
+          const sendTo = ((args["to"] as string) ?? "").trim();
+          const sendContent = ((args["content"] as string) ?? "").trim();
+          if (!sendTo || !sendContent) {
+            return new ToolResult({ content: "Error: 'to' and 'content' are required." });
+          }
+          if (sendTo === "primary") {
+            return new ToolResult({ content: "Cannot send to primary — your turn output is automatically delivered. Use send only for teammates." });
+          }
+          const team = this._teams.get(teamId);
+          if (!team || !team.members.has(sendTo)) {
+            return new ToolResult({ content: `Agent '${sendTo}' is not in your team.` });
+          }
+          this._deliverToAgent(sendTo, { from: name, to: sendTo, content: sendContent, timestamp: Date.now() });
+          return new ToolResult({ content: `Message sent to '${sendTo}'.` });
+        };
       }
 
       let totalUsage = { inputTokens: 0, outputTokens: 0 };

@@ -257,7 +257,7 @@ pub const GraphemePool = struct {
         slot_capacity: u32,
         slots_per_page: u32,
         slot_size_bytes: usize,
-        slots: std.ArrayListUnmanaged(u8),
+        slots: std.ArrayListAlignedUnmanaged(u8, std.mem.Alignment.of(SlotHeader)),
         free_list: std.ArrayListUnmanaged(u32),
         num_slots: u32,
 
@@ -286,6 +286,7 @@ pub const GraphemePool = struct {
 
             try self.slots.ensureTotalCapacity(self.allocator, self.slots.items.len + add_bytes);
             try self.slots.appendNTimes(self.allocator, 0, add_bytes);
+            std.debug.assert(std.mem.Alignment.of(SlotHeader).check(@intFromPtr(self.slots.items.ptr)));
 
             var i: u32 = 0;
             while (i < self.slots_per_page) : (i += 1) {

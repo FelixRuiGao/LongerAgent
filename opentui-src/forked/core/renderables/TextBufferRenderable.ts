@@ -37,6 +37,8 @@ export abstract class TextBufferRenderable extends Renderable implements LineInf
   protected _scrollX: number = 0
   protected _scrollY: number = 0
   protected _truncate: boolean = false
+  protected _pendingWheelDeltaX: number = 0
+  protected _pendingWheelDeltaY: number = 0
 
   protected textBuffer: TextBuffer
   protected textBufferView: TextBufferView
@@ -110,23 +112,69 @@ export abstract class TextBufferRenderable extends Renderable implements LineInf
     }
   }
 
+  protected canConsumeScrollDirection(direction: string | undefined): boolean {
+    if (direction === "up") {
+      return this.scrollY > 0
+    }
+    if (direction === "down") {
+      return this.scrollY < this.maxScrollY
+    }
+    if (this._wrapMode === "none") {
+      if (direction === "left") {
+        return this.scrollX > 0
+      }
+      if (direction === "right") {
+        return this.scrollX < this.maxScrollX
+      }
+    }
+
+    return false
+  }
+
   protected handleScroll(event: any): void {
     if (!event.scroll) return
 
     const { direction, delta } = event.scroll
+    const canConsume = this.canConsumeScrollDirection(direction)
+    if (!canConsume) return
 
     if (direction === "up") {
-      this.scrollY -= delta
+      this._pendingWheelDeltaY -= delta
     } else if (direction === "down") {
-      this.scrollY += delta
+      this._pendingWheelDeltaY += delta
     }
 
     if (this._wrapMode === "none") {
       if (direction === "left") {
-        this.scrollX -= delta
+        this._pendingWheelDeltaX -= delta
       } else if (direction === "right") {
-        this.scrollX += delta
+        this._pendingWheelDeltaX += delta
       }
+    }
+
+    event.stopPropagation()
+    event.preventDefault()
+    this.requestRender()
+  }
+
+  protected override onUpdate(deltaTime: number): void {
+    super.onUpdate(deltaTime)
+
+    if (this._pendingWheelDeltaX === 0 && this._pendingWheelDeltaY === 0) {
+      return
+    }
+
+    const pendingX = this._pendingWheelDeltaX
+    const pendingY = this._pendingWheelDeltaY
+    this._pendingWheelDeltaX = 0
+    this._pendingWheelDeltaY = 0
+
+    if (pendingY !== 0) {
+      this.scrollY += pendingY
+    }
+
+    if (pendingX !== 0) {
+      this.scrollX += pendingX
     }
   }
 

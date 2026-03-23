@@ -61,7 +61,24 @@ import {
 } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import "./forked/patch-opentui-markdown.js";
+import {
+  getLongerAgentAssistantRenderer,
+  isLongerAgentMarkdownPatchDisabled,
+  isLongerAgentOpenTuiDiagEnabled,
+  writeLongerAgentOpenTuiDiag,
+} from "./forked/core/lib/diagnostic.js";
 import { getCurrentModelDescriptor, type ModelDescriptor } from "../src/model-presentation.js";
+import { UsagePoller, formatResetRemaining, type UsageSnapshot } from "../src/provider-usage.js";
+import {
+  readOAuthAccessToken,
+  hasOAuthTokens,
+  isTokenExpiring,
+  saveOAuthTokens,
+  browserLoginHeadless,
+  deviceCodeLoginHeadless,
+  type OAuthProgress,
+  type OAuthTokens,
+} from "../src/auth/openai-oauth.js";
 import {
   buildFileReferenceLabel,
   createComposerTokenVisuals,
@@ -166,6 +183,7 @@ const GOODBYE_MESSAGES = [
 ] as const;
 
 const MARKDOWN_TREE_SITTER_CLIENT = getTreeSitterClient();
+const ASSISTANT_RENDERER_MODE = getLongerAgentAssistantRenderer();
 
 const DISABLED_TEXTAREA_ACTION = "__disabled__" as unknown as KeyBinding["action"];
 
@@ -312,6 +330,21 @@ interface PromptSelectState {
 interface PromptSecretState {
   message: string;
   allowEmpty: boolean;
+}
+
+type OAuthOverlayPhase =
+  | { step: "choose" }
+  | { step: "browser_waiting"; url: string }
+  | { step: "device_code"; url: string; userCode: string }
+  | { step: "polling" }
+  | { step: "exchanging" }
+  | { step: "done" }
+  | { step: "error"; message: string };
+
+interface OAuthOverlayState {
+  phase: OAuthOverlayPhase;
+  selected: number; // 0 = browser, 1 = device code (only for "choose" step)
+  resolve: (tokens: import("../src/auth/openai-oauth.js").OAuthTokens | null) => void;
 }
 
 interface PlanCheckpointUi {
@@ -632,6 +665,17 @@ function ConversationEntryView(
         <box paddingLeft={2} paddingTop={1}>
           {markdownMode === "raw" ? (
             <text fg={colors.text} content={entry.text} />
+          ) : ASSISTANT_RENDERER_MODE === "code" ? (
+            <code
+              content={entry.text}
+              filetype="markdown"
+              syntaxStyle={markdownStyle}
+              streaming={streaming}
+              conceal={true}
+              drawUnstyledText={false}
+              fg={colors.text}
+              width="100%"
+            />
           ) : (
             <markdown
               content={entry.text}
@@ -875,6 +919,40 @@ function ContextUsageCard(
   );
 }
 
+function CodexUsageCard(
+  {
+    snapshot,
+    colors,
+  }: {
+    snapshot: UsageSnapshot | null;
+    colors: OpenTuiPalette;
+  },
+): React.ReactElement | null {
+  if (!snapshot || snapshot.windows.length === 0) return null;
+  if (snapshot.error) return null;
+
+  const now = Date.now();
+
+  return (
+    <box flexDirection="column" width="100%" gap={0}>
+      <text fg={colors.dim} bold content="CODEX USAGE" />
+      {snapshot.windows.map((w, i) => {
+        const pct = w.remainPercent.toFixed(0);
+        const pctStr = pct.padStart(3);
+        const reset = formatResetRemaining(w.resetAt, now);
+        const resetSuffix = reset ? `  in ${reset}` : "";
+        return (
+          <text
+            key={`codex-window-${i}`}
+            fg={colors.text}
+            content={`${w.label.padEnd(3)} ${pctStr}% left${resetSuffix}`}
+          />
+        );
+      })}
+    </box>
+  );
+}
+
 function PlanCard(
   { checkpoints, colors }: { checkpoints: PlanCheckpointUi[]; colors: OpenTuiPalette },
 ): React.ReactElement | null {
@@ -914,6 +992,68 @@ function SidebarTitle({ colors }: { colors: OpenTuiPalette }): React.ReactElemen
   );
 }
 
+function AgentStatusIcon(status: string, colors: OpenTuiPalette): { char: string; color: string } {
+  switch (status) {
+    case "working": return { char: "*", color: colors.workingStatus };
+    case "idle": return { char: "-", color: colors.dim };
+    case "finished": return { char: "+", color: colors.green };
+    case "error": return { char: "!", color: colors.errorStatus };
+    case "killed": return { char: "x", color: colors.muted };
+    default: return { char: "?", color: colors.dim };
+  }
+}
+
+function sameAgentList(
+  a: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>,
+  b: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>,
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      left?.id !== right?.id ||
+      left?.status !== right?.status ||
+      left?.interactive !== right?.interactive ||
+      left?.teamId !== right?.teamId
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function AgentListCard(
+  { agents, colors, width }: {
+    agents: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>;
+    colors: OpenTuiPalette;
+    width: number;
+  },
+): React.ReactElement | null {
+  if (agents.length === 0) return null;
+  const maxIdLen = Math.max(10, width - 8);
+  return (
+    <box flexDirection="column" width="100%">
+      <text fg={colors.dim} content="AGENTS" />
+      {agents.map((a) => {
+        const icon = AgentStatusIcon(a.status, colors);
+        const label = a.id.length > maxIdLen ? a.id.slice(0, maxIdLen - 1) + "…" : a.id;
+        const tag = a.interactive ? (a.teamId ? ` [${a.teamId}]` : " [i]") : "";
+        return (
+          <box key={a.id} flexDirection="row">
+            <text fg={icon.color} content={icon.char + " "} />
+            <text fg={colors.text} content={label} />
+            {tag ? <text fg={colors.muted} content={tag} /> : null}
+          </box>
+        );
+      })}
+    </box>
+  );
+}
+
 function SidebarView(
   {
     width,
@@ -921,6 +1061,8 @@ function SidebarView(
     contextLimit,
     cacheReadTokens,
     checkpoints,
+    agents,
+    codexUsage,
     colors,
   }: {
     width: number;
@@ -928,6 +1070,8 @@ function SidebarView(
     contextLimit?: number;
     cacheReadTokens?: number;
     checkpoints: PlanCheckpointUi[] | null;
+    agents: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>;
+    codexUsage: UsageSnapshot | null;
     colors: OpenTuiPalette;
   },
 ): React.ReactElement {
@@ -963,6 +1107,8 @@ function SidebarView(
             cacheReadTokens={cacheReadTokens}
             colors={colors}
           />
+          <CodexUsageCard snapshot={codexUsage} colors={colors} />
+          <AgentListCard agents={agents} colors={colors} width={width - 3} />
           <PlanCard checkpoints={safeCheckpoints} colors={colors} />
         </box>
       </scrollbox>
@@ -1276,6 +1422,95 @@ function PromptSecretView(
   );
 }
 
+function OAuthOverlayView(
+  {
+    state,
+    colors,
+    contentWidth,
+  }: {
+    state: OAuthOverlayState | null;
+    colors: OpenTuiPalette;
+    contentWidth: number;
+  },
+): React.ReactElement | null {
+  if (!state) return null;
+
+  const { phase } = state;
+
+  if (phase.step === "choose") {
+    const options = [
+      "Browser login (recommended)",
+      "Device code (SSH / headless)",
+    ];
+    return (
+      <box
+        border
+        borderColor={colors.border}
+        paddingLeft={1}
+        paddingRight={1}
+        flexDirection="column"
+        width="100%"
+        height={options.length + 4}
+        flexShrink={0}
+      >
+        <text fg={colors.yellow} content="OpenAI ChatGPT Login" />
+        {options.map((label, index) => {
+          const selected = index === state.selected;
+          const prefix = selected ? "> " : "  ";
+          return (
+            <text
+              key={`oauth-opt-${index}`}
+              fg={selected ? colors.accent : colors.dim}
+              content={truncateToWidth(`${prefix}${label}`, contentWidth)}
+            />
+          );
+        })}
+        <text fg={colors.dim} content="Enter select · Esc cancel" />
+      </box>
+    );
+  }
+
+  // Status display for in-progress flows
+  const lines: string[] = [];
+  if (phase.step === "browser_waiting") {
+    lines.push("Waiting for browser authorization...");
+    lines.push("");
+    lines.push(`URL: ${phase.url.length > contentWidth - 5 ? phase.url.slice(0, contentWidth - 8) + "..." : phase.url}`);
+  } else if (phase.step === "device_code") {
+    lines.push(`Open:  ${phase.url}`);
+    lines.push(`Code:  ${phase.userCode}`);
+    lines.push("");
+    lines.push("Waiting for sign-in...");
+  } else if (phase.step === "polling") {
+    lines.push("Waiting for sign-in...");
+  } else if (phase.step === "exchanging") {
+    lines.push("Exchanging authorization code...");
+  } else if (phase.step === "done") {
+    lines.push("Login successful!");
+  } else if (phase.step === "error") {
+    lines.push(`Error: ${phase.message}`);
+  }
+
+  return (
+    <box
+      border
+      borderColor={colors.border}
+      paddingLeft={1}
+      paddingRight={1}
+      flexDirection="column"
+      width="100%"
+      height={lines.length + 4}
+      flexShrink={0}
+    >
+      <text fg={colors.yellow} content="OpenAI ChatGPT Login" />
+      {lines.map((line, i) => (
+        <text key={`oauth-line-${i}`} fg={colors.text} content={truncateToWidth(line, contentWidth)} />
+      ))}
+      <text fg={colors.dim} content="Esc cancel" />
+    </box>
+  );
+}
+
 function AskPanelView(
   {
     ask,
@@ -1457,6 +1692,9 @@ export function OpenTuiApp({
   const [phase, setPhase] = useState<ActivityPhase>("idle");
   const [contextTokens, setContextTokens] = useState(0);
   const [cacheReadTokens, setCacheReadTokens] = useState(0);
+  const [codexUsage, setCodexUsage] = useState<UsageSnapshot | null>(null);
+  const codexPollerRef = useRef<UsagePoller | null>(null);
+  const [activeAgents, setActiveAgents] = useState<Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>>([]);
   const [hint, setHint] = useState<string | null>(null);
   const [markdownMode, setMarkdownMode] = useState<"rendered" | "raw">("rendered");
   const [pendingAsk, setPendingAsk] = useState<PendingAskUi | null>(
@@ -1479,6 +1717,8 @@ export function OpenTuiApp({
   const [checkboxPicker, setCheckboxPicker] = useState<CheckboxPickerState | null>(null);
   const [promptSelect, setPromptSelect] = useState<PromptSelectState | null>(null);
   const [promptSecret, setPromptSecret] = useState<PromptSecretState | null>(null);
+  const [oauthOverlay, setOauthOverlay] = useState<OAuthOverlayState | null>(null);
+  const oauthAbortRef = useRef<AbortController | null>(null);
 
   const scrollRef = useRef<ScrollBoxRenderable>(null);
   const inputRef = useRef<TextareaRenderable | null>(null);
@@ -1502,6 +1742,44 @@ export function OpenTuiApp({
     composerTokenVisualsRef.current = createComposerTokenVisuals(colors);
   }
   const composerTokenVisuals = composerTokenVisualsRef.current;
+
+  // -- Codex usage poller lifecycle --
+  // Start/stop based on current provider. Runs inside the component because
+  // the poller needs to survive model switches within the same session.
+  useEffect(() => {
+    const provider = session.primaryAgent?.modelConfig?.provider;
+    if (provider !== "openai-codex") {
+      // Not a codex model — stop any running poller and clear state.
+      if (codexPollerRef.current) {
+        codexPollerRef.current.stop();
+        codexPollerRef.current = null;
+      }
+      setCodexUsage(null);
+      return;
+    }
+
+    const token = readOAuthAccessToken();
+    if (!token) {
+      setCodexUsage(null);
+      return;
+    }
+
+    // Reuse existing poller if already running, just update the token.
+    if (codexPollerRef.current) {
+      codexPollerRef.current.updateToken(token);
+      return;
+    }
+
+    const poller = new UsagePoller();
+    codexPollerRef.current = poller;
+    poller.on("update", (snapshot: UsageSnapshot) => setCodexUsage(snapshot));
+    poller.start(token);
+
+    return () => {
+      poller.stop();
+      if (codexPollerRef.current === poller) codexPollerRef.current = null;
+    };
+  }, [session.primaryAgent?.modelConfig?.provider]);
 
   useEffect(() => {
     setAskError(null);
@@ -1700,12 +1978,32 @@ export function OpenTuiApp({
       setPendingAsk(session.getPendingAsk?.() ?? null);
       setContextTokens(session.lastInputTokens);
       setCacheReadTokens(session.lastCacheReadTokens ?? 0);
+      if (typeof (session as any).getActiveAgentIds === "function") {
+        const nextAgents = (session as any).getActiveAgentIds();
+        setActiveAgents((previous) => sameAgentList(previous, nextAgents) ? previous : nextAgents);
+      }
     };
 
     syncFromLog();
     if (typeof session.subscribeLog !== "function") return;
     return session.subscribeLog(syncFromLog);
   }, [session]);
+
+  useEffect(() => {
+    if (!isLongerAgentOpenTuiDiagEnabled()) return;
+    const assistantEntries = entries.filter((entry) => entry.kind === "assistant");
+    const lastAssistant = assistantEntries.length > 0 ? assistantEntries[assistantEntries.length - 1] : null;
+    writeLongerAgentOpenTuiDiag("app.entries", {
+      totalEntries: entries.length,
+      assistantEntries: assistantEntries.length,
+      lastAssistantLength: lastAssistant?.kind === "assistant" ? lastAssistant.text.length : 0,
+      processing,
+      markdownMode,
+      assistantRenderer: ASSISTANT_RENDERER_MODE,
+      markdownPatchDisabled: isLongerAgentMarkdownPatchDisabled(),
+      activeAgents: activeAgents.length,
+    });
+  }, [activeAgents.length, entries, markdownMode, processing]);
 
   const handleProgressRef = useRef<(event: ProgressEvent) => void>(() => { });
   handleProgressRef.current = (event) => {
@@ -1839,6 +2137,103 @@ export function OpenTuiApp({
     if (resolve) resolve(value);
     focusComposerSoon();
   }, [focusComposerSoon]);
+
+  const cancelOAuthOverlay = useCallback(() => {
+    if (oauthAbortRef.current) {
+      oauthAbortRef.current.abort();
+      oauthAbortRef.current = null;
+    }
+    setOauthOverlay((prev) => {
+      if (prev) prev.resolve(null);
+      return null;
+    });
+    focusComposerSoon();
+  }, [focusComposerSoon]);
+
+  const startOAuthFlow = useCallback((method: "browser" | "device") => {
+    const controller = new AbortController();
+    oauthAbortRef.current = controller;
+
+    const onProgress = (event: OAuthProgress) => {
+      switch (event.phase) {
+        case "browser_waiting":
+          setOauthOverlay((s) => s ? { ...s, phase: { step: "browser_waiting", url: event.url } } : s);
+          break;
+        case "device_code":
+          setOauthOverlay((s) => s ? { ...s, phase: { step: "device_code", url: event.url, userCode: event.userCode } } : s);
+          break;
+        case "polling":
+          setOauthOverlay((s) => s ? { ...s, phase: { step: "polling" } } : s);
+          break;
+        case "exchanging":
+          setOauthOverlay((s) => s ? { ...s, phase: { step: "exchanging" } } : s);
+          break;
+        case "done":
+          setOauthOverlay((s) => s ? { ...s, phase: { step: "done" } } : s);
+          break;
+        case "error":
+          setOauthOverlay((s) => s ? { ...s, phase: { step: "error", message: event.message } } : s);
+          break;
+      }
+    };
+
+    const loginFn = method === "browser" ? browserLoginHeadless : deviceCodeLoginHeadless;
+    loginFn({ onProgress, signal: controller.signal })
+      .then(async (tokens) => {
+        saveOAuthTokens(tokens);
+        oauthAbortRef.current = null;
+        // Show "Login successful!" briefly before closing
+        await new Promise((r) => setTimeout(r, 800));
+        setOauthOverlay((prev) => {
+          if (prev) prev.resolve(tokens);
+          return null;
+        });
+        focusComposerSoon();
+      })
+      .catch((err) => {
+        if (err instanceof Error && err.message === "Cancelled") return;
+        setOauthOverlay((s) => s
+          ? { ...s, phase: { step: "error", message: err instanceof Error ? err.message : String(err) } }
+          : s);
+        oauthAbortRef.current = null;
+      });
+  }, [focusComposerSoon]);
+
+  const acceptOAuthChoice = useCallback(() => {
+    setOauthOverlay((s) => {
+      if (!s || s.phase.step !== "choose") return s;
+      // Schedule flow start outside updater to avoid side effects
+      queueMicrotask(() => startOAuthFlow(s.selected === 0 ? "browser" : "device"));
+      return s;
+    });
+  }, [startOAuthFlow]);
+
+  /**
+   * Show the OAuth overlay and return a promise that resolves
+   * with tokens on success, or null on cancel/error.
+   */
+  const requestOAuthLogin = useCallback((): Promise<OAuthTokens | null> => {
+    return new Promise<OAuthTokens | null>((resolve) => {
+      setOauthOverlay({
+        phase: { step: "choose" },
+        selected: 0,
+        resolve,
+      });
+    });
+  }, []);
+
+  // -- Startup OAuth check: prompt login if codex token is missing/expired --
+  const startupOAuthCheckedRef = useRef(false);
+  useEffect(() => {
+    if (startupOAuthCheckedRef.current) return;
+    const provider = session.primaryAgent?.modelConfig?.provider;
+    if (provider !== "openai-codex") return;
+    const token = readOAuthAccessToken();
+    const needsLogin = !hasOAuthTokens() || (token && isTokenExpiring(token));
+    if (!needsLogin) return;
+    startupOAuthCheckedRef.current = true;
+    queueMicrotask(() => { requestOAuthLogin(); });
+  }, [session.primaryAgent?.modelConfig?.provider, requestOAuthLogin]);
 
   const showHint = useCallback((message: string) => {
     setHint(message);
@@ -2134,8 +2529,9 @@ export function OpenTuiApp({
           });
         });
       },
+      requestOAuthLogin,
     };
-  }, [session, store, commandRegistry, autoSave, performExit, resolvePromptSecret, resolvePromptSelect]);
+  }, [session, store, commandRegistry, autoSave, performExit, resolvePromptSecret, resolvePromptSelect, requestOAuthLogin]);
 
   const runTurn = useCallback(async (input: string) => {
     const controller = new AbortController();
@@ -2666,6 +3062,35 @@ export function OpenTuiApp({
       return;
     }
 
+    if (oauthOverlay) {
+      if (oauthOverlay.phase.step === "choose") {
+        if (event.name === "up" || (event.name === "tab" && event.shift)) {
+          setOauthOverlay((s) => s ? { ...s, selected: s.selected === 0 ? 1 : 0 } : s);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (event.name === "down" || event.name === "tab") {
+          setOauthOverlay((s) => s ? { ...s, selected: s.selected === 0 ? 1 : 0 } : s);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (event.name === "return") {
+          acceptOAuthChoice();
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+      if (event.name === "escape" || (event.name === "c" && event.ctrl)) {
+        cancelOAuthOverlay();
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
+
     if (pendingAsk?.kind === "agent_question") {
       if (!(event.name === "c" && event.ctrl)) {
         const questions = (pendingAsk.payload["questions"] as AgentQuestionItem[]) ?? [];
@@ -3125,6 +3550,11 @@ export function OpenTuiApp({
             onSubmit={submitPromptSecret}
             colors={colors}
           />
+          <OAuthOverlayView
+            state={oauthOverlay}
+            colors={colors}
+            contentWidth={pickerContentWidth}
+          />
         </box>
 
         {sidebarVisible ? (
@@ -3134,6 +3564,8 @@ export function OpenTuiApp({
             contextLimit={session.primaryAgent.modelConfig?.contextLength}
             cacheReadTokens={cacheReadTokens}
             checkpoints={planCheckpoints}
+            agents={activeAgents}
+            codexUsage={codexUsage}
             colors={colors}
           />
         ) : null}

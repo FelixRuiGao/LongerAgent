@@ -26,10 +26,14 @@ export function createEphemeralLogState(
   opts?: {
     requiresAlternatingRoles?: boolean;
     turnIndex?: number;
+    /** Use an external entries array (for persistent sub-agents). */
+    externalEntries?: LogEntry[];
+    /** Use an external ID allocator (for persistent sub-agents). */
+    externalIdAllocator?: LogIdAllocator;
   },
 ): EphemeralLogState {
-  const entries: LogEntry[] = [];
-  const idAllocator = new LogIdAllocator();
+  const entries: LogEntry[] = opts?.externalEntries ?? [];
+  const idAllocator = opts?.externalIdAllocator ?? new LogIdAllocator();
   const usedContextIds = new Set<string>();
   const turnIndex = opts?.turnIndex ?? 0;
 
@@ -52,6 +56,21 @@ export function createEphemeralLogState(
     }
     entries.push(entry);
   };
+
+  // If external entries were provided and already have content, skip import
+  // (re-activation path for persistent sub-agents).
+  if (opts?.externalEntries && opts.externalEntries.length > 0) {
+    // Rebuild usedContextIds from existing entries
+    for (const entry of entries) {
+      const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
+      if (ctxId !== undefined && ctxId !== null) usedContextIds.add(String(ctxId));
+      if (entry.roundIndex !== undefined) {
+        nextRoundIndex = Math.max(nextRoundIndex, entry.roundIndex + 1);
+        lastAssistantRoundIndex = Math.max(lastAssistantRoundIndex, entry.roundIndex);
+      }
+    }
+    // Skip the import loop below — go straight to the return
+  } else {
 
   for (const msg of initialMessages) {
     const role = String(msg["role"] ?? "");
@@ -184,6 +203,7 @@ export function createEphemeralLogState(
       ));
     }
   }
+  } // end of else (import phase)
 
   return {
     entries,

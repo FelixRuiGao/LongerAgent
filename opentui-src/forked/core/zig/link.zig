@@ -28,7 +28,7 @@ pub const LinkPool = struct {
     slot_capacity: u32,
     slots_per_page: u32,
     slot_size_bytes: usize,
-    slots: std.ArrayListUnmanaged(u8),
+    slots: std.ArrayListAlignedUnmanaged(u8, std.mem.Alignment.of(SlotHeader)),
     free_list: std.ArrayListUnmanaged(u32),
     num_slots: u32,
     interned_live_ids: std.StringHashMapUnmanaged(IdPayload),
@@ -36,7 +36,8 @@ pub const LinkPool = struct {
     pub fn init(allocator: std.mem.Allocator) LinkPool {
         const slot_capacity = MAX_URL_LENGTH;
         const slots_per_page = 64;
-        const slot_size_bytes = @sizeOf(SlotHeader) + slot_capacity;
+        const raw_slot_size = @sizeOf(SlotHeader) + slot_capacity;
+        const slot_size_bytes = std.mem.alignForward(usize, raw_slot_size, @alignOf(SlotHeader));
         return .{
             .allocator = allocator,
             .slot_capacity = slot_capacity,
@@ -65,6 +66,7 @@ pub const LinkPool = struct {
 
         try self.slots.ensureTotalCapacity(self.allocator, self.slots.items.len + add_bytes);
         try self.slots.appendNTimes(self.allocator, 0, add_bytes);
+        std.debug.assert(std.mem.Alignment.of(SlotHeader).check(@intFromPtr(self.slots.items.ptr)));
 
         var i: u32 = 0;
         while (i < self.slots_per_page) : (i += 1) {

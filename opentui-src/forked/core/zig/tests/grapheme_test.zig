@@ -1,5 +1,6 @@
 const std = @import("std");
 const gp = @import("../grapheme.zig");
+const test_allocators = @import("test-allocators.zig");
 
 const GraphemePool = gp.GraphemePool;
 const GraphemeTracker = gp.GraphemeTracker;
@@ -8,6 +9,19 @@ test "GraphemePool - can initialize and cleanup" {
     // Just verify init/deinit don't crash
     var pool = GraphemePool.init(std.testing.allocator);
     pool.deinit();
+}
+
+test "GraphemePool - works with allocator that misaligns byte slices" {
+    var misaligning = test_allocators.MisalignU8Allocator.init(std.testing.allocator);
+    var pool = GraphemePool.init(misaligning.allocator());
+    defer pool.deinit();
+
+    const emoji = "🙂";
+    const id = try pool.alloc(emoji);
+    try pool.incref(id);
+    defer pool.decref(id) catch {};
+
+    try std.testing.expectEqualSlices(u8, emoji, try pool.get(id));
 }
 
 test "GraphemePool - alloc and get small grapheme" {

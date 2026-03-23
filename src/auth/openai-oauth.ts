@@ -313,21 +313,43 @@ p{color:#666;margin:0}</style></head>
 <body><div class="card"><h1>${title}</h1><p>${message}</p></div></body></html>`;
 }
 
+// =============================================================================
+// Headless OAuth flows (UI-agnostic, callback-driven)
+// =============================================================================
+
+/** Progress events emitted by headless OAuth flows. */
+export type OAuthProgress =
+  | { phase: "browser_waiting"; url: string }
+  | { phase: "device_code"; url: string; userCode: string }
+  | { phase: "polling" }
+  | { phase: "exchanging" }
+  | { phase: "done" }
+  | { phase: "error"; message: string };
+
+export interface HeadlessOAuthOptions {
+  /** Called with progress updates for UI rendering. */
+  onProgress?: (event: OAuthProgress) => void;
+  /** AbortSignal to cancel the flow (e.g. user presses Esc). */
+  signal?: AbortSignal;
+  /** Whether to auto-open the browser (default: true for non-SSH). */
+  openBrowserAutomatically?: boolean;
+}
+
 /**
- * Execute the PKCE browser OAuth flow.
- *
- * 1. Generate PKCE verifier + challenge + state
- * 2. Start local callback server on port 1455
- * 3. Open browser to OpenAI authorization URL
- * 4. Wait for callback with authorization code
- * 5. Exchange code for tokens
+ * Headless PKCE browser login — no console.log, no inquirer.
+ * Opens browser (unless suppressed), starts callback server, returns tokens.
  */
-export async function browserLogin(): Promise<OAuthTokens> {
+export async function browserLoginHeadless(
+  opts?: HeadlessOAuthOptions,
+): Promise<OAuthTokens> {
+  const onProgress = opts?.onProgress ?? (() => {});
+  const signal = opts?.signal;
+  const autoOpen = opts?.openBrowserAutomatically ?? !isRemoteSession();
+
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = generateState();
 
-  // Build authorization URL (matches OpenAI's expected parameters)
   const params = new URLSearchParams({
     response_type: "code",
     client_id: CLIENT_ID,
@@ -342,9 +364,7 @@ export async function browserLogin(): Promise<OAuthTokens> {
   });
   const authorizeUrl = `${AUTHORIZE_URL}?${params.toString()}`;
 
-  // Start callback server
   const { promise: codePromise, server } = waitForCallback(state);
-
   const cleanup = () => {
     try {
       server.closeAllConnections();
@@ -353,30 +373,24 @@ export async function browserLogin(): Promise<OAuthTokens> {
   };
 
   try {
-    console.log();
-    if (isRemoteSession()) {
-      console.log("  Open this URL in your browser:");
-      console.log(`  \x1b[94m${authorizeUrl}\x1b[0m`);
-    } else {
-      console.log("  Opening browser for authentication...");
-      openBrowser(authorizeUrl);
-      console.log(`  If the browser didn't open, visit:`);
-      console.log(`  \x1b[94m${authorizeUrl}\x1b[0m`);
-    }
-    console.log();
-    console.log("  Waiting for authorization... (press Ctrl+C to cancel)");
+    if (signal?.aborted) throw new Error("Cancelled");
 
-    // Wait for callback or timeout
-    let timeoutHandle: ReturnType<typeof setTimeout>;
+    if (autoOpen) openBrowser(authorizeUrl);
+    onProgress({ phase: "browser_waiting", url: authorizeUrl });
+
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => reject(new Error("Login timed out after 15 minutes.")), AUTH_TIMEOUT_MS);
+      setTimeout(() => reject(new Error("Login timed out after 15 minutes.")), AUTH_TIMEOUT_MS);
     });
+    const cancelPromise = signal
+      ? new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
+        })
+      : new Promise<never>(() => {});
 
-    const code = await Promise.race([codePromise, timeoutPromise]);
-    clearTimeout(timeoutHandle!);
+    const code = await Promise.race([codePromise, timeoutPromise, cancelPromise]);
     cleanup();
 
-    // Exchange code for tokens
+    onProgress({ phase: "exchanging" });
     const { status, data } = await fetchForm(TOKEN_URL, {
       grant_type: "authorization_code",
       code,
@@ -394,10 +408,9 @@ export async function browserLogin(): Promise<OAuthTokens> {
 
     const accessToken = String(data["access_token"] ?? "");
     const refreshToken = String(data["refresh_token"] ?? "");
-    if (!accessToken) {
-      throw new Error("Token exchange did not return an access_token.");
-    }
+    if (!accessToken) throw new Error("Token exchange did not return an access_token.");
 
+    onProgress({ phase: "done" });
     return { access_token: accessToken, refresh_token: refreshToken };
   } catch (err) {
     cleanup();
@@ -405,19 +418,18 @@ export async function browserLogin(): Promise<OAuthTokens> {
   }
 }
 
-// =============================================================================
-// Device Code OAuth flow
-// =============================================================================
-
 /**
- * Execute the Device Code OAuth login flow.
- *
- * 1. Request device code from OpenAI
- * 2. Display user code and verification URL
- * 3. Poll for authorization (up to 15 minutes)
- * 4. Exchange authorization code for tokens
+ * Headless device code login — no console.log, no inquirer.
+ * Requests device code, polls for authorization, returns tokens.
  */
-export async function deviceCodeLogin(): Promise<OAuthTokens> {
+export async function deviceCodeLoginHeadless(
+  opts?: HeadlessOAuthOptions,
+): Promise<OAuthTokens> {
+  const onProgress = opts?.onProgress ?? (() => {});
+  const signal = opts?.signal;
+
+  if (signal?.aborted) throw new Error("Cancelled");
+
   // Step 1: Request device code
   let deviceData: Record<string, unknown>;
   try {
@@ -426,83 +438,54 @@ export async function deviceCodeLogin(): Promise<OAuthTokens> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ client_id: CLIENT_ID }),
     });
-    if (status !== 200) {
-      throw new Error(`Device code request returned status ${status}.`);
-    }
+    if (status !== 200) throw new Error(`Device code request returned status ${status}.`);
     deviceData = data;
   } catch (err) {
-    throw new Error(
-      `Failed to request device code: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new Error(`Failed to request device code: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const userCode = String(deviceData["user_code"] ?? "");
   const deviceAuthId = String(deviceData["device_auth_id"] ?? "");
   const pollInterval = Math.max(3, Number(deviceData["interval"]) || 5);
 
-  if (!userCode || !deviceAuthId) {
-    throw new Error("Device code response missing required fields.");
-  }
+  if (!userCode || !deviceAuthId) throw new Error("Device code response missing required fields.");
 
-  // Step 2: Display user code
-  console.log();
-  console.log("  To continue, follow these steps:");
-  console.log();
-  console.log(`  1. Open this URL in your browser:`);
-  console.log(`     \x1b[94m${DEVICE_VERIFY_URL}\x1b[0m`);
-  console.log();
-  console.log(`  2. Enter this code:`);
-  console.log(`     \x1b[94m${userCode}\x1b[0m`);
-  console.log();
-  console.log("  Waiting for sign-in... (press Ctrl+C to cancel)");
+  onProgress({ phase: "device_code", url: DEVICE_VERIFY_URL, userCode });
 
-  // Step 3: Poll for authorization code
+  // Step 2: Poll for authorization code
   const deadline = Date.now() + AUTH_TIMEOUT_MS;
   let codeResp: Record<string, unknown> | null = null;
 
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw new Error("Cancelled");
     await new Promise((r) => setTimeout(r, pollInterval * 1000));
 
     try {
       const { status, data } = await fetchJson(DEVICE_POLL_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          device_auth_id: deviceAuthId,
-          user_code: userCode,
-        }),
+        body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
       });
 
-      if (status === 200) {
-        codeResp = data;
-        break;
-      } else if (status === 403 || status === 404) {
-        continue;
-      } else {
-        throw new Error(`Device auth polling returned status ${status}.`);
-      }
+      if (status === 200) { codeResp = data; break; }
+      if (status === 403 || status === 404) { onProgress({ phase: "polling" }); continue; }
+      throw new Error(`Device auth polling returned status ${status}.`);
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        continue;
-      }
+      if (err instanceof Error && err.name === "AbortError") continue;
       throw err;
     }
   }
 
-  if (codeResp === null) {
-    throw new Error("Login timed out after 15 minutes.");
-  }
+  if (codeResp === null) throw new Error("Login timed out after 15 minutes.");
 
-  // Step 4: Exchange authorization code for tokens
+  // Step 3: Exchange authorization code for tokens
   const authorizationCode = String(codeResp["authorization_code"] ?? "");
-  const codeVerifier = String(codeResp["code_verifier"] ?? "");
-
-  if (!authorizationCode || !codeVerifier) {
-    throw new Error(
-      "Device auth response missing authorization_code or code_verifier.",
-    );
+  const codeVerifierFromResp = String(codeResp["code_verifier"] ?? "");
+  if (!authorizationCode || !codeVerifierFromResp) {
+    throw new Error("Device auth response missing authorization_code or code_verifier.");
   }
 
+  onProgress({ phase: "exchanging" });
   let tokenData: Record<string, unknown>;
   try {
     const { status, data } = await fetchForm(TOKEN_URL, {
@@ -510,26 +493,73 @@ export async function deviceCodeLogin(): Promise<OAuthTokens> {
       code: authorizationCode,
       redirect_uri: DEVICE_REDIRECT_URI,
       client_id: CLIENT_ID,
-      code_verifier: codeVerifier,
+      code_verifier: codeVerifierFromResp,
     });
-    if (status !== 200) {
-      throw new Error(`Token exchange returned status ${status}.`);
-    }
+    if (status !== 200) throw new Error(`Token exchange returned status ${status}.`);
     tokenData = data;
   } catch (err) {
-    throw new Error(
-      `Token exchange failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new Error(`Token exchange failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const accessToken = String(tokenData["access_token"] ?? "");
   const refreshToken = String(tokenData["refresh_token"] ?? "");
+  if (!accessToken) throw new Error("Token exchange did not return an access_token.");
 
-  if (!accessToken) {
-    throw new Error("Token exchange did not return an access_token.");
-  }
-
+  onProgress({ phase: "done" });
   return { access_token: accessToken, refresh_token: refreshToken };
+}
+
+// =============================================================================
+// CLI wrappers (console.log + inquirer for `longeragent oauth` command)
+// =============================================================================
+
+/**
+ * CLI browser login — wraps headless flow with console output.
+ */
+export async function browserLogin(): Promise<OAuthTokens> {
+  return browserLoginHeadless({
+    openBrowserAutomatically: !isRemoteSession(),
+    onProgress: (event) => {
+      switch (event.phase) {
+        case "browser_waiting":
+          console.log();
+          if (isRemoteSession()) {
+            console.log("  Open this URL in your browser:");
+          } else {
+            console.log("  Opening browser for authentication...");
+            console.log("  If the browser didn't open, visit:");
+          }
+          console.log(`  \x1b[94m${event.url}\x1b[0m`);
+          console.log();
+          console.log("  Waiting for authorization... (press Ctrl+C to cancel)");
+          break;
+      }
+    },
+  });
+}
+
+/**
+ * CLI device code login — wraps headless flow with console output.
+ */
+export async function deviceCodeLogin(): Promise<OAuthTokens> {
+  return deviceCodeLoginHeadless({
+    onProgress: (event) => {
+      switch (event.phase) {
+        case "device_code":
+          console.log();
+          console.log("  To continue, follow these steps:");
+          console.log();
+          console.log("  1. Open this URL in your browser:");
+          console.log(`     \x1b[94m${event.url}\x1b[0m`);
+          console.log();
+          console.log("  2. Enter this code:");
+          console.log(`     \x1b[94m${event.userCode}\x1b[0m`);
+          console.log();
+          console.log("  Waiting for sign-in... (press Ctrl+C to cancel)");
+          break;
+      }
+    },
+  });
 }
 
 // =============================================================================

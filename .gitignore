@@ -21,3 +21,7 @@ dejavu-fonts-ttf-2.37/
 *.tgz
 .codex/
 .zig-cache/
+.junie/
+hitgrid_*.txt
+buffer_dump/
+crash-diag.log

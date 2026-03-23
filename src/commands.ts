@@ -40,6 +40,7 @@ import { resolveSkillContent, type SkillMeta } from "./skills/loader.js";
 import { ACCENT_PRESETS, DEFAULT_ACCENT, setAccent, theme } from "./tui/theme.js";
 import { buildModelPickerTree, toCommandPickerOptions } from "./model-picker-tree.js";
 import { formatCurrentModelScopedLabel, getCurrentModelDescriptor } from "./model-presentation.js";
+import { hasOAuthTokens, isTokenExpiring, readOAuthAccessToken, clearOAuthTokens } from "./auth/openai-oauth.js";
 
 // ------------------------------------------------------------------
 // Types
@@ -92,6 +93,9 @@ export interface CommandContext {
 
   /** Prompt the user for a secret value during command execution. */
   promptSecret?: (request: PromptSecretRequest) => Promise<string | undefined>;
+
+  /** Show the inline OAuth login overlay and return tokens (or null on cancel). */
+  requestOAuthLogin?: () => Promise<import("./auth/openai-oauth.js").OAuthTokens | null>;
 }
 
 /**
@@ -594,6 +598,27 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
       return;
     }
 
+    // ── Codex OAuth check: ensure valid token before resolving ──
+    const parsedForCodex = parseProviderModelTarget(target);
+    if (parsedForCodex?.provider === "openai-codex") {
+      const existingToken = readOAuthAccessToken();
+      const needsLogin = !hasOAuthTokens()
+        || (existingToken && isTokenExpiring(existingToken));
+      if (needsLogin && ctx.requestOAuthLogin) {
+        const tokens = await ctx.requestOAuthLogin();
+        if (!tokens) {
+          ctx.showMessage("Model switch cancelled.");
+          return;
+        }
+      } else if (needsLogin) {
+        ctx.showMessage(
+          "OpenAI OAuth token is missing or expired.\n" +
+          "Run 'longeragent oauth' to log in.",
+        );
+        return;
+      }
+    }
+
     let resolvedSelection;
     try {
       resolvedSelection = resolveModelSelection(session, target);
@@ -873,6 +898,67 @@ async function cmdRename(ctx: CommandContext, args: string): Promise<void> {
 }
 
 // ------------------------------------------------------------------
+// /codex command
+// ------------------------------------------------------------------
+
+function codexOptions(): CommandPickerOption[] {
+  const token = readOAuthAccessToken();
+  const loggedIn = hasOAuthTokens() && token && !isTokenExpiring(token);
+  const options: CommandPickerOption[] = [];
+  if (loggedIn) {
+    options.push({ label: "status", value: "status", description: "Show login status" });
+    options.push({ label: "logout", value: "logout", description: "Clear saved tokens" });
+  } else {
+    options.push({ label: "login", value: "login", description: "Log in to OpenAI ChatGPT" });
+  }
+  return options;
+}
+
+async function cmdCodex(ctx: CommandContext, args: string): Promise<void> {
+  const sub = args.trim().toLowerCase();
+
+  if (sub === "login" || sub === "") {
+    const token = readOAuthAccessToken();
+    const loggedIn = hasOAuthTokens() && token && !isTokenExpiring(token);
+    if (loggedIn && sub !== "login") {
+      ctx.showMessage("Already logged in to OpenAI ChatGPT.");
+      return;
+    }
+    if (ctx.requestOAuthLogin) {
+      const tokens = await ctx.requestOAuthLogin();
+      if (!tokens) {
+        ctx.showMessage("Login cancelled.");
+      }
+    } else {
+      ctx.showMessage("OAuth login is not available in this environment.");
+    }
+    return;
+  }
+
+  if (sub === "logout") {
+    clearOAuthTokens();
+    ctx.showMessage("OpenAI ChatGPT tokens cleared.");
+    return;
+  }
+
+  if (sub === "status") {
+    const token = readOAuthAccessToken();
+    if (!token || !hasOAuthTokens()) {
+      ctx.showMessage("Not logged in.");
+      return;
+    }
+    if (isTokenExpiring(token)) {
+      ctx.showMessage("Logged in (token expiring soon).");
+    } else {
+      ctx.showMessage("Logged in.");
+    }
+    return;
+  }
+
+  ctx.showMessage(`Unknown /codex subcommand: ${sub}`);
+}
+
+// ------------------------------------------------------------------
 // Registry builder
 // ------------------------------------------------------------------
 
@@ -895,6 +981,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/skills", description: "Manage installed skills", handler: cmdSkills, options: skillsOptions, checkboxMode: true });
   registry.register({ name: "/mcp", description: "Show MCP server status and tools", handler: cmdMcp });
   registry.register({ name: "/rename", description: "Rename current session", handler: cmdRename });
+  registry.register({ name: "/codex", description: "OpenAI ChatGPT login", handler: cmdCodex, options: codexOptions });
   return registry;
 }
 

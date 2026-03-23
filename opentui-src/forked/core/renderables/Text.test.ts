@@ -5,6 +5,7 @@ import { RGBA } from "../lib/RGBA.js"
 import { stringToStyledText, StyledText } from "../lib/styled-text.js"
 import { createTestRenderer, type MockMouse, type TestRenderer } from "../testing/test-renderer.js"
 import { BoxRenderable } from "./Box.js"
+import { ScrollBoxRenderable } from "./ScrollBox.js"
 
 let currentRenderer: TestRenderer
 let renderOnce: () => Promise<void>
@@ -2497,6 +2498,90 @@ describe("TextRenderable Selection", () => {
       await renderOnce()
 
       expect(text.scrollY).toBe(2)
+    })
+
+    it("should coalesce rapid wheel bursts until the next render", async () => {
+      resize(20, 5)
+
+      const longText = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10"
+      const { text } = await createTextRenderable(currentRenderer, {
+        content: longText,
+        wrapMode: "none",
+      })
+
+      await renderOnce()
+
+      for (let i = 0; i < 5; i++) {
+        await currentMouse.scroll(text.x + 1, text.y + 1, "down")
+      }
+
+      expect(text.scrollY).toBe(0)
+
+      await renderOnce()
+
+      expect(text.scrollY).toBe(5)
+    })
+
+    it("should keep nested text scroll from also scrolling the parent scrollbox", async () => {
+      resize(30, 10)
+
+      const outer = new ScrollBoxRenderable(currentRenderer, {
+        width: 20,
+        height: 5,
+        scrollY: true,
+      })
+      currentRenderer.root.add(outer)
+
+      const text = new TextRenderable(currentRenderer, {
+        content: "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8",
+        width: 16,
+        height: 2,
+        wrapMode: "none",
+      })
+      outer.add(text)
+      outer.add(new BoxRenderable(currentRenderer, { height: 12, width: 1 }))
+
+      await renderOnce()
+
+      expect(text.maxScrollY).toBeGreaterThan(0)
+      expect(outer.scrollTop).toBe(0)
+
+      await currentMouse.scroll(text.x + 1, text.y + 1, "down")
+      await renderOnce()
+
+      expect(text.scrollY).toBe(1)
+      expect(outer.scrollTop).toBe(0)
+    })
+
+    it("should bubble nested text scroll to the parent scrollbox at the boundary", async () => {
+      resize(30, 10)
+
+      const outer = new ScrollBoxRenderable(currentRenderer, {
+        width: 20,
+        height: 5,
+        scrollY: true,
+      })
+      currentRenderer.root.add(outer)
+
+      const text = new TextRenderable(currentRenderer, {
+        content: "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8",
+        width: 16,
+        height: 2,
+        wrapMode: "none",
+      })
+      outer.add(text)
+      outer.add(new BoxRenderable(currentRenderer, { height: 12, width: 1 }))
+
+      await renderOnce()
+
+      text.scrollY = text.maxScrollY
+      await renderOnce()
+
+      await currentMouse.scroll(text.x + 1, text.y + 1, "down")
+      await renderOnce()
+
+      expect(text.scrollY).toBe(text.maxScrollY)
+      expect(outer.scrollTop).toBeGreaterThan(0)
     })
 
     it("should handle mouse scroll events for horizontal scrolling with unwrapped text", async () => {
