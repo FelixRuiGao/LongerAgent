@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { buildDefaultRegistry, type CommandContext } from "../src/commands.js";
+import { Session } from "../src/session.js";
 import {
   createSystemPrompt,
   createTurnStart,
@@ -11,7 +12,7 @@ import {
   createAssistantText,
   LogIdAllocator,
 } from "../src/log-entry.js";
-import { saveLog, createLogSessionMeta } from "../src/persistence.js";
+import { SessionStore, saveLog, createLogSessionMeta } from "../src/persistence.js";
 
 function makeTempSession(entries: any[], metaOverrides?: Record<string, unknown>) {
   const tmpDir = join(tmpdir(), `la-resume-test-${randomBytes(4).toString("hex")}`);
@@ -27,6 +28,96 @@ function makeTempSession(entries: any[], metaOverrides?: Record<string, unknown>
   });
   saveLog(sessionDir, meta, entries);
   return { tmpDir, sessionDir, meta };
+}
+
+function makeStoreMock(initialSessionDir = "") {
+  const binding = {
+    activeBaseDir: undefined as string | undefined,
+    projectDir: "/tmp/project",
+    sessionDir: initialSessionDir || undefined,
+    predictedSessionDir: undefined as string | undefined,
+  };
+  const store = {
+    sessionDir: initialSessionDir,
+    captureBindingState: vi.fn(() => ({ ...binding, sessionDir: binding.sessionDir })),
+    restoreBindingState: vi.fn((state: typeof binding) => {
+      binding.activeBaseDir = state.activeBaseDir;
+      binding.projectDir = state.projectDir;
+      binding.sessionDir = state.sessionDir;
+      binding.predictedSessionDir = state.predictedSessionDir;
+      (store as any).sessionDir = state.sessionDir ?? "";
+    }),
+    attachToExistingSession: vi.fn((path: string) => {
+      binding.sessionDir = path;
+      (store as any).sessionDir = path;
+    }),
+  } as any;
+  return store;
+}
+
+function makeSession(
+  projectRoot: string,
+  store: SessionStore,
+  options?: { initialModelConfigName?: string },
+): Session {
+  const initialModelConfigName = options?.initialModelConfigName ?? "test-model";
+  const modelConfigs = {
+    "test-model": {
+      name: "test-model",
+      provider: "openai",
+      model: "gpt-5.4",
+      apiKey: "sk-test",
+      maxTokens: 1024,
+      contextLength: 128000,
+      supportsMultimodal: false,
+    },
+  };
+
+  const primaryAgent = {
+    name: "Primary",
+    systemPrompt: "ROOT={PROJECT_ROOT}\nART={SESSION_ARTIFACTS}\nSYS={SYSTEM_DATA}",
+    tools: [],
+    modelConfig: { ...modelConfigs[initialModelConfigName as keyof typeof modelConfigs] },
+    _provider: { budgetCalcMode: "full_context" },
+    replaceModelConfig(next: any) {
+      this.modelConfig = next;
+    },
+  } as any;
+
+  const config = {
+    pathOverrides: { projectRoot },
+    subAgentModelName: undefined,
+    mcpServerConfigs: [],
+    getModel: (name: string) => {
+      const model = (modelConfigs as Record<string, any>)[name];
+      if (!model) throw new Error(`Model config '${name}' not found.`);
+      return { ...model };
+    },
+    listModelEntries: () => [],
+    upsertModelRaw: () => {},
+    get modelNames() {
+      return Object.keys(modelConfigs);
+    },
+  } as any;
+
+  return new Session({
+    primaryAgent,
+    config,
+    agentTemplates: {
+      explorer: {
+        name: "explorer",
+        systemPrompt: "You are an explorer.",
+        tools: [],
+        maxToolRounds: 8,
+        modelConfig: { ...modelConfigs["test-model"] },
+        _provider: { budgetCalcMode: "full_context" },
+        replaceModelConfig(next: any) {
+          this.modelConfig = next;
+        },
+      } as any,
+    },
+    store,
+  });
 }
 
 describe("resume command", () => {
@@ -117,14 +208,14 @@ describe("resume command", () => {
     ];
     const { tmpDir, sessionDir } = makeTempSession(entries);
 
-    const store = {
-      sessionDir: "",
-      listSessions: vi.fn(() => [
-        { path: sessionDir, created: "2026-03-01 10:00:00", summary: "hello chat", turns: 1 },
-      ]),
-    };
+    const store = makeStoreMock("");
+    store.listSessions = vi.fn(() => [
+      { path: sessionDir, created: "2026-03-01 10:00:00", summary: "hello chat", turns: 1 },
+    ]);
 
-    const restoreFromLog = vi.fn();
+    const prepared = { kind: "prepared" } as any;
+    const prepareRestoreFromLog = vi.fn(() => prepared);
+    const commitPreparedRestore = vi.fn(() => []);
     const setStore = vi.fn();
     const resetUiState = vi.fn();
     const autoSave = vi.fn();
@@ -132,7 +223,8 @@ describe("resume command", () => {
 
     const ctx: CommandContext = {
       session: {
-        restoreFromLog,
+        prepareRestoreFromLog,
+        commitPreparedRestore,
         setStore,
         lastInputTokens: 0,
       },
@@ -147,15 +239,17 @@ describe("resume command", () => {
 
     expect(autoSave).toHaveBeenCalledTimes(1);
     expect(resetUiState).toHaveBeenCalledTimes(1);
-    expect(restoreFromLog).toHaveBeenCalledTimes(1);
+    expect(prepareRestoreFromLog).toHaveBeenCalledTimes(1);
+    expect(commitPreparedRestore).toHaveBeenCalledWith(prepared);
 
-    // Check restoreFromLog args
-    const [resMeta, resEntries, resIdAlloc] = restoreFromLog.mock.calls[0];
+    // Check prepareRestoreFromLog args
+    const [resMeta, resEntries, resIdAlloc] = prepareRestoreFromLog.mock.calls[0];
     expect(resMeta.turnCount).toBe(1);
     expect(resEntries).toHaveLength(4);
     expect(resIdAlloc).toBeInstanceOf(LogIdAllocator);
 
     expect(store.sessionDir).toBe(sessionDir);
+    expect(store.attachToExistingSession).toHaveBeenCalledWith(sessionDir);
     expect(setStore).toHaveBeenCalled();
 
     expect(showMessage).not.toHaveBeenCalledWith("--- Session restored ---");
@@ -211,20 +305,19 @@ describe("resume command", () => {
       modelConfigName: "missing-model",
     });
 
-    const store = {
-      sessionDir: "",
-      listSessions: vi.fn(() => [
-        { path: sessionDir, created: "2026-03-01 10:00:00", summary: "hello chat", turns: 1 },
-      ]),
-    };
+    const store = makeStoreMock("");
+    store.listSessions = vi.fn(() => [
+      { path: sessionDir, created: "2026-03-01 10:00:00", summary: "hello chat", turns: 1 },
+    ]);
 
     const showMessage = vi.fn();
     const setStore = vi.fn();
     const ctx: CommandContext = {
       session: {
-        restoreFromLog: vi.fn(() => {
+        prepareRestoreFromLog: vi.fn(() => {
           throw new Error("Model config 'missing-model' not found.");
         }),
+        commitPreparedRestore: vi.fn(),
         setStore,
         lastInputTokens: 0,
       },
@@ -241,7 +334,103 @@ describe("resume command", () => {
       "Failed to restore session: Model config 'missing-model' not found.",
     );
     expect(store.sessionDir).toBe("");
+    expect(store.restoreBindingState).toHaveBeenCalledTimes(1);
     expect(setStore).not.toHaveBeenCalled();
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("resumes a session that has persisted child sessions", async () => {
+    const registry = buildDefaultRegistry();
+    const resume = registry.lookup("/resume");
+    expect(resume).toBeTruthy();
+
+    const tmpDir = join(tmpdir(), `la-resume-real-${randomBytes(4).toString("hex")}`);
+    const projectRoot = join(tmpDir, "project");
+    mkdirSync(projectRoot, { recursive: true });
+
+    const storage = new SessionStore({ baseDir: tmpDir, projectPath: projectRoot });
+    const sessionDir = storage.createSession();
+
+    const childSessionDir = join(sessionDir, "artifacts", "agents", "repo-mapper", "session");
+    mkdirSync(childSessionDir, { recursive: true });
+
+    const childEntries = [
+      createSystemPrompt("child-sys-001", 0, "You are helpful"),
+      createTurnStart("child-ts-001", 1),
+      createUserMessage("child-user-001", 1, "Map repo", "Map repo", { contextId: "cc1" }),
+      createAssistantText("child-asst-001", 1, 0, "Mapped repo", "Mapped repo"),
+    ];
+    saveLog(
+      childSessionDir,
+      createLogSessionMeta({
+        createdAt: "2026-03-01T10:00:00Z",
+        turnCount: 1,
+        compactCount: 0,
+        summary: "child",
+        modelConfigName: "test-model",
+      }),
+      childEntries,
+    );
+
+    const rootEntries = [
+      createSystemPrompt("sys-001", 0, "You are helpful"),
+      createTurnStart("ts-001", 1),
+      createUserMessage("user-001", 1, "Hello!", "Hello!", { contextId: "c1" }),
+      createAssistantText("asst-001", 1, 0, "Hi there!", "Hi there!"),
+    ];
+    saveLog(
+      sessionDir,
+      createLogSessionMeta({
+        createdAt: "2026-03-01T10:00:00Z",
+        turnCount: 1,
+        compactCount: 0,
+        summary: "hello chat",
+        modelConfigName: "test-model",
+        childSessions: [
+          {
+            id: "repo-mapper",
+            numericId: 1,
+            template: "explorer",
+            mode: "persistent",
+            teamId: null,
+            lifecycle: "live",
+            outcome: "completed",
+            order: 1,
+          },
+        ],
+      }),
+      rootEntries,
+    );
+
+    const liveStore = new SessionStore({ baseDir: tmpDir, projectPath: projectRoot });
+    const session = makeSession(projectRoot, liveStore);
+    const showMessage = vi.fn();
+
+    const ctx: CommandContext = {
+      session,
+      showMessage,
+      store: Object.assign(liveStore, {
+        listSessions: vi.fn(() => [
+          { path: sessionDir, created: "2026-03-01 10:00:00", summary: "hello chat", turns: 1 },
+        ]),
+      }) as unknown as CommandContext["store"],
+      autoSave: vi.fn(),
+      resetUiState: vi.fn(),
+      commandRegistry: registry,
+    };
+
+    await resume!.handler(ctx, "1");
+
+    expect(liveStore.sessionDir).toBe(sessionDir);
+    expect(session.getChildSessionSnapshots()).toEqual([
+      expect.objectContaining({
+        id: "repo-mapper",
+        mode: "persistent",
+        lifecycle: "live",
+      }),
+    ]);
+    expect(showMessage).not.toHaveBeenCalledWith(expect.stringContaining("Failed to restore session"));
 
     rmSync(tmpDir, { recursive: true, force: true });
   });

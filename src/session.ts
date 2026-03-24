@@ -113,6 +113,7 @@ import {
   loadLog,
   saveLog,
   type GlobalTuiPreferences,
+  type LoadLogResult,
   type LogSessionMeta,
 } from "./persistence.js";
 import {
@@ -331,6 +332,20 @@ interface InterruptSnapshot {
   hadActiveShells: boolean;
   hadUnconsumed: boolean;
   deliveryContent: string;
+}
+
+interface PreparedChildRestore {
+  record: ChildSessionMetaRecord;
+  agent: Agent;
+  sessionDir: string;
+  artifactsDir: string;
+  loaded: LoadLogResult;
+}
+
+interface PreparedSessionRestore {
+  rootState: Session;
+  children: PreparedChildRestore[];
+  warnings: string[];
 }
 
 // ------------------------------------------------------------------
@@ -1373,10 +1388,146 @@ export class Session {
   /**
    * Restore session from a loaded log.
    */
+  prepareRestoreFromLog(
+    meta: LogSessionMeta,
+    entries: LogEntry[],
+    idAllocator: LogIdAllocator,
+  ): PreparedSessionRestore {
+    if ((meta.childSessions?.length ?? 0) > 0 && !this._sessionArtifactsOverride && !this._getArtifactsDirIfAvailable()) {
+      throw new Error(
+        "Cannot restore child sessions before the session store is bound to the target session directory.",
+      );
+    }
+
+    const shadow = this._createRestoreShadowSession();
+    const clonedEntries = structuredClone(entries) as LogEntry[];
+    const clonedAllocator = new LogIdAllocator();
+    clonedAllocator.restoreFrom(clonedEntries);
+
+    shadow._restoreFromLogUnsafe(meta, clonedEntries, clonedAllocator, { restoreChildren: false });
+
+    const warnings: string[] = [];
+    const children = this._prepareChildRestores(meta.childSessions ?? [], warnings);
+    return { rootState: shadow, children, warnings };
+  }
+
+  commitPreparedRestore(prepared: PreparedSessionRestore): string[] {
+    const shadow = prepared.rootState;
+    const warnings = [...prepared.warnings];
+
+    this._resetTransientState();
+    this._mcpConnected = false;
+    this._currentTurnSignal = null;
+    this._currentTurnAbortController = null;
+    this._turnInFlight = null;
+    this._turnRelease = null;
+    this._waitResolver = null;
+    this.primaryAgent.replaceModelConfig({ ...shadow.primaryAgent.modelConfig });
+    this._persistedModelSelection = { ...shadow._persistedModelSelection };
+
+    this._log = shadow._log;
+    this._idAllocator = shadow._idAllocator;
+    this._turnCount = shadow._turnCount;
+    this._compactCount = shadow._compactCount;
+    this._preferredThinkingLevel = shadow._preferredThinkingLevel;
+    this._preferredCacheHitEnabled = shadow._preferredCacheHitEnabled;
+    this._thinkingLevel = shadow._thinkingLevel;
+    this._cacheHitEnabled = shadow._cacheHitEnabled;
+    this._createdAt = shadow._createdAt;
+    this._title = shadow._title;
+    this._cachedSummary = shadow._cachedSummary;
+    this._usedContextIds = new Set(shadow._usedContextIds);
+    this._lastInputTokens = shadow._lastInputTokens;
+    this._lastTotalTokens = shadow._lastTotalTokens;
+    this._lastCacheReadTokens = shadow._lastCacheReadTokens;
+    this._lifetimeToolCallCount = shadow._lifetimeToolCallCount;
+    this._lastToolCallSummary = shadow._lastToolCallSummary;
+    this._recentSessionEvents = [...shadow._recentSessionEvents];
+    this._lastTurnEndStatus = shadow._lastTurnEndStatus;
+    this._selfPhase = shadow._selfPhase;
+    this._showContextRoundsRemaining = shadow._showContextRoundsRemaining;
+    this._showContextAnnotations = shadow._showContextAnnotations
+      ? new Map(shadow._showContextAnnotations)
+      : null;
+    this._activePlanCheckpoints = [...shadow._activePlanCheckpoints];
+    this._activePlanChecked = [...shadow._activePlanChecked];
+    this._activeAsk = shadow._activeAsk ? structuredClone(shadow._activeAsk) as AskRequest : null;
+    this._askHistory = structuredClone(shadow._askHistory) as AskAuditRecord[];
+    this._agentState = shadow._agentState;
+    this._inbox = structuredClone(shadow._inbox) as AgentMessage[];
+    this._interruptSnapshot = shadow._interruptSnapshot
+      ? structuredClone(shadow._interruptSnapshot) as InterruptSnapshot
+      : null;
+    this._pendingTurnState = shadow._pendingTurnState
+      ? structuredClone(shadow._pendingTurnState) as PendingTurnState
+      : null;
+
+    this._childSessions = new Map();
+    this._teams = new Map();
+    this._subAgentCounter = 0;
+    warnings.push(...this._commitPreparedChildren(prepared.children));
+
+    this._notifyLogListeners();
+    return warnings;
+  }
+
   restoreFromLog(
     meta: LogSessionMeta,
     entries: LogEntry[],
     idAllocator: LogIdAllocator,
+  ): void {
+    const prepared = this.prepareRestoreFromLog(meta, entries, idAllocator);
+    this.commitPreparedRestore(prepared);
+  }
+
+  private _createRestoreShadowSession(): Session {
+    const shadowStore =
+      this._sessionArtifactsOverride || this._getArtifactsDirIfAvailable()
+        ? this._store
+        : undefined;
+    const provider = (this.primaryAgent as unknown as { _provider?: unknown })._provider;
+    const clonedPrimaryAgent = typeof (this.primaryAgent as { clone?: () => Agent }).clone === "function"
+      ? (this.primaryAgent as { clone: () => Agent }).clone()
+      : {
+          name: this.primaryAgent.name,
+          description: this.primaryAgent.description,
+          systemPrompt: this.primaryAgent.systemPrompt,
+          tools: [...this.primaryAgent.tools],
+          maxToolRounds: this.primaryAgent.maxToolRounds,
+          modelConfig: { ...this.primaryAgent.modelConfig },
+          _provider: provider,
+          replaceModelConfig(next: ModelConfig) {
+            (this as { modelConfig: ModelConfig }).modelConfig = next;
+          },
+        } as unknown as Agent;
+    const shadow = new Session({
+      primaryAgent: clonedPrimaryAgent,
+      config: this.config,
+      agentTemplates: this.agentTemplates,
+      skills: this._skills,
+      skillRoots: this._skillRoots,
+      progress: this._progress,
+      mcpManager: this._mcpManager,
+      promptsDirs: this._promptsDirs,
+      store: shadowStore,
+      contextRatio: this._contextRatio,
+      projectRoot: this._projectRoot,
+      sessionArtifactsDir: this._sessionArtifactsOverride || undefined,
+      capabilities: this._capabilities,
+      statusSource: this._statusSource,
+      onTurnOutput: this._turnOutputTarget,
+      toolExecutorOverrides: this._toolExecutorOverrides,
+      deferQueuedMessageInjectionOnTurnExit: this._deferQueuedMessageInjectionOnTurnExit,
+    });
+    shadow.applyGlobalPreferences(this.getGlobalPreferences());
+    return shadow;
+  }
+
+  private _restoreFromLogUnsafe(
+    meta: LogSessionMeta,
+    entries: LogEntry[],
+    idAllocator: LogIdAllocator,
+    opts?: { restoreChildren?: boolean; warnings?: string[] },
   ): void {
     const restoredSelection = resolvePersistedModelSelection(this, {
       modelConfigName: meta.modelConfigName || undefined,
@@ -1434,7 +1585,9 @@ export class Session {
 
     this._rebuildRuntimeSignalsFromLog();
     this._normalizeInterruptedTurnFromLog("Last turn was interrupted unexpectedly and recovered after restart.");
-    this._restoreChildSessionsFromLog(meta.childSessions ?? []);
+    if (opts?.restoreChildren !== false) {
+      this._restoreChildSessionsFromLog(meta.childSessions ?? [], opts?.warnings);
+    }
 
     // Restore ask state from log: find unclosed ask_request
     this._restoreAskStateFromLog(entries);
@@ -1464,6 +1617,104 @@ export class Session {
     this._notifyLogListeners();
   }
 
+  private _prepareChildRestores(
+    childSessions: ChildSessionMetaRecord[],
+    warnings: string[],
+  ): PreparedChildRestore[] {
+    if (childSessions.length === 0) return [];
+    if (!this._sessionArtifactsOverride && !this._getArtifactsDirIfAvailable()) {
+      throw new Error(
+        "Cannot restore child sessions before the session store is bound to the target session directory.",
+      );
+    }
+
+    const prepared: PreparedChildRestore[] = [];
+    const ordered = [...childSessions].sort((a, b) => (a.order ?? a.numericId) - (b.order ?? b.numericId));
+    for (const record of ordered) {
+      let agent: Agent;
+      try {
+        if (this.agentTemplates[record.template]) {
+          agent = this._createSubAgentFromPredefined(record.template, record.id);
+        } else {
+          agent = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id);
+        }
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        warnings.push(`Failed to prepare child session '${record.id}': ${reason}`);
+        continue;
+      }
+
+      const sessionDir = this._childSessionDir(record.id);
+      const artifactsDir = join(sessionDir, "artifacts");
+
+      try {
+        const loaded = loadLog(sessionDir);
+        prepared.push({
+          record,
+          agent,
+          sessionDir,
+          artifactsDir,
+          loaded,
+        });
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        warnings.push(`Failed to load child session '${record.id}': ${reason}`);
+      }
+    }
+    return prepared;
+  }
+
+  private _commitPreparedChildren(children: PreparedChildRestore[]): string[] {
+    if (children.length === 0) return [];
+
+    const warnings: string[] = [];
+    for (const prepared of children) {
+      const teamId = prepared.record.teamId ?? null;
+      if (!teamId) continue;
+      let team = this._teams.get(teamId);
+      if (!team) {
+        team = { id: teamId, members: new Set() };
+        this._teams.set(teamId, team);
+      }
+      team.members.add(prepared.record.id);
+    }
+
+    for (const prepared of children) {
+      const { record, agent, loaded } = prepared;
+      try {
+        const handle = this._instantiateChildSession(
+          record.id,
+          record.template,
+          record.mode,
+          record.teamId ?? null,
+          agent,
+          { numericId: record.numericId, order: record.order },
+        );
+        handle.session.restoreFromLog(loaded.meta, loaded.entries, loaded.idAllocator);
+        handle.lifecycle = record.lifecycle;
+        handle.lastOutcome = record.outcome ?? "none";
+        handle.lastActivityAt = Date.now();
+        handle.resultText = this._extractLatestAssistantText(handle.session.log);
+        handle.status =
+          record.lifecycle === "terminated"
+            ? "terminated"
+            : record.lifecycle === "completed"
+              ? (record.outcome === "error" ? "error" : record.outcome === "interrupted" ? "interrupted" : "completed")
+              : "idle";
+
+        this._childSessions.set(record.id, handle);
+        if (record.teamId) {
+          this._teams.get(record.teamId)?.members.add(record.id);
+        }
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        warnings.push(`Failed to restore child session '${record.id}': ${reason}`);
+      }
+    }
+
+    return warnings;
+  }
+
   private _rebuildRuntimeSignalsFromLog(): void {
     this._lifetimeToolCallCount = 0;
     this._lastToolCallSummary = "";
@@ -1477,6 +1728,16 @@ export class Session {
         this._lifetimeToolCallCount += 1;
         this._lastToolCallSummary = entry.display || this._lastToolCallSummary;
         if (entry.display) this._recordSessionEvent(entry.display);
+      }
+      if (entry.type === "tool_result") {
+        const content = entry.content;
+        if (content && typeof content === "object") {
+          const toolSummary = String((content as Record<string, unknown>)["toolSummary"] ?? "").trim();
+          if (toolSummary) {
+            this._lastToolCallSummary = toolSummary;
+            this._recordSessionEvent(toolSummary);
+          }
+        }
       }
       if (entry.type === "turn_end") {
         const status = (entry.meta as Record<string, unknown>)["status"];
@@ -1587,7 +1848,7 @@ export class Session {
     this._recordSessionEvent("recovered interrupted turn");
   }
 
-  private _restoreChildSessionsFromLog(childSessions: ChildSessionMetaRecord[]): void {
+  private _restoreChildSessionsFromLog(childSessions: ChildSessionMetaRecord[], warnings?: string[]): void {
     if (childSessions.length === 0) return;
 
     const ordered = [...childSessions].sort((a, b) => (a.order ?? a.numericId) - (b.order ?? b.numericId));
@@ -1600,6 +1861,8 @@ export class Session {
           agent = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id);
         }
       } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        warnings?.push(`Failed to prepare child session '${record.id}': ${reason}`);
         console.warn(`Failed to restore child session '${record.id}':`, e);
         continue;
       }
@@ -1608,19 +1871,29 @@ export class Session {
         this._teams.set(record.teamId, { id: record.teamId, members: new Set() });
       }
 
-      const handle = this._instantiateChildSession(
-        record.id,
-        record.template,
-        record.mode,
-        record.teamId ?? null,
-        agent,
-        { numericId: record.numericId, order: record.order },
-      );
+      let handle: ChildSessionHandle;
+      try {
+        handle = this._instantiateChildSession(
+          record.id,
+          record.template,
+          record.mode,
+          record.teamId ?? null,
+          agent,
+          { numericId: record.numericId, order: record.order },
+        );
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        warnings?.push(`Failed to instantiate child session '${record.id}': ${reason}`);
+        console.warn(`Failed to instantiate child session '${record.id}':`, e);
+        continue;
+      }
 
       try {
         const loaded = loadLog(handle.sessionDir);
         handle.session.restoreFromLog(loaded.meta, loaded.entries, loaded.idAllocator);
       } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        warnings?.push(`Failed to load child session log for '${record.id}': ${reason}`);
         console.warn(`Failed to load child session log for '${record.id}':`, e);
       }
 

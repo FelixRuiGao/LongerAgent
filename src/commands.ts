@@ -326,20 +326,26 @@ async function cmdResume(ctx: CommandContext, args: string): Promise<void> {
 
   ctx.resetUiState();
 
+  const bindingState = store.captureBindingState();
   try {
-    session.restoreFromLog(logData.meta, repairedEntries, logData.idAllocator);
+    store.attachToExistingSession(target.path);
+    const prepared = session.prepareRestoreFromLog(logData.meta, repairedEntries, logData.idAllocator);
+    const warnings = session.commitPreparedRestore(prepared);
+    if (typeof session.setStore === "function") {
+      session.setStore(store);
+    }
+    for (const warning of warnings) {
+      ctx.showMessage(`[resume] ${warning}`);
+    }
   } catch (e) {
+    store.restoreBindingState(bindingState);
     ctx.showMessage(
       `Failed to restore session: ${e instanceof Error ? e.message : String(e)}`,
     );
     return;
   }
 
-  // Point store at the loaded session
-  store.sessionDir = target.path;
-  if (typeof session.setStore === "function") {
-    session.setStore(store);
-  }
+  store.attachToExistingSession(target.path);
 }
 
 function buildResumeOptionLabel(

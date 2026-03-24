@@ -15,6 +15,9 @@ import {
   createReasoning,
   createSummary,
   createSystemPrompt,
+  createToolResult,
+  createTurnEnd,
+  createTurnStart,
   createTokenUpdate,
   createToolCall,
   createUserMessage,
@@ -575,6 +578,108 @@ describe("session storage lifecycle", () => {
       };
 
       await restored._runActivation();
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mutate the live session when staged restore preflight fails", () => {
+    const baseDir = makeTempDir("longeragent-restore-preflight-base-");
+    const projectRoot = makeTempDir("longeragent-restore-preflight-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store) as any;
+      const originalLog = structuredClone(session.log);
+
+      const meta = createLogSessionMeta({
+        createdAt: "2026-03-01T10:00:00Z",
+        turnCount: 1,
+        compactCount: 0,
+        summary: "resume target",
+        modelConfigName: "test-model",
+        childSessions: [{
+          id: "repo-mapper",
+          numericId: 1,
+          template: "explorer",
+          mode: "persistent",
+          teamId: null,
+          lifecycle: "live",
+          outcome: "completed",
+          order: 1,
+        }],
+      });
+      const entries = [
+        createSystemPrompt("sys-001", 0, "You are helpful"),
+        createTurnStart("ts-001", 1),
+        createUserMessage("user-001", 1, "Hello!", "Hello!", { contextId: "c1" }),
+        createAssistantText("asst-001", 1, 0, "Hi there!", "Hi there!"),
+      ];
+      const allocator = new LogIdAllocator();
+      allocator.restoreFrom(entries);
+
+      expect(() => session.prepareRestoreFromLog(meta, entries, allocator)).toThrow(
+        "Cannot restore child sessions before the session store is bound to the target session directory.",
+      );
+
+      expect(session.log).toEqual(originalLog);
+      expect(session.getChildSessionSnapshots()).toEqual([]);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("restores the latest tool summary from tool results instead of bare tool names", () => {
+    const baseDir = makeTempDir("longeragent-restore-summary-base-");
+    const projectRoot = makeTempDir("longeragent-restore-summary-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      store.createSession();
+      const session = makeSession(projectRoot, store);
+
+      const entries = [
+        createSystemPrompt("sys-001", 0, "You are helpful"),
+        createTurnStart("ts-001", 1),
+        createUserMessage("user-001", 1, "Coordinate the team.", "Coordinate the team.", { contextId: "c1" }),
+        createToolCall(
+          "tool-call-001",
+          1,
+          0,
+          "send",
+          { id: "call-001", name: "send", arguments: { to: "team-inspector", content: "Inspect the team runtime." } },
+          { toolCallId: "call-001", toolName: "send", agentName: "synthesizer", contextId: "c1" },
+        ),
+        createToolResult(
+          "tool-result-001",
+          1,
+          0,
+          {
+            toolCallId: "call-001",
+            toolName: "send",
+            content: "Message sent to 'team-inspector'.",
+            toolSummary: "synthesizer sent message to team-inspector",
+          },
+          { isError: false, contextId: "c1" },
+        ),
+        createTurnEnd("turn-end-001", 1, "completed"),
+      ];
+      const allocator = new LogIdAllocator();
+      allocator.restoreFrom(entries);
+      const meta = createLogSessionMeta({
+        createdAt: "2026-03-01T10:00:00Z",
+        turnCount: 1,
+        compactCount: 0,
+        summary: "coordination",
+        modelConfigName: "test-model",
+      });
+
+      session.restoreFromLog(meta, entries, allocator);
+
+      expect(session.lastToolCallSummary).toBe("synthesizer sent message to team-inspector");
+      expect(session.recentSessionEvents[session.recentSessionEvents.length - 1]).toBe(
+        "synthesizer sent message to team-inspector",
+      );
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });

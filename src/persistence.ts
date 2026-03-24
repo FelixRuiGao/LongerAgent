@@ -244,6 +244,43 @@ export class SessionStore {
     this._predictedSessionDir = undefined;
   }
 
+  captureBindingState(): {
+    activeBaseDir: string | undefined;
+    projectDir: string;
+    sessionDir: string | undefined;
+    predictedSessionDir: string | undefined;
+  } {
+    return {
+      activeBaseDir: this._activeBaseDir,
+      projectDir: this._projectDir,
+      sessionDir: this._sessionDir,
+      predictedSessionDir: this._predictedSessionDir,
+    };
+  }
+
+  restoreBindingState(state: {
+    activeBaseDir: string | undefined;
+    projectDir: string;
+    sessionDir: string | undefined;
+    predictedSessionDir: string | undefined;
+  }): void {
+    this._activeBaseDir = state.activeBaseDir;
+    this._projectDir = state.projectDir;
+    this._sessionDir = state.sessionDir;
+    this._predictedSessionDir = state.predictedSessionDir;
+  }
+
+  attachToExistingSession(sessionDir: string): void {
+    this._sessionDir = sessionDir;
+    this._predictedSessionDir = undefined;
+    this._projectDir = dirname(sessionDir);
+
+    const projectsDir = dirname(this._projectDir);
+    if (basename(projectsDir) === "projects") {
+      this._activeBaseDir = dirname(projectsDir);
+    }
+  }
+
   predictNextSessionDir(): string {
     if (this._sessionDir) return this._sessionDir;
     if (this._predictedSessionDir) return this._predictedSessionDir;
