@@ -156,7 +156,7 @@ function hljsHtmlToChunks(html: string): TextChunk[] {
   return chunks;
 }
 
-function highlightToChunks(code: string, lang: string | undefined): TextChunk[] | null {
+export function highlightToChunks(code: string, lang: string | undefined): TextChunk[] | null {
   const h = getHljs();
   if (!h) return null;
 

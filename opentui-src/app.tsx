@@ -124,7 +124,7 @@ const COLORS = {
   border: "#2a2630",
   separator: "#2a2630",
   // Text hierarchy — cool-shifted to balance the warm background
-  text: "#c8ced8",
+  text: "#d0d6e0",
   dim: "#636a76",
   muted: "#454a54",
   // Logo-derived accents (sampled from the gradient)
@@ -136,12 +136,12 @@ const COLORS = {
   // Semantic colors not in the gradient
   yellow: "#e8c468",
   green: "#73a942",
-  cyan: "#6aa8a0",
-  thinking: "#8a7e90",
+  cyan: "#9cd4cc",
+  thinking: "#454a54",
   toolTime: "#8a8078",     // tool call elapsed time
   // Phase indicators — each maps to a logo gradient stop
   readyStatus: "#fb8500",
-  thinkingStatus: "#a010a0",
+  thinkingStatus: "#6e4890",
   workingStatus: "#e81860",
   generatingStatus: "#ffb703",
   waitingStatus: "#e8c468",
@@ -267,8 +267,8 @@ function buildMarkdownStyle(colors: OpenTuiPalette): SyntaxStyle {
     "markup.heading.6": { fg: RGBA.fromHex(colors.text), bold: true },
     "markup.strong": { fg: RGBA.fromHex(colors.text), bold: true },
     "markup.italic": { fg: RGBA.fromHex(colors.text), italic: true },
-    "markup.raw": { fg: RGBA.fromHex(colors.yellow) },
-    "markup.raw.block": { fg: RGBA.fromHex(colors.yellow) },
+    "markup.raw": { fg: RGBA.fromHex("#d0b068") },
+    "markup.raw.block": { fg: RGBA.fromHex("#d0b068") },
     "markup.link": { fg: RGBA.fromHex(colors.cyan) },
     "markup.link.label": { fg: RGBA.fromHex(colors.cyan), underline: true },
     "markup.link.url": { fg: RGBA.fromHex(colors.cyan), underline: true },
@@ -702,7 +702,7 @@ function ConversationEntryView(
         { __isChunk: true, text: entry.text.replace(/^\n+/, ""), fg: RGBA.fromHex(colors.thinking) },
       ]);
       return (
-        <box paddingLeft={2} paddingTop={needsSpacing ? 1 : 0}>
+        <box paddingLeft={2} paddingTop={1}>
           <text content={thinkingStyled} wrapMode="word" width="100%" />
         </box>
       );
@@ -718,8 +718,8 @@ function ConversationEntryView(
         const isLive = entry.elapsedMs === undefined && entry.startedAt !== undefined;
         const timeDisplay = entry.elapsedMs !== undefined ? formatElapsed(entry.elapsedMs) : null;
         return (
-          <box flexDirection="row" width="100%" paddingLeft={2}>
-            <text fg={colors.purple} content={toolName} flexShrink={0} />
+          <box flexDirection="row" width="100%" paddingLeft={2} paddingTop={1}>
+            <text fg={colors.cyan} content={toolName} flexShrink={0} />
             {isLive ? <LiveTimer startedAt={entry.startedAt!} color={colors.dim} /> : null}
             {timeDisplay ? <text fg={colors.toolTime} content={` (${timeDisplay})`} flexShrink={0} /> : null}
             {rest ? (
