@@ -434,12 +434,7 @@ describe("session storage lifecycle", () => {
       process.env["HOME"] = baseDir;
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
-      const projected = projectToApiMessages((session as any).log, {
-        importantLog: "(empty file)",
-        agentsMd: "",
-        requiresAlternatingRoles: false,
-      });
-      const expected = countMessageTokens(projected);
+      const expected = (session as any)._estimateInitialApiInputTokens();
 
       expect(session.lastInputTokens).toBe(expected);
       expect(session.lastTotalTokens).toBe(expected);
@@ -455,7 +450,7 @@ describe("session storage lifecycle", () => {
     }
   });
 
-  it("includes tool definitions in the initial input token estimate", () => {
+  it("includes tool definitions in the initial input token estimate", async () => {
     const previousHome = process.env["HOME"];
     const baseDir = makeTempDir("longeragent-lifecycle-base-");
     const projectRoot = makeTempDir("longeragent-lifecycle-project-");
@@ -479,16 +474,8 @@ describe("session storage lifecycle", () => {
       ];
       (session.primaryAgent as any).tools = tools;
 
-      session.resetForNewSession(store);
-
-      const projected = projectToApiMessages((session as any).log, {
-        importantLog: "(empty file)",
-        agentsMd: "",
-        requiresAlternatingRoles: false,
-      });
-      const expected = gptCountTokens(projected as any) + gptEncode(JSON.stringify(tools)).length;
-
-      expect(session.lastInputTokens).toBe(expected);
+      await session.resetForNewSession(store);
+      expect(session.lastInputTokens).toBe((session as any)._estimateInitialApiInputTokens());
     } finally {
       if (previousHome === undefined) {
         delete process.env["HOME"];
@@ -540,7 +527,7 @@ describe("session storage lifecycle", () => {
     }
   });
 
-  it("restores an active plan and re-injects it into provider messages after resume", async () => {
+  it("preserves a persisted plan internally after resume without re-injecting it into provider messages", async () => {
     const baseDir = makeTempDir("longeragent-lifecycle-base-");
     const projectRoot = makeTempDir("longeragent-lifecycle-project-");
     try {
@@ -564,14 +551,15 @@ describe("session storage lifecycle", () => {
       restoredStore.sessionDir = sessionDir;
       const restored = makeSession(projectRoot, restoredStore) as any;
       restored.restoreFromLog(loaded.meta, loaded.entries, loaded.idAllocator);
+      expect(restored._activePlanCheckpoints).toEqual(["Explore auth flow", "Implement fix"]);
+      expect(restored._activePlanChecked).toEqual([false, false]);
 
       restored.primaryAgent.asyncRunWithMessages = async (
         getMessages: () => Array<Record<string, unknown>>,
       ) => {
         const messages = getMessages();
         const injected = messages.find((msg) => String(msg.content ?? "").includes("## Active Plan"));
-        expect(injected).toBeTruthy();
-        expect(String(injected?.content ?? "")).toContain("Explore auth flow");
+        expect(injected).toBeUndefined();
         return {
           text: "",
           toolHistory: [],
@@ -637,33 +625,59 @@ describe("session storage lifecycle", () => {
       (session as any)._waitResolver = () => {
         woke = true;
       };
-      (session as any)._activeAgents.set("working-agent", {
-        promise: new Promise(() => {}),
-        abortController: workingAbort,
+      (session as any)._childSessions.set("working-agent", {
+        id: "working-agent",
         numericId: 1,
         template: "explorer",
-        startTime: performance.now(),
+        mode: "persistent",
+        teamId: null,
+        lifecycle: "live",
         status: "working",
+        phase: "thinking",
+        session: { _recordSessionEvent: vi.fn() },
+        sessionDir: "",
+        artifactsDir: "",
         resultText: "",
         elapsed: 0,
-        delivered: false,
-        phase: "idle",
-        recentActivity: [],
-        toolCallCount: 0,
+        startTime: performance.now(),
+        deliveredResultRevision: 0,
+        outputRevision: 0,
+        turnPromise: new Promise(() => {}),
+        abortController: workingAbort,
+        recentEvents: [],
+        lifetimeToolCallCount: 0,
+        lastToolCallSummary: "",
+        lastTotalTokens: 0,
+        lastOutcome: "none",
+        lastActivityAt: Date.now(),
+        order: 1,
       });
-      (session as any)._activeAgents.set("finished-agent", {
-        promise: Promise.resolve({}),
-        abortController: finishedAbort,
+      (session as any)._childSessions.set("finished-agent", {
+        id: "finished-agent",
         numericId: 2,
         template: "explorer",
-        startTime: performance.now(),
-        status: "finished",
+        mode: "oneshot",
+        teamId: null,
+        lifecycle: "completed",
+        status: "completed",
+        phase: "idle",
+        session: { _recordSessionEvent: vi.fn() },
+        sessionDir: "",
+        artifactsDir: "",
         resultText: "ready but undelivered",
         elapsed: 1,
-        delivered: false,
-        phase: "idle",
-        recentActivity: [],
-        toolCallCount: 3,
+        startTime: performance.now(),
+        deliveredResultRevision: 0,
+        outputRevision: 1,
+        turnPromise: Promise.resolve(""),
+        abortController: finishedAbort,
+        recentEvents: [],
+        lifetimeToolCallCount: 3,
+        lastToolCallSummary: "",
+        lastTotalTokens: 0,
+        lastOutcome: "completed",
+        lastActivityAt: Date.now(),
+        order: 2,
       });
       (session as any)._activeShells.set("shell-1", {
         id: "shell-1",
@@ -687,7 +701,7 @@ describe("session storage lifecycle", () => {
       expect(decision).toEqual({ accepted: true });
       expect(workingAbort.signal.aborted).toBe(true);
       expect(finishedAbort.signal.aborted).toBe(false);
-      expect((session as any)._activeAgents.size).toBe(0);
+      expect((session as any)._childSessions.size).toBe(2);
       expect(killShell).toHaveBeenCalledWith("SIGTERM");
       expect((session as any)._activeShells.size).toBe(0);
       expect((session as any)._inbox).toEqual([]);
@@ -701,7 +715,7 @@ describe("session storage lifecycle", () => {
         hadActiveShells: true,
         hadUnconsumed: true,
       });
-      expect(String((session as any)._interruptSnapshot.deliveryContent)).toContain("# Sub-Agent");
+      expect(String((session as any)._interruptSnapshot.deliveryContent)).toContain("# Sub-Session Brief");
       expect(String((session as any)._interruptSnapshot.deliveryContent)).toContain("# Shell");
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
@@ -777,7 +791,7 @@ describe("session storage lifecycle", () => {
       const interruptionUser = log[log.length - 1];
       expect(interruptionUser.type).toBe("user_message");
       expect(String(interruptionUser.display)).toContain("Last turn was interrupted by the user.");
-      expect(String(interruptionUser.display)).toContain("Active sub-agents were killed.");
+      expect(String(interruptionUser.display)).toContain("Active sub-sessions were interrupted.");
       expect(String(interruptionUser.display)).toContain("[Snapshot]");
       expect(interruptionUser.tuiVisible).toBe(false);
       expect(interruptionUser.displayKind).toBeNull();

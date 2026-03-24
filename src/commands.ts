@@ -349,7 +349,7 @@ function buildResumeOptionLabel(
   summary: string | undefined,
 ): string {
   const date = (created || "").slice(0, 16);
-  const normalized = (summary || "").replace(/\s+/g, " ").trim();
+  const normalized = truncateDisplayText((summary || "").replace(/\s+/g, " ").trim(), 25);
   return `${index + 1}. ${date}  ${turns ?? 0} turns  ${normalized}`;
 }
 
@@ -901,15 +901,15 @@ async function cmdRename(ctx: CommandContext, args: string): Promise<void> {
 // /codex command
 // ------------------------------------------------------------------
 
-function codexOptions(): CommandPickerOption[] {
+function codexOptions(): CommandOption[] {
   const token = readOAuthAccessToken();
   const loggedIn = hasOAuthTokens() && token && !isTokenExpiring(token);
-  const options: CommandPickerOption[] = [];
+  const options: CommandOption[] = [];
   if (loggedIn) {
-    options.push({ label: "status", value: "status", description: "Show login status" });
-    options.push({ label: "logout", value: "logout", description: "Clear saved tokens" });
+    options.push({ label: "status", value: "status" });
+    options.push({ label: "logout", value: "logout" });
   } else {
-    options.push({ label: "login", value: "login", description: "Log in to OpenAI ChatGPT" });
+    options.push({ label: "login", value: "login" });
   }
   return options;
 }

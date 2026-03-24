@@ -4,5 +4,5 @@ description: "Primary agent — handles coding, review, debugging, exploration, 
 system_prompt_file: system_prompt.md
 tools: all
 mcp_tools: all
-prompt_sections: [important_log, agents_md, system_mechanisms]
+prompt_sections: [agents_md, system_mechanisms]
 max_tool_rounds: 1000

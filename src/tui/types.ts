@@ -13,6 +13,7 @@ import type {
   AgentQuestionDecision,
 } from "../ask.js";
 import type { LogEntry, LogIdAllocator } from "../log-entry.js";
+import type { ChildSessionSnapshot } from "../session-tree-types.js";
 import type {
   CommandRegistry as ActualCommandRegistry,
   CommandContext,
@@ -80,6 +81,12 @@ export interface Session {
   log?: readonly LogEntry[];
   /** Subscribe to log changes. Returns unsubscribe function. */
   subscribeLog?(listener: () => void): () => void;
+  /** Read-only child session snapshots for sidebar/status views. */
+  getChildSessionSnapshots?(): ChildSessionSnapshot[];
+  /** Read-only access to a child session log. */
+  getChildSessionLog?(childId: string): readonly LogEntry[] | null;
+  /** Interrupt the current turn of a child session without terminating it. */
+  interruptChildSession?(childId: string): { accepted: boolean; reason?: string };
   /** Restore session from loaded log data. */
   restoreFromLog?(meta: LogSessionMeta, entries: LogEntry[], idAllocator: LogIdAllocator): void;
   /** Get log data for persistence (meta + entries). */

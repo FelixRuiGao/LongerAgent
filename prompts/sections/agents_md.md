@@ -5,7 +5,7 @@ Two persistent memory files are automatically loaded and injected into your cont
 1. **Global memory** (`~/.longeragent/AGENTS.md`) — user-level preferences, conventions, and knowledge that apply across all projects.
 2. **Project memory** (`{PROJECT_ROOT}/AGENTS.md`) — project-specific architecture decisions, patterns, key file paths, and accumulated insights.
 
-These files survive across sessions and context resets — they are always visible after the system prompt, similar to the important log.
+These files survive across sessions and context resets — they are always visible after the system prompt.
 
 **Reading:** You always see the latest content from both files. Use this context to inform your work.
 
@@ -18,6 +18,6 @@ These files survive across sessions and context resets — they are always visib
 - Solutions to recurring problems
 
 **What does NOT belong here:**
-- Session-specific or in-progress work (use the important log instead)
+- Session-specific or in-progress work
 - Transient debugging context
 - Information that duplicates existing project docs

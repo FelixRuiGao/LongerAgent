@@ -188,7 +188,7 @@ export const WAIT_TOOL: ToolDef = {
 export const SEND_TOOL: ToolDef = {
   name: "send",
   description:
-    "Send a message to an interactive sub-agent or team member. " +
+    "Send a message to a persistent sub-session or team member. " +
     "The message is delivered asynchronously — you get a confirmation, not a reply. " +
     "The target agent auto-activates if idle.",
   parameters: {

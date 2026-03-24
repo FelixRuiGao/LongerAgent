@@ -242,7 +242,7 @@ describe("projectToTuiEntries", () => {
     expect(tui).toHaveLength(2); // Only user + assistant
   });
 
-  it("folds sub-agent tool calls into a single rollup block", () => {
+  it("hides legacy sub-agent tool call entries from the TUI projection", () => {
     const entries = [
       ...basicLog(),
       createSubAgentToolCall("satc-001", 1, "[#1 explorer-A] read_file src/a.ts", 1, "explorer-A", "read_file", 1),
@@ -250,19 +250,11 @@ describe("projectToTuiEntries", () => {
     ];
 
     const tui = projectToTuiEntries(entries);
-    expect(tui).toHaveLength(3);
-    expect(tui[2]).toEqual({
-      kind: "sub_agent_rollup",
-      id: "subrollup-satc-001",
-      text: [
-        "Last 2 sub-agent tool calls:",
-        "[#1 explorer-A] read_file src/a.ts",
-        "[#2 explorer-B] grep \"auth\" src/",
-      ].join("\n"),
-    });
+    expect(tui).toHaveLength(2);
+    expect(tui.map((entry) => entry.kind)).toEqual(["user", "assistant"]);
   });
 
-  it("keeps reasoning and assistant text contiguous by delaying interleaved sub-agent tool calls", () => {
+  it("ignores interleaved legacy sub-agent tool calls between reasoning and assistant text", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "investigate", "investigate", "c1"),
@@ -277,14 +269,12 @@ describe("projectToTuiEntries", () => {
       "user",
       "reasoning",
       "assistant",
-      "sub_agent_rollup",
     ]);
     expect(tui[1].text).toBe("thinking...");
     expect(tui[2].text).toBe("Done.");
-    expect(tui[3].text).toContain("Last 2 sub-agent tool calls:");
   });
 
-  it("keeps reasoning and tool_call contiguous by delaying interleaved sub-agent tool calls", () => {
+  it("ignores interleaved legacy sub-agent tool calls between reasoning and tool calls", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "investigate", "investigate", "c1"),
@@ -305,12 +295,11 @@ describe("projectToTuiEntries", () => {
       "user",
       "reasoning",
       "tool_call",
-      "sub_agent_rollup",
     ]);
     expect(tui[2].text).toBe("read_file src/main.ts");
   });
 
-  it("flushes idle-period sub-agent tool calls before the next primary-agent round", () => {
+  it("ignores idle-period legacy sub-agent tool calls before the next primary-agent round", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "investigate", "investigate", "c1"),
@@ -323,12 +312,11 @@ describe("projectToTuiEntries", () => {
     expect(tui.map((entry) => entry.kind)).toEqual([
       "user",
       "assistant",
-      "sub_agent_rollup",
       "reasoning",
     ]);
   });
 
-  it("shows only the last five sub-agent tool calls and hides sub-agent lifecycle entries", () => {
+  it("hides legacy sub-agent lifecycle and tool-call entries", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "investigate", "investigate", "c1"),
@@ -345,23 +333,10 @@ describe("projectToTuiEntries", () => {
     ];
 
     const tui = projectToTuiEntries(entries);
-    expect(tui.map((entry) => entry.kind)).toEqual(["user", "sub_agent_rollup", "sub_agent_done", "status"]);
-    expect(tui[1].text).toEqual([
-      "2 earlier tool calls omitted, last 5:",
-      "[#1 explorer] tool 3",
-      "[#1 explorer] tool 4",
-      "[#1 explorer] tool 5",
-      "[#1 explorer] tool 6",
-      "[#1 explorer] tool 7",
-    ].join("\n"));
-    expect(tui[2]).toEqual({
-      kind: "sub_agent_done",
-      id: "sae-001",
-      text: "[#1 explorer] [done] (10.0s)",
-    });
+    expect(tui.map((entry) => entry.kind)).toEqual(["user", "status"]);
   });
 
-  it("shows sub-agent completions between waits even when there are no new tool calls", () => {
+  it("ignores legacy sub-agent completion entries between waits", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "investigate", "investigate", "c1"),
@@ -393,16 +368,12 @@ describe("projectToTuiEntries", () => {
     expect(tui.map((entry) => entry.kind)).toEqual([
       "user",
       "tool_call",
-      "sub_agent_done",
       "reasoning",
       "assistant",
       "tool_call",
-      "sub_agent_done",
       "reasoning",
       "assistant",
     ]);
-    expect(tui[2].text).toBe("[#6 investigate-other-packages] [done] (89.4s)");
-    expect(tui[6].text).toBe("[#2 investigate-opencode] [done] (95.4s)");
   });
 });
 

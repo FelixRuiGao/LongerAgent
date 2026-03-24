@@ -13,6 +13,7 @@
 export type LogEntryType =
   | "system_prompt"
   | "turn_start"
+  | "turn_end"
   | "user_message"
   | "assistant_text"
   | "reasoning"
@@ -115,6 +116,7 @@ export interface LogEntry {
 const TYPE_PREFIX_MAP: Record<LogEntryType, string> = {
   system_prompt: "sys",
   turn_start: "ts",
+  turn_end: "te",
   user_message: "user",
   assistant_text: "asst",
   reasoning: "rsn",
@@ -223,6 +225,16 @@ export function createTurnStart(
 ): LogEntry {
   return baseEntry(id, "turn_start", turnIndex, {
     meta: { turnIndex, timestamp: Date.now() },
+  });
+}
+
+export function createTurnEnd(
+  id: string,
+  turnIndex: number,
+  status: "completed" | "interrupted" | "error",
+): LogEntry {
+  return baseEntry(id, "turn_end", turnIndex, {
+    meta: { turnIndex, status, timestamp: Date.now() },
   });
 }
 

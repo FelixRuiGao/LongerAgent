@@ -2,7 +2,7 @@
  * Multi-turn conversation session with context management.
  *
  * Provides the Session class — the core runtime orchestrator.
- * Manages the Primary Agent's conversation, important log,
+ * Manages the Primary Agent's conversation,
  * auto-compact, and sub-agent lifecycle.
  */
 
@@ -89,6 +89,7 @@ import {
   type LogEntry,
   createSystemPrompt,
   createTurnStart,
+  createTurnEnd,
   createUserMessage as createUserMessageEntry,
   createAssistantText,
   createReasoning,
@@ -98,9 +99,6 @@ import {
   createCompactMarker,
   createCompactContext,
   createSummary,
-  createSubAgentStart,
-  createSubAgentToolCall,
-  createSubAgentEnd,
   createStatus,
   createError as createErrorEntry,
   createTokenUpdate,
@@ -112,9 +110,24 @@ import {
   archiveWindow,
   createGlobalTuiPreferences,
   createLogSessionMeta,
+  loadLog,
+  saveLog,
   type GlobalTuiPreferences,
   type LogSessionMeta,
 } from "./persistence.js";
+import {
+  CHILD_SESSION_CAPABILITIES,
+  ROOT_SESSION_CAPABILITIES,
+  type SessionCapabilities,
+} from "./session-capabilities.js";
+import type {
+  ChildSessionLifecycle,
+  ChildSessionMetaRecord,
+  ChildSessionMode,
+  ChildSessionOutcome,
+  ChildSessionPhase,
+  ChildSessionSnapshot,
+} from "./session-tree-types.js";
 import {
   resolvePersistedModelSelection,
   type PersistedModelSelection,
@@ -136,15 +149,15 @@ const MAX_COMPACT_PHASE_ROUNDS = 10;       // max activations during compact pha
 // -- Compact Prompt: Output scenario --
 const COMPACT_PROMPT_OUTPUT = `Distill this conversation into a continuation prompt — imagine you're writing a briefing for a fresh instance of yourself who must seamlessly pick up where we left off, with zero access to the original conversation.
 
-**Before writing the continuation prompt**, update your important log with any key discoveries, decisions, or insights from this session that aren't already recorded there. The important log survives compaction and will be visible to the new instance — this is your last chance to persist valuable knowledge.
+**Before writing the continuation prompt**, make sure any stable, long-term knowledge from this session has been written to AGENTS.md if it belongs there.
 
-**What the new instance will already have:** your system prompt, the important log, AGENTS.md persistent memory, and the active plan (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state. If you've discovered stable, long-term knowledge during this session, consider persisting it to the project AGENTS.md before compaction.
+**What the new instance will already have:** your system prompt and AGENTS.md persistent memory are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state.
 
 Your summary should capture everything that matters and nothing that doesn't. Use whatever structure best fits the actual content — there is no fixed template. But as you write, pressure-test yourself against these questions:
 
 - **What are we trying to do?** The user's intent, goals, and any constraints or preferences they've expressed — stated or implied.
-- **What do we know now that we didn't at the start?** Key discoveries, failed approaches, edge cases encountered, decisions made and *why*. (Skip anything already in your important log.)
-- **Where exactly are we?** What's done, what's in progress, what's next. Be specific enough that work won't be repeated or skipped. (Skip anything already tracked in your plan.)
+- **What do we know now that we didn't at the start?** Key discoveries, failed approaches, edge cases encountered, decisions made and *why*.
+- **Where exactly are we?** What's done, what's in progress, what's next. Be specific enough that work won't be repeated or skipped.
 - **What artifacts exist?** Files read, created, or modified — with enough context about each to be actionable (not just a path list).
 - **What tone/style/working relationship has been established?** If the user has shown preferences for how they like to collaborate, note them.
 - **What explicit rules has the user stated?** Direct instructions about how to work, what not to do, approval requirements, or behavioral constraints the user has explicitly communicated (e.g., "don't modify code until I approve", "always run tests before committing"). Preserve these verbatim — they are binding rules, not suggestions.
@@ -158,16 +171,16 @@ const COMPACT_PROMPT_TOOLCALL = `[SYSTEM: COMPACT REQUIRED] The conversation has
 
 You just made a tool call and received its result above. That result is real and should be reflected in your summary, but do not act on it — your only job right now is to write the continuation prompt.
 
-**Before writing the continuation prompt**, update your important log with any key discoveries, decisions, or insights from this session that aren't already recorded there. The important log survives compaction and will be visible to the new instance — this is your last chance to persist valuable knowledge.
+**Before writing the continuation prompt**, make sure any stable, long-term knowledge from this session has been written to AGENTS.md if it belongs there.
 
-**What the new instance will already have:** your system prompt, the important log, AGENTS.md persistent memory, and the active plan (if any) are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state. If you've discovered stable, long-term knowledge during this session, consider persisting it to the project AGENTS.md before compaction.
+**What the new instance will already have:** your system prompt and AGENTS.md persistent memory are automatically re-injected after compact. Do not duplicate their contents in the continuation prompt — focus on what they don't cover: current progress, session-specific context, and in-flight work state.
 
 Write in natural prose. Use structure where it aids clarity, not for its own sake. As you write, pressure-test yourself against these questions:
 
 - **What are we trying to do?** The user's intent, goals, constraints, and preferences — stated or implied.
-- **What do we know now that we didn't at the start?** Key discoveries, failed approaches, edge cases encountered, decisions made and why. (Skip anything already in your important log.)
+- **What do we know now that we didn't at the start?** Key discoveries, failed approaches, edge cases encountered, decisions made and why.
 - **Where exactly did we stop?** Be precise: what was the last tool call, what did it return, and what was supposed to happen next? The new instance must be able to pick up mid-step without repeating or skipping anything.
-- **What's done, what's in progress, what remains?** Give a clear picture of overall progress, not just the interrupted step. (Skip anything already tracked in your plan.)
+- **What's done, what's in progress, what remains?** Give a clear picture of overall progress, not just the interrupted step.
 - **What artifacts exist?** Files read, created, or modified — with enough context about each to be actionable.
 - **What working style has the user shown?** Communication preferences, collaboration patterns, or explicit instructions about how they like to work.
 - **What explicit rules has the user stated?** Direct instructions about how to work, what not to do, approval requirements, or behavioral constraints (e.g., "don't modify code until I approve", "always run tests before committing"). Preserve these verbatim — they are binding rules, not suggestions.
@@ -227,8 +240,14 @@ function HINT_LEVEL2_PROMPT(pct: string): string {
   return `[SYSTEM: Context usage has reached ${pct} — auto-compact will trigger soon. Strongly recommended: call \`show_context\` now to see context distribution, then immediately use \`summarize_context\` to compress older groups. Prioritize: completed subtasks, large tool results, and exploratory steps. After summarizing, continue your work.]`;
 }
 
+function formatTokenCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(Math.round(value));
+}
+
 const SYSTEM_PREFIXES = [
-  "[IMPORTANT LOG]",
   "[AUTO-COMPACT]",
   "[Context After Auto-Compact]",
   "[MASTER PLAN:",
@@ -255,50 +274,40 @@ interface AgentMessage {
 }
 
 // ------------------------------------------------------------------
-// AgentEntry — tracked sub-agent state
+// ChildSessionHandle — tracked nested child session state
 // ------------------------------------------------------------------
 
-interface AgentEntry {
-  promise: Promise<SubAgentResult>;
-  abortController: AbortController;
+interface ChildSessionHandle {
+  id: string;
   numericId: number;
   template: string;
-  startTime: number;
-  status: "working" | "finished" | "error" | "killed";
+  mode: ChildSessionMode;
+  teamId: string | null;
+  lifecycle: ChildSessionLifecycle;
+  status: "working" | "idle" | "error" | "interrupted" | "terminated" | "completed";
+  phase: ChildSessionPhase;
+  session: Session;
+  sessionDir: string;
+  artifactsDir: string;
   resultText: string;
   elapsed: number;
-  delivered: boolean;
-  // Live activity tracking
-  phase: "thinking" | "generating" | "tool_calling" | "idle";
-  recentActivity: string[];   // ring buffer, max 3, human-readable summaries
-  toolCallCount: number;
-
-  // --- Persistent agent fields (Phase 2+) ---
-  interactive: boolean;          // one-shot (false) vs multi-turn (true)
-  teamId: string | null;         // team membership (Phase 4)
-  log: LogEntry[];               // persistent conversation log
-  idAllocator: LogIdAllocator;   // persistent ID allocator
-  persistDir: string;            // artifacts/agents/<id>/
-  agent: Agent;                  // Agent instance (provider + tools)
-  systemPrompt: string;          // initial system prompt (for team roster)
-  task: string;                  // initial task description
-  inbox: AgentMessage[];         // per-agent inbox (Phase 3)
-  agentState: "idle" | "working"; // per-agent state machine (Phase 3)
-  turnBudget: number;            // auto-activation turn budget (Phase 3)
-  turnBudgetRemaining: number;   // remaining auto-activation budget
+  startTime: number;
+  deliveredResultRevision: number;
+  outputRevision: number;
+  turnPromise: Promise<string> | null;
+  abortController: AbortController | null;
+  recentEvents: string[];
+  lifetimeToolCallCount: number;
+  lastToolCallSummary: string;
+  lastTotalTokens: number;
+  lastOutcome: ChildSessionOutcome;
+  lastActivityAt: number;
+  order: number;
 }
 
 interface AgentTeam {
   id: string;
   members: Set<string>;
-}
-
-interface SubAgentResult {
-  name: string;
-  status: string;
-  text: string;
-  usage: Record<string, number>;
-  elapsed: number;
 }
 
 interface BackgroundShellEntry {
@@ -446,12 +455,23 @@ export class Session {
   private _sessionArtifactsOverride: string;
   private _systemData: string;
 
-  // Sub-agents
-  private _activeAgents = new Map<string, AgentEntry>();
+  // Session tree / child sessions
+  private _childSessions = new Map<string, ChildSessionHandle>();
   private _teams = new Map<string, AgentTeam>();
   private _subAgentCounter = 0;
   private _activeShells = new Map<string, BackgroundShellEntry>();
   private _shellCounter = 0;
+
+  // Session capabilities / routing
+  private _capabilities: SessionCapabilities = ROOT_SESSION_CAPABILITIES;
+  private _statusSource?: () => ChildSessionSnapshot[];
+  private _turnOutputTarget?: (text: string) => void;
+  private _deferQueuedMessageInjectionOnTurnExit = false;
+  private _selfPhase: ChildSessionPhase = "idle";
+  private _lifetimeToolCallCount = 0;
+  private _lastToolCallSummary = "";
+  private _recentSessionEvents: string[] = [];
+  private _lastTurnEndStatus: "completed" | "interrupted" | "error" | null = null;
 
   // Thinking level + cache hit + accent
   private _persistedModelSelection: PersistedModelSelection = {};
@@ -485,6 +505,7 @@ export class Session {
 
   // Tool executors
   private _toolExecutors: Record<string, ToolExecutor>;
+  private _toolExecutorOverrides: Record<string, ToolExecutor> = {};
 
   // Ask state
   private _activeAsk: AskRequest | null = null;
@@ -494,6 +515,197 @@ export class Session {
   /** Allocate a unique random hex context ID. */
   private _allocateContextId(): string {
     return allocateContextId(this._usedContextIds);
+  }
+
+  private _setSelfPhase(phase: ChildSessionPhase): void {
+    this._selfPhase = phase;
+  }
+
+  private _recordSessionEvent(summary: string): void {
+    const text = summary.trim();
+    if (!text) return;
+    this._recentSessionEvents.push(text);
+    if (this._recentSessionEvents.length > 5) {
+      this._recentSessionEvents.shift();
+    }
+  }
+
+  get pendingInboxCount(): number {
+    return this._inbox.length;
+  }
+
+  get sessionPhase(): ChildSessionPhase {
+    return this._selfPhase;
+  }
+
+  get lifetimeToolCallCount(): number {
+    return this._lifetimeToolCallCount;
+  }
+
+  get lastToolCallSummary(): string {
+    return this._lastToolCallSummary;
+  }
+
+  get recentSessionEvents(): readonly string[] {
+    return this._recentSessionEvents;
+  }
+
+  get currentTurnRunning(): boolean {
+    return this._turnInFlight !== null;
+  }
+
+  get lastTurnEndStatus(): "completed" | "interrupted" | "error" | null {
+    return this._lastTurnEndStatus;
+  }
+
+  getChildSessionSnapshots(): ChildSessionSnapshot[] {
+    return [...this._childSessions.values()]
+      .map((handle) => this._buildChildSessionSnapshot(handle))
+      .sort((a, b) => {
+        const rank = (snapshot: ChildSessionSnapshot): number => {
+          if (snapshot.lifecycle === "live" && snapshot.running) return 0;
+          if (snapshot.lifecycle === "live") return 1;
+          if (snapshot.lifecycle === "completed") return 2;
+          return 3;
+        };
+        const ra = rank(a);
+        const rb = rank(b);
+        if (ra !== rb) return ra - rb;
+        if (a.lastActivityAt !== b.lastActivityAt) return b.lastActivityAt - a.lastActivityAt;
+        return a.numericId - b.numericId;
+      });
+  }
+
+  getChildSessionLog(childId: string): readonly LogEntry[] | null {
+    const handle = this._childSessions.get(childId);
+    return handle ? handle.session.log : null;
+  }
+
+  private _getStatusSourceSnapshots(): ChildSessionSnapshot[] {
+    if (this._statusSource) {
+      return this._statusSource();
+    }
+    return this.getChildSessionSnapshots();
+  }
+
+  private _buildChildSessionSnapshot(handle: ChildSessionHandle): ChildSessionSnapshot {
+    const session = handle.session;
+    const currentTurnRunning = typeof (session as any).currentTurnRunning === "boolean"
+      ? (session as any).currentTurnRunning as boolean
+      : handle.status === "working";
+    const sessionPhase = typeof (session as any).sessionPhase === "string"
+      ? (session as any).sessionPhase as ChildSessionPhase
+      : handle.phase;
+    const sessionLastTurnEndStatus = (session as any).lastTurnEndStatus as "completed" | "interrupted" | "error" | null | undefined;
+    const lifetimeToolCallCount = typeof (session as any).lifetimeToolCallCount === "number"
+      ? (session as any).lifetimeToolCallCount as number
+      : handle.lifetimeToolCallCount;
+    const lastTotalTokens = typeof (session as any).lastTotalTokens === "number"
+      ? (session as any).lastTotalTokens as number
+      : handle.lastTotalTokens;
+    const lastToolCallSummary = typeof (session as any).lastToolCallSummary === "string"
+      ? (session as any).lastToolCallSummary as string
+      : handle.lastToolCallSummary;
+    const recentEventsSource = Array.isArray((session as any).recentSessionEvents)
+      ? (session as any).recentSessionEvents as string[]
+      : handle.recentEvents;
+    const pendingInboxCount = typeof (session as any).pendingInboxCount === "number"
+      ? (session as any).pendingInboxCount as number
+      : 0;
+    const lifecycle =
+      handle.lifecycle === "terminated" ? "terminated" :
+      handle.lifecycle === "completed" ? "completed" :
+      "live";
+    const phase = currentTurnRunning ? sessionPhase : "idle";
+    const outcome =
+      handle.lastOutcome !== "none"
+        ? handle.lastOutcome
+        : sessionLastTurnEndStatus === "completed"
+          ? "completed"
+          : sessionLastTurnEndStatus === "interrupted"
+            ? "interrupted"
+            : sessionLastTurnEndStatus === "error"
+              ? "error"
+              : "none";
+    return {
+      id: handle.id,
+      numericId: handle.numericId,
+      template: handle.template,
+      mode: handle.mode,
+      teamId: handle.teamId,
+      lifecycle,
+      phase,
+      outcome,
+      running: currentTurnRunning,
+      lifetimeToolCallCount,
+      lastTotalTokens,
+      lastToolCallSummary,
+      recentEvents: [...recentEventsSource],
+      pendingInboxCount,
+      lastActivityAt: handle.lastActivityAt,
+    };
+  }
+
+  private _hasUndeliveredChildResults(): boolean {
+    const childSessions = this._childSessions ?? new Map<string, ChildSessionHandle>();
+    for (const handle of childSessions.values()) {
+      if (handle.outputRevision > handle.deliveredResultRevision) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private _consumeUndeliveredChildResults(): Array<{ handle: ChildSessionHandle; text: string }> {
+    const results: Array<{ handle: ChildSessionHandle; text: string }> = [];
+    const childSessions = this._childSessions ?? new Map<string, ChildSessionHandle>();
+    for (const handle of childSessions.values()) {
+      if (handle.outputRevision <= handle.deliveredResultRevision) continue;
+      handle.deliveredResultRevision = handle.outputRevision;
+      results.push({ handle, text: handle.resultText });
+    }
+    return results;
+  }
+
+  private _buildSubSessionBrief(): string {
+    const snapshots = this._getStatusSourceSnapshots();
+    if (snapshots.length === 0) return "No sub-sessions.";
+    const lines = snapshots
+      .filter((snapshot) => snapshot.lifecycle === "live" || snapshot.outcome !== "none")
+      .map((snapshot) => {
+        const tools = `${snapshot.lifetimeToolCallCount} tool${snapshot.lifetimeToolCallCount === 1 ? "" : "s"}`;
+        const tokens = snapshot.lastTotalTokens > 0 ? formatTokenCount(snapshot.lastTotalTokens) : "0";
+        const latest = snapshot.lastToolCallSummary
+          || snapshot.recentEvents[snapshot.recentEvents.length - 1]
+          || (snapshot.outcome !== "none" ? snapshot.outcome : "no recent activity");
+        return `- ${snapshot.id}: ${tools}, ${tokens} tokens. Latest: \`${latest}\``;
+      });
+    return lines.length > 0 ? lines.join("\n") : "No sub-sessions.";
+  }
+
+  private _buildDetailedChildStatusReport(): string {
+    const snapshots = this.getChildSessionSnapshots();
+    if (snapshots.length === 0) return "No sub-sessions tracked.";
+    const sections = snapshots.map((snapshot) => {
+      const recent = snapshot.recentEvents.length > 0
+        ? snapshot.recentEvents.map((event, index) => `  ${index + 1}. ${event}`).join("\n")
+        : "  (none)";
+      const latest = snapshot.lastToolCallSummary || snapshot.recentEvents[snapshot.recentEvents.length - 1] || "(none)";
+      return [
+        `- ${snapshot.id}`,
+        `  mode: ${snapshot.mode}`,
+        `  lifecycle: ${snapshot.lifecycle}`,
+        `  phase: ${snapshot.phase}`,
+        `  outcome: ${snapshot.outcome}`,
+        `  tokens: ${formatTokenCount(snapshot.lastTotalTokens)}`,
+        `  tool calls: ${snapshot.lifetimeToolCallCount}`,
+        `  pending inbox: ${snapshot.pendingInboxCount}`,
+        `  latest: ${latest}`,
+        `  recent:`,
+        recent,
+      ].join("\n");
+    });
+    return sections.join("\n\n");
   }
 
   constructor(opts: {
@@ -508,6 +720,12 @@ export class Session {
     store?: any;
     contextRatio?: number;
     projectRoot?: string;
+    sessionArtifactsDir?: string;
+    capabilities?: SessionCapabilities;
+    statusSource?: () => ChildSessionSnapshot[];
+    onTurnOutput?: (text: string) => void;
+    toolExecutorOverrides?: Record<string, ToolExecutor>;
+    deferQueuedMessageInjectionOnTurnExit?: boolean;
   }) {
     this.primaryAgent = opts.primaryAgent;
     this.config = opts.config;
@@ -517,6 +735,11 @@ export class Session {
     this._progress = opts.progress;
     this._mcpManager = opts.mcpManager;
     this._promptsDirs = opts.promptsDirs;
+    this._capabilities = opts.capabilities ?? ROOT_SESSION_CAPABILITIES;
+    this._statusSource = opts.statusSource;
+    this._turnOutputTarget = opts.onTurnOutput;
+    this._toolExecutorOverrides = opts.toolExecutorOverrides ?? {};
+    this._deferQueuedMessageInjectionOnTurnExit = opts.deferQueuedMessageInjectionOnTurnExit ?? false;
 
     // Apply context ratio
     if (opts.contextRatio !== undefined) {
@@ -530,7 +753,7 @@ export class Session {
 
     // Resolve path variables
     this._projectRoot = opts.projectRoot ?? process.cwd();
-    this._sessionArtifactsOverride = "";
+    this._sessionArtifactsOverride = opts.sessionArtifactsDir ?? "";
     this._systemData = "";
 
     this._createdAt = new Date().toISOString();
@@ -539,6 +762,7 @@ export class Session {
     this._ensureCommTools();
     this._ensureSkillTool();
     this._persistedModelSelection = this._buildPersistedModelSelection();
+    this._updateInitialTokenEstimate();
   }
 
   private _buildPersistedModelSelection(
@@ -785,12 +1009,7 @@ export class Session {
    * Check whether any agent has finished/errored but not yet delivered.
    */
   private _hasUndeliveredAgentResults(): boolean {
-    for (const entry of this._activeAgents.values()) {
-      if ((entry.status === "finished" || entry.status === "error") && !entry.delivered) {
-        return true;
-      }
-    }
-    return false;
+    return this._hasUndeliveredChildResults();
   }
 
   private _hasTrackedShells(): boolean {
@@ -869,7 +1088,7 @@ export class Session {
       this._inbox = [];
     }
 
-    // 2. Build three-section format
+    // 2. Build delivery sections
     const sections: string[] = [];
 
     sections.push("# User");
@@ -878,12 +1097,11 @@ export class Session {
     sections.push("# System");
     sections.push(byFrom["system"]?.join("\n\n") ?? "No new message.");
 
-    // 3. Sub-Agent section: always use live report when agents exist
-    sections.push("# Sub-Agent");
-    if (this._activeAgents.size > 0) {
-      sections.push(this._buildAgentReport());
+    sections.push("# Sub-Session Brief");
+    if (this._childSessions.size > 0 || this._statusSource) {
+      sections.push(this._buildSubSessionBrief());
     } else {
-      sections.push("No agents tracked.");
+      sections.push("No sub-sessions.");
     }
 
     sections.push("# Shell");
@@ -915,7 +1133,7 @@ export class Session {
 
   /**
    * Build notification content for push delivery into tool results.
-   * Drains the inbox and marks agent results as delivered.
+   * Drains the inbox and consumes child turn outputs once.
    * Returns null if nothing pending.
    */
   private _buildNotificationContent(): string | null {
@@ -937,20 +1155,29 @@ export class Session {
       }
     }
 
-    // 2. Consume agent results (sweep + mark delivered)
+    // 2. Consume child outputs (sweep + mark delivered revision)
     if (hasAgentResults) {
       this._sweepSettledAgents();
-      for (const [name, entry] of this._activeAgents) {
-        if ((entry.status === "finished" || entry.status === "error") && !entry.delivered) {
-          sections.push(this._formatAgentOutput({
-            name, status: entry.status, text: entry.resultText, elapsed: entry.elapsed,
-          }));
-          entry.delivered = true;
-        }
+      for (const { handle, text } of this._consumeUndeliveredChildResults()) {
+        sections.push(this._formatAgentOutput({
+          name: handle.id,
+          status: handle.status === "error" ? "error" : "finished",
+          text,
+          elapsed: handle.elapsed,
+        }));
       }
     }
 
+    sections.push("[Sub-Session Brief]");
+    sections.push(this._buildSubSessionBrief());
+
     return `\n\n[Incoming Messages]\n${sections.join("\n\n---\n\n")}`;
+  }
+
+  private _takeQueuedMessagesAsTurnInput(): string | null {
+    if (this._inbox.length === 0) return null;
+    const content = this._buildDeliveryContent({ drainQueue: true });
+    return `[New Messages]\n\n${content}`;
   }
 
   // Wait wake-up signal
@@ -1061,7 +1288,7 @@ export class Session {
     this._currentTurnAbortController?.abort();
 
     let hadActiveAgents = false;
-    for (const entry of this._activeAgents.values()) {
+    for (const entry of this._childSessions.values()) {
       if (entry.status === "working") {
         hadActiveAgents = true;
         break;
@@ -1085,8 +1312,8 @@ export class Session {
     this._pendingTurnState = null;
     this._inbox = [];
     this._wakeWait();
-    if (this._activeAgents.size > 0) {
-      this._forceKillAllAgents();
+    if (this._childSessions.size > 0) {
+      this._interruptAllChildTurns();
     }
     if (this._activeShells.size > 0) {
       this._forceKillAllShells();
@@ -1114,7 +1341,7 @@ export class Session {
     this._activeAsk = null;
     this._askHistory = [];
     this._pendingTurnState = null;
-    if (this._activeAgents.size > 0) {
+    if (this._childSessions.size > 0) {
       this._forceKillAllAgents();
     }
     if (this._activeShells.size > 0) {
@@ -1205,6 +1432,10 @@ export class Session {
       }
     }
 
+    this._rebuildRuntimeSignalsFromLog();
+    this._normalizeInterruptedTurnFromLog("Last turn was interrupted unexpectedly and recovered after restart.");
+    this._restoreChildSessionsFromLog(meta.childSessions ?? []);
+
     // Restore ask state from log: find unclosed ask_request
     this._restoreAskStateFromLog(entries);
 
@@ -1233,6 +1464,195 @@ export class Session {
     this._notifyLogListeners();
   }
 
+  private _rebuildRuntimeSignalsFromLog(): void {
+    this._lifetimeToolCallCount = 0;
+    this._lastToolCallSummary = "";
+    this._recentSessionEvents = [];
+    this._lastTurnEndStatus = null;
+    this._selfPhase = "idle";
+
+    for (const entry of this._log) {
+      if (entry.discarded) continue;
+      if (entry.type === "tool_call") {
+        this._lifetimeToolCallCount += 1;
+        this._lastToolCallSummary = entry.display || this._lastToolCallSummary;
+        if (entry.display) this._recordSessionEvent(entry.display);
+      }
+      if (entry.type === "turn_end") {
+        const status = (entry.meta as Record<string, unknown>)["status"];
+        if (status === "completed" || status === "interrupted" || status === "error") {
+          this._lastTurnEndStatus = status;
+        }
+      }
+    }
+  }
+
+  private _normalizeInterruptedTurnFromLog(message: string): void {
+    let turnStartIndex = -1;
+    let interruptedTurnIndex = -1;
+
+    for (let i = this._log.length - 1; i >= 0; i--) {
+      const entry = this._log[i];
+      if (entry.discarded) continue;
+      if (entry.type === "turn_end") {
+        break;
+      }
+      if (entry.type === "turn_start") {
+        turnStartIndex = i;
+        interruptedTurnIndex = entry.turnIndex;
+        break;
+      }
+    }
+
+    if (turnStartIndex < 0 || interruptedTurnIndex < 0) return;
+
+    const interruptedSuffix = " [Interrupted here.]";
+    const interruptedMarker = "[Interrupted here.]";
+    let latestRound: number | undefined;
+    let latestRoundHasToolCall = false;
+    let hasAssistantInTurn = false;
+    let latestAssistantEntry: LogEntry | null = null;
+
+    for (let i = turnStartIndex; i < this._log.length; i++) {
+      const entry = this._log[i];
+      if (entry.discarded || entry.turnIndex !== interruptedTurnIndex) continue;
+      if (entry.roundIndex !== undefined && (latestRound === undefined || entry.roundIndex > latestRound)) {
+        latestRound = entry.roundIndex;
+      }
+      if (entry.type === "assistant_text") {
+        hasAssistantInTurn = true;
+        latestAssistantEntry = entry;
+      }
+    }
+
+    if (latestRound !== undefined) {
+      for (let i = turnStartIndex; i < this._log.length; i++) {
+        const entry = this._log[i];
+        if (entry.discarded || entry.turnIndex !== interruptedTurnIndex || entry.roundIndex !== latestRound) continue;
+        if (entry.type === "tool_call") latestRoundHasToolCall = true;
+      }
+      if (!latestRoundHasToolCall) {
+        for (let i = turnStartIndex; i < this._log.length; i++) {
+          const entry = this._log[i];
+          if (entry.discarded || entry.turnIndex !== interruptedTurnIndex || entry.roundIndex !== latestRound) continue;
+          if (entry.type === "reasoning") entry.discarded = true;
+        }
+      }
+    }
+
+    if (latestAssistantEntry) {
+      const currentDisplay = String(latestAssistantEntry.display ?? "");
+      const currentContent = String(latestAssistantEntry.content ?? "");
+      if (!currentDisplay.trimEnd().endsWith(interruptedSuffix)) {
+        latestAssistantEntry.display = `${currentDisplay.trimEnd()}${interruptedSuffix}`;
+      }
+      if (!currentContent.trimEnd().endsWith(interruptedSuffix)) {
+        latestAssistantEntry.content = `${currentContent.trimEnd()}${interruptedSuffix}`;
+      }
+    }
+
+    const originalTurnCount = this._turnCount;
+    this._turnCount = interruptedTurnIndex;
+    this._completeMissingToolResultsFromLog(turnStartIndex, interruptedMarker);
+    const lastRole = this._getLastSendableRole();
+    if (this._isUserSideProtocolRole(lastRole) && !hasAssistantInTurn) {
+      const ctxId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
+      this._appendEntry(createAssistantText(
+        this._nextLogId("assistant_text"),
+        interruptedTurnIndex,
+        this._computeNextRoundIndex(),
+        interruptedMarker,
+        interruptedMarker,
+        ctxId,
+      ), false);
+    }
+
+    const interruptionCtxId = this._allocateContextId();
+    const interruptionEntry = createUserMessageEntry(
+      this._nextLogId("user_message"),
+      interruptedTurnIndex,
+      message,
+      message,
+      interruptionCtxId,
+    );
+    interruptionEntry.tuiVisible = false;
+    interruptionEntry.displayKind = null;
+    this._appendEntry(interruptionEntry, false);
+    this._appendEntry(
+      createTurnEnd(this._nextLogId("turn_end"), interruptedTurnIndex, "interrupted"),
+      false,
+    );
+    this._lastTurnEndStatus = "interrupted";
+    this._turnCount = originalTurnCount;
+    this._recordSessionEvent("recovered interrupted turn");
+  }
+
+  private _restoreChildSessionsFromLog(childSessions: ChildSessionMetaRecord[]): void {
+    if (childSessions.length === 0) return;
+
+    const ordered = [...childSessions].sort((a, b) => (a.order ?? a.numericId) - (b.order ?? b.numericId));
+    for (const record of ordered) {
+      let agent: Agent;
+      try {
+        if (this.agentTemplates[record.template]) {
+          agent = this._createSubAgentFromPredefined(record.template, record.id);
+        } else {
+          agent = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id);
+        }
+      } catch (e) {
+        console.warn(`Failed to restore child session '${record.id}':`, e);
+        continue;
+      }
+
+      if (record.teamId && !this._teams.has(record.teamId)) {
+        this._teams.set(record.teamId, { id: record.teamId, members: new Set() });
+      }
+
+      const handle = this._instantiateChildSession(
+        record.id,
+        record.template,
+        record.mode,
+        record.teamId ?? null,
+        agent,
+        { numericId: record.numericId, order: record.order },
+      );
+
+      try {
+        const loaded = loadLog(handle.sessionDir);
+        handle.session.restoreFromLog(loaded.meta, loaded.entries, loaded.idAllocator);
+      } catch (e) {
+        console.warn(`Failed to load child session log for '${record.id}':`, e);
+      }
+
+      handle.lifecycle = record.lifecycle;
+      handle.lastOutcome = record.outcome ?? "none";
+      handle.lastActivityAt = Date.now();
+      handle.resultText = this._extractLatestAssistantText(handle.session.log);
+      handle.status =
+        record.lifecycle === "terminated"
+          ? "terminated"
+          : record.lifecycle === "completed"
+            ? (record.outcome === "error" ? "error" : record.outcome === "interrupted" ? "interrupted" : "completed")
+            : "idle";
+
+      this._childSessions.set(record.id, handle);
+      if (record.teamId) {
+        this._teams.get(record.teamId)?.members.add(record.id);
+      }
+    }
+  }
+
+  private _extractLatestAssistantText(entries: readonly LogEntry[]): string {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      if (entry.discarded) continue;
+      if (entry.type === "assistant_text" || entry.type === "no_reply") {
+        return String(entry.content ?? entry.display ?? "");
+      }
+    }
+    return "";
+  }
+
   /**
    * Get log data for persistence (v2).
    * Returns meta + entries suitable for saveLog().
@@ -1254,6 +1674,16 @@ export class Session {
         summary: this._generateSummary(),
         activePlanCheckpoints: this._activePlanCheckpoints.length > 0 ? this._activePlanCheckpoints : undefined,
         activePlanChecked: this._activePlanChecked.length > 0 ? this._activePlanChecked : undefined,
+        childSessions: [...this._childSessions.values()].map((handle) => ({
+          id: handle.id,
+          numericId: handle.numericId,
+          template: handle.template,
+          mode: handle.mode,
+          teamId: handle.teamId,
+          lifecycle: handle.lifecycle,
+          outcome: handle.lastOutcome,
+          order: handle.order,
+        })),
       }),
       entries: this._log,
     };
@@ -1342,17 +1772,22 @@ export class Session {
       reload_skills: () => this._execReloadSkills(),
       send: (args) => this._execSend(args),
       $web_search: (args) => toolBuiltinWebSearchPassthrough(args as Record<string, unknown>),
+      ...this._toolExecutorOverrides,
     };
   }
 
   private _ensureCommTools(): void {
     const existing = new Set(this.primaryAgent.tools.map((t) => t.name));
-    for (const toolDef of [
-      SPAWN_AGENT_TOOL, KILL_AGENT_TOOL, CHECK_STATUS_TOOL, WAIT_TOOL,
-      SHOW_CONTEXT_TOOL, SUMMARIZE_CONTEXT_TOOL,
-      ASK_TOOL, PLAN_TOOL,
-      // SEND_TOOL is injected dynamically when interactive agents exist
-    ]) {
+    const wanted: ToolDef[] = [];
+    if (this._capabilities.includeSpawnTool) wanted.push(SPAWN_AGENT_TOOL);
+    if (this._capabilities.includeKillTool) wanted.push(KILL_AGENT_TOOL);
+    if (this._capabilities.includeCheckStatusTool) wanted.push(CHECK_STATUS_TOOL);
+    if (this._capabilities.includeWaitTool) wanted.push(WAIT_TOOL);
+    if (this._capabilities.includeShowContextTool) wanted.push(SHOW_CONTEXT_TOOL);
+    if (this._capabilities.includeSummarizeContextTool) wanted.push(SUMMARIZE_CONTEXT_TOOL);
+    if (this._capabilities.includeAskTool) wanted.push(ASK_TOOL);
+    if (this._capabilities.includePlanTool) wanted.push(PLAN_TOOL);
+    for (const toolDef of wanted) {
       if (!existing.has(toolDef.name)) {
         this.primaryAgent.tools.push(toolDef);
       }
@@ -1373,14 +1808,20 @@ export class Session {
   // ==================================================================
 
   getAgentLog(agentId: string): readonly LogEntry[] | null {
-    const entry = this._activeAgents.get(agentId);
-    return entry ? entry.log : null;
+    const entry = this._childSessions.get(agentId);
+    return entry ? entry.session.log : null;
   }
 
   getActiveAgentIds(): Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> {
     const result: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> = [];
-    for (const [id, entry] of this._activeAgents) {
-      result.push({ id, status: entry.agentState === "working" ? "working" : entry.status, interactive: entry.interactive, teamId: entry.teamId });
+    for (const snapshot of this.getChildSessionSnapshots()) {
+      const status = snapshot.running ? "working" : snapshot.lifecycle === "live" ? "idle" : snapshot.lifecycle;
+      result.push({
+        id: snapshot.id,
+        status,
+        interactive: snapshot.mode === "persistent",
+        teamId: snapshot.teamId,
+      });
     }
     return result;
   }
@@ -1498,18 +1939,24 @@ export class Session {
 
   /** Add the skill + reload_skills tools to the primary agent. */
   private _ensureSkillTool(): void {
+    if (!this._capabilities.includeSkillTools && !this._capabilities.includeReloadSkillsTool) {
+      this.primaryAgent.tools = this.primaryAgent.tools.filter(
+        (t) => t.name !== "skill" && t.name !== "reload_skills",
+      );
+      return;
+    }
     // Remove old skill-related tools
     this.primaryAgent.tools = this.primaryAgent.tools.filter(
       (t) => t.name !== "skill" && t.name !== "reload_skills",
     );
 
     const skillDef = this._buildSkillToolDef();
-    if (skillDef) {
+    if (skillDef && this._capabilities.includeSkillTools) {
       this.primaryAgent.tools.push(skillDef);
     }
 
     // Always add reload_skills if there are skill roots configured
-    if (this._skillRoots.length > 0) {
+    if (this._skillRoots.length > 0 && this._capabilities.includeReloadSkillsTool) {
       this.primaryAgent.tools.push(this._buildReloadSkillsToolDef());
     }
   }
@@ -1775,6 +2222,7 @@ export class Session {
     }
 
     const userCtxId = this._allocateContextId();
+    this._lastTurnEndStatus = null;
     this._turnCount += 1;
     this._appendEntry(
       createTurnStart(this._nextLogId("turn_start"), this._turnCount),
@@ -1826,6 +2274,7 @@ export class Session {
       if (blocker) throw new Error(blocker);
 
       this._turnCount += 1;
+      this._lastTurnEndStatus = null;
       this._appendEntry(
         createTurnStart(this._nextLogId("turn_start"), this._turnCount),
         false,
@@ -1883,6 +2332,14 @@ export class Session {
       if (e.type !== "ask_request" || e.discarded) continue;
       const askId = String((e.meta as Record<string, unknown>)["askId"] ?? "");
       if (resolvedAskIds.has(askId)) continue;
+      const interruptedTurn = entries.some((candidate) =>
+        !candidate.discarded &&
+        candidate.turnIndex === e.turnIndex &&
+        candidate.type === "turn_end" &&
+        (((candidate.meta as Record<string, unknown>)["status"] as string | undefined) === "interrupted" ||
+          ((candidate.meta as Record<string, unknown>)["status"] as string | undefined) === "error"),
+      );
+      if (interruptedTurn) continue;
 
       // Found an unclosed ask — restore it as active
       const payload = e.content as Record<string, unknown>;
@@ -1992,6 +2449,7 @@ export class Session {
     reasoningAccumulator: { text: string },
   ): Promise<string> {
     let finalText = "";
+    let turnEndStatus: "completed" | "interrupted" | "error" | null = null;
     const turnSignalState = this._installCurrentTurnSignal(signal);
     const activeSignal = turnSignalState.signal;
     try {
@@ -2004,6 +2462,7 @@ export class Session {
         textAccumulator.text = "";
         reasoningAccumulator.text = "";
         this._agentState = "working";
+        this._setSelfPhase("thinking");
 
         if (this._progress) {
           this._progress.onAgentStart(this._turnCount, this.primaryAgent.name);
@@ -2019,6 +2478,7 @@ export class Session {
             });
             this.onSaveRequest?.();
             finalText = textAccumulator.text.trim() || "";
+            turnEndStatus = "interrupted";
             break;
           }
 
@@ -2033,6 +2493,7 @@ export class Session {
           });
           this.onSaveRequest?.();
           finalText = textAccumulator.text.trim() || "";
+          turnEndStatus = "interrupted";
           break;
         }
 
@@ -2137,6 +2598,7 @@ export class Session {
             });
             this.onSaveRequest?.();
             finalText = textAccumulator.text.trim() || "";
+            turnEndStatus = "interrupted";
             break;
           }
 
@@ -2208,6 +2670,7 @@ export class Session {
               ), false);
               this.onSaveRequest?.();
               finalText = textAccumulator.text.trim() || "";
+              turnEndStatus = "interrupted";
               break;
             }
             throw compactErr;
@@ -2216,6 +2679,7 @@ export class Session {
 
           if (result.compactScenario === "output") {
             reachedLimit = false;
+            turnEndStatus = "completed";
             break;
           } else {
             // Reset activation budget after compact — the agent gets a fresh
@@ -2238,6 +2702,7 @@ export class Session {
             });
             this.onSaveRequest?.();
             finalText = textAccumulator.text.trim() || "";
+            turnEndStatus = "interrupted";
             break;
           }
 
@@ -2259,6 +2724,7 @@ export class Session {
             });
             this.onSaveRequest?.();
             finalText = textAccumulator.text.trim() || "";
+            turnEndStatus = "interrupted";
             break;
           }
 
@@ -2269,6 +2735,7 @@ export class Session {
         // Nothing pending, no active agents → turn ends
         reachedLimit = false;
         this._agentState = "idle";
+        turnEndStatus = "completed";
         break;
       }
 
@@ -2279,17 +2746,27 @@ export class Session {
             "[Turn terminated: reached maximum activation limit " +
             "without producing output. This may indicate a stuck loop.]";
         }
+        turnEndStatus = "error";
       }
     } finally {
       this._restoreCurrentTurnSignal(turnSignalState);
       // Drain any messages that arrived after the last activation boundary check.
       // Without this, messages queued during the final activation would be orphaned.
-      if (this._hasInboxMessages() || this._hasUndeliveredAgentResults()) {
+      if (!this._deferQueuedMessageInjectionOnTurnExit && (this._hasInboxMessages() || this._hasUndeliveredAgentResults())) {
         this._injectPendingMessages();
       }
       this._agentState = "idle";
+      this._setSelfPhase("idle");
       if (!this._activeAsk && this._hasActiveAgents()) {
         this._cleanupNonInteractiveAgents();
+      }
+      if (!this._activeAsk && this._turnCount > 0 && turnEndStatus) {
+        this._lastTurnEndStatus = turnEndStatus;
+        this._appendEntry(
+          createTurnEnd(this._nextLogId("turn_end"), this._turnCount, turnEndStatus),
+          false,
+        );
+        this.onSaveRequest?.();
       }
     }
 
@@ -2303,7 +2780,9 @@ export class Session {
   /** Inner turn logic, called from within the turn lock. */
   private async _turnInner(userInput: string, options?: { signal?: AbortSignal }): Promise<string> {
     this._ensureSessionStorageReady();
-    await this._ensureMcp();
+    if (this._capabilities.includeSkillTools || this._capabilities.includeSpawnTool) {
+      await this._ensureMcp();
+    }
 
     const signal = options?.signal;
     if (this._pendingTurnState && !this._activeAsk) {
@@ -2319,7 +2798,12 @@ export class Session {
       }
       const ta = { text: "" };
       const ra = { text: "" };
-      return this._runTurnActivationLoop(options?.signal, ta, ra);
+      const resumed = await this._runTurnActivationLoop(options?.signal, ta, ra);
+      if (resumed && !this._activeAsk) {
+        this._turnOutputTarget?.(resumed);
+        this._recordSessionEvent("returned output");
+      }
+      return resumed;
     }
 
     let userContent: string | Array<Record<string, unknown>>;
@@ -2335,6 +2819,7 @@ export class Session {
     }
     // Assign context_id to user message (metadata only, no visible §{id}§ tag in content)
     const userCtxId = this._allocateContextId();
+    this._lastTurnEndStatus = null;
     this._turnCount += 1;
 
     // v2 log: turn_start + user_message
@@ -2362,7 +2847,24 @@ export class Session {
     // Track streamed content for abort recovery
     const textAccumulator = { text: "" };
     const reasoningAccumulator = { text: "" };
-    return this._runTurnActivationLoop(signal, textAccumulator, reasoningAccumulator);
+    try {
+      const result = await this._runTurnActivationLoop(signal, textAccumulator, reasoningAccumulator);
+      if (result && !this._activeAsk) {
+        this._turnOutputTarget?.(result);
+        this._recordSessionEvent("returned output");
+      }
+      return result;
+    } catch (err) {
+      if (!this._activeAsk && this._turnCount > 0 && this._lastTurnEndStatus === null) {
+        this._lastTurnEndStatus = "error";
+        this._appendEntry(
+          createTurnEnd(this._nextLogId("turn_end"), this._turnCount, "error"),
+          false,
+        );
+        this.onSaveRequest?.();
+      }
+      throw err;
+    }
   }
 
   /**
@@ -2482,10 +2984,10 @@ export class Session {
     const lines: string[] = ["Last turn was interrupted by the user."];
     if (snapshot && (snapshot.hadActiveAgents || snapshot.hadActiveShells || snapshot.hadUnconsumed)) {
       const killedKinds: string[] = [];
-      if (snapshot.hadActiveAgents) killedKinds.push("sub-agents");
+      if (snapshot.hadActiveAgents) killedKinds.push("sub-sessions");
       if (snapshot.hadActiveShells) killedKinds.push("shells");
       if (killedKinds.length > 0) {
-        lines.push(`Active ${killedKinds.join(" and ")} were killed.`);
+        lines.push(`Active ${killedKinds.join(" and ")} were interrupted.`);
       }
       if (snapshot.hadUnconsumed) {
         lines.push("Unconsumed queued information was discarded.");
@@ -2497,6 +2999,7 @@ export class Session {
       }
     }
     const interruptionMessage = lines.join("\n");
+    this._recordSessionEvent("interrupted by user");
     const interruptionCtxId = this._allocateContextId();
     const interruptionEntry = createUserMessageEntry(
       this._nextLogId("user_message"),
@@ -2554,18 +3057,11 @@ export class Session {
   }
 
   private _getLastSendableRole(): string | null {
-    let importantLog = "";
-    try {
-      importantLog = this._readImportantLog();
-    } catch {
-      importantLog = "";
-    }
     const agentsMd = this._readAgentsMd();
     const messages = projectToApiMessages(this._log, {
       resolveImageRef: (refPath) => this._resolveImageRef(refPath),
-      importantLog,
       agentsMd,
-      requiresAlternatingRoles: (this.primaryAgent as any)._provider.requiresAlternatingRoles,
+      requiresAlternatingRoles: (this.primaryAgent as any)._provider?.requiresAlternatingRoles,
     });
     if (messages.length === 0) return null;
     const role = messages[messages.length - 1]["role"];
@@ -2633,6 +3129,7 @@ export class Session {
           const stripBuf = new ContextTagStripBuffer((cleanChunk: string) => {
             if (textAccumulator) textAccumulator.text += cleanChunk;
             if (progress) progress.onTextChunk(agentName, cleanChunk);
+            this._setSelfPhase("generating");
 
             const entry = streamedAssistantEntries.get(roundIndex);
             if (!entry) {
@@ -2663,6 +3160,7 @@ export class Session {
       onReasoningChunk = (roundIndex: number, chunk: string) => {
         if (reasoningAccumulator) reasoningAccumulator.text += chunk;
         if (progress) progress.onReasoningChunk(agentName, chunk);
+        this._setSelfPhase("thinking");
 
         const entry = streamedReasoningEntries.get(roundIndex);
         if (!entry) {
@@ -2695,6 +3193,14 @@ export class Session {
         progress.onToolCall(step, name, tool, args, summary);
       };
     }
+    const origOnToolCall = onToolCall;
+    onToolCall = (name: string, tool: string, args: Record<string, unknown>, summary: string) => {
+      origOnToolCall?.(name, tool, args, summary);
+      this._setSelfPhase("tool_calling");
+      this._lifetimeToolCallCount += 1;
+      this._lastToolCallSummary = summary;
+      this._recordSessionEvent(summary);
+    };
 
     // Token update callback: update _lastInputTokens after each provider call
     // so the TUI can display real-time context usage.
@@ -2782,20 +3288,11 @@ export class Session {
       const showAnnotations = this._showContextRoundsRemaining > 0
         ? this._showContextAnnotations ?? undefined
         : undefined;
-      let importantLog = this._readImportantLog();
-      // Inject active plan alongside important log
-      if (this._activePlanCheckpoints.length > 0) {
-        const lines = this._activePlanCheckpoints.map((text, i) =>
-          `- [${this._activePlanChecked[i] ? "x" : " "}] ${text}`
-        );
-        importantLog += `\n\n---\n## Active Plan\n${lines.join("\n")}`;
-      }
       const agentsMd = this._readAgentsMd();
       return projectToApiMessages(this._log, {
         resolveImageRef: (refPath) => this._resolveImageRef(refPath),
-        importantLog,
         agentsMd,
-        requiresAlternatingRoles: (this.primaryAgent as any)._provider.requiresAlternatingRoles,
+        requiresAlternatingRoles: (this.primaryAgent as any)._provider?.requiresAlternatingRoles,
         showContextAnnotations: showAnnotations ?? undefined,
       });
     };
@@ -3528,23 +4025,6 @@ export class Session {
   }
 
   // ==================================================================
-  // Important log
-  // ==================================================================
-
-  private _readImportantLog(): string {
-    const path = this._getImportantLogPath();
-    if (existsSync(path)) {
-      const content = readFileSync(path, "utf-8").trim();
-      return content || "(empty file)";
-    }
-    return "(empty file)";
-  }
-
-  private _getImportantLogPath(): string {
-    return join(this._getArtifactsDir(), "important-log.md");
-  }
-
-  // ==================================================================
   // AGENTS.md persistent memory
   // ==================================================================
 
@@ -3586,6 +4066,14 @@ export class Session {
     }
 
     return parts.join("\n\n---\n\n");
+  }
+
+  private _buildActivePlanText(): string {
+    if (this._activePlanCheckpoints.length === 0) return "";
+    const lines = this._activePlanCheckpoints.map((text, i) =>
+      `- [${this._activePlanChecked[i] ? "x" : " "}] ${text}`,
+    );
+    return `## Active Plan\n${lines.join("\n")}`;
   }
 
   private _countProjectedMessageTokens(content: unknown): number {
@@ -3634,26 +4122,11 @@ export class Session {
   }
 
   private _estimateInitialApiInputTokens(): number {
-    let importantLog = "(empty file)";
-    try {
-      importantLog = this._readImportantLog();
-    } catch {
-      importantLog = "(empty file)";
-    }
-
-    if (this._activePlanCheckpoints.length > 0) {
-      const lines = this._activePlanCheckpoints.map((text, i) =>
-        `- [${this._activePlanChecked[i] ? "x" : " "}] ${text}`
-      );
-      importantLog += `\n\n---\n## Active Plan\n${lines.join("\n")}`;
-    }
-
     const agentsMd = this._readAgentsMd();
     const messages = projectToApiMessages(this._log, {
       resolveImageRef: (refPath) => this._resolveImageRef(refPath),
-      importantLog,
       agentsMd,
-      requiresAlternatingRoles: (this.primaryAgent as any)._provider.requiresAlternatingRoles,
+      requiresAlternatingRoles: (this.primaryAgent as any)._provider?.requiresAlternatingRoles,
     });
 
     try {
@@ -3732,10 +4205,6 @@ export class Session {
       );
     }
     this._refreshSystemPromptPaths();
-
-    // Auto-create important-log.md if it doesn't exist (starts empty)
-    const logPath = this._getImportantLogPath();
-    if (!existsSync(logPath)) writeFileSync(logPath, "");
   }
 
   private _getArtifactsDir(): string {
@@ -4255,6 +4724,251 @@ export class Session {
   // Sub-agent spawn / cancel / lifecycle
   // ==================================================================
 
+  private _childSessionDir(childId: string): string {
+    return join(this._resolveSessionArtifacts(), "agents", childId, "session");
+  }
+
+  private _saveChildSession(handle: ChildSessionHandle): void {
+    try {
+      const logData = handle.session.getLogForPersistence();
+      saveLog(handle.sessionDir, logData.meta, [...logData.entries]);
+    } catch (e) {
+      console.warn(`Failed to save child session '${handle.id}':`, e);
+    }
+  }
+
+  private _createChildSendExecutor(handle: ChildSessionHandle): ToolExecutor {
+    return (args: Record<string, unknown>) => {
+      const sendTo = ((args["to"] as string) ?? "").trim();
+      const sendContent = ((args["content"] as string) ?? "").trim();
+      if (!sendTo || !sendContent) {
+        return new ToolResult({ content: "Error: 'to' and 'content' are required." });
+      }
+      const team = handle.teamId ? this._teams.get(handle.teamId) : null;
+      if (!team || !team.members.has(sendTo)) {
+        return new ToolResult({ content: `Agent '${sendTo}' is not in your team.` });
+      }
+      this._sendMessageToChild(sendTo, {
+        from: handle.id,
+        to: sendTo,
+        content: sendContent,
+        timestamp: Date.now(),
+      });
+      handle.lastActivityAt = Date.now();
+      handle.session._recordSessionEvent(`sent message to ${sendTo}`);
+      return new ToolResult({ content: `Message sent to '${sendTo}'.` });
+    };
+  }
+
+  private _instantiateChildSession(
+    taskId: string,
+    templateLabel: string,
+    mode: ChildSessionMode,
+    teamId: string | null,
+    agent: Agent,
+    opts?: { numericId?: number; order?: number },
+  ): ChildSessionHandle {
+    const numericId = opts?.numericId ?? (this._subAgentCounter + 1);
+    this._subAgentCounter = Math.max(this._subAgentCounter, numericId);
+    const sessionDir = this._childSessionDir(taskId);
+    const artifactsDir = join(sessionDir, "artifacts");
+    mkdirSync(artifactsDir, { recursive: true });
+
+    const fullSystemPrompt = this._buildSubAgentSystemPrompt(
+      agent.systemPrompt,
+      mode === "persistent",
+      teamId,
+    );
+    agent.systemPrompt = fullSystemPrompt;
+    if (teamId && !agent.tools.some((tool) => tool.name === "send")) {
+      agent.tools.push(SEND_TOOL);
+    }
+
+    const handle: ChildSessionHandle = {
+      id: taskId,
+      numericId,
+      template: templateLabel,
+      mode,
+      teamId,
+      lifecycle: "live",
+      status: "idle",
+      phase: "idle",
+      session: null as unknown as Session,
+      sessionDir,
+      artifactsDir,
+      resultText: "",
+      elapsed: 0,
+      startTime: 0,
+      deliveredResultRevision: 0,
+      outputRevision: 0,
+      turnPromise: null,
+      abortController: null,
+      recentEvents: [],
+      lifetimeToolCallCount: 0,
+      lastToolCallSummary: "",
+      lastTotalTokens: 0,
+      lastOutcome: "none",
+      lastActivityAt: Date.now(),
+      order: opts?.order ?? numericId,
+    };
+
+    const childSession = new Session({
+      primaryAgent: agent,
+      config: this.config,
+      promptsDirs: this._promptsDirs,
+      projectRoot: this._projectRoot,
+      sessionArtifactsDir: artifactsDir,
+      capabilities: CHILD_SESSION_CAPABILITIES,
+      statusSource: () => this.getChildSessionSnapshots(),
+      onTurnOutput: (text: string) => this._handleChildTurnOutput(taskId, text),
+      toolExecutorOverrides: teamId ? { send: this._createChildSendExecutor(handle) } : {},
+      deferQueuedMessageInjectionOnTurnExit: true,
+    });
+    childSession.onSaveRequest = () => this._saveChildSession(handle);
+    handle.session = childSession;
+    return handle;
+  }
+
+  private _createChildSession(
+    taskId: string,
+    templateLabel: string,
+    mode: ChildSessionMode,
+    teamId: string | null,
+    agent: Agent,
+  ): ChildSessionHandle {
+    const handle = this._instantiateChildSession(taskId, templateLabel, mode, teamId, agent);
+    this._saveChildSession(handle);
+    return handle;
+  }
+
+  private _handleChildTurnOutput(childId: string, text: string): void {
+    const handle = this._childSessions.get(childId);
+    if (!handle) return;
+    handle.resultText = text;
+    handle.outputRevision += 1;
+    handle.lastActivityAt = Date.now();
+    if (text.trim()) {
+      this._deliverMessage({ from: childId, to: "primary", content: text, timestamp: Date.now() });
+    }
+  }
+
+  private _startChildTurn(handle: ChildSessionHandle, input: string): void {
+    handle.startTime = performance.now();
+    handle.status = "working";
+    handle.lifecycle = "live";
+    handle.phase = "thinking";
+    handle.lastActivityAt = Date.now();
+    const abortController = new AbortController();
+    handle.abortController = abortController;
+    handle.turnPromise = handle.session.turn(input, { signal: abortController.signal });
+    void handle.turnPromise.then(
+      () => this._finishChildTurn(handle, undefined),
+      (error: unknown) => this._finishChildTurn(handle, error),
+    );
+  }
+
+  private _finishChildTurn(handle: ChildSessionHandle, error?: unknown): void {
+    handle.elapsed = handle.startTime > 0 ? (performance.now() - handle.startTime) / 1000 : 0;
+    handle.abortController = null;
+    handle.turnPromise = null;
+    handle.lastActivityAt = Date.now();
+
+    if (handle.lifecycle === "terminated") {
+      handle.status = "terminated";
+      handle.lastOutcome = "interrupted";
+      this._saveChildSession(handle);
+      return;
+    }
+
+    if (error) {
+      handle.lastOutcome = "error";
+      handle.status = "error";
+      if (handle.mode === "oneshot") {
+        handle.lifecycle = "completed";
+      }
+      this._saveChildSession(handle);
+      return;
+    }
+
+    const endStatus = handle.session.lastTurnEndStatus;
+    if (endStatus === "error") {
+      handle.lastOutcome = "error";
+      handle.status = "error";
+      if (handle.mode === "oneshot") {
+        handle.lifecycle = "completed";
+      }
+      this._saveChildSession(handle);
+      return;
+    }
+
+    if (endStatus === "interrupted") {
+      handle.lastOutcome = "interrupted";
+      if (handle.mode === "oneshot") {
+        handle.lifecycle = "completed";
+        handle.status = "interrupted";
+      } else {
+        handle.status = "idle";
+      }
+      this._saveChildSession(handle);
+      const queued = handle.session._takeQueuedMessagesAsTurnInput();
+      if (handle.mode === "persistent" && queued) {
+        this._startChildTurn(handle, queued);
+      }
+      return;
+    }
+
+    handle.lastOutcome = "completed";
+    if (handle.mode === "oneshot") {
+      handle.lifecycle = "completed";
+      handle.status = "completed";
+    } else {
+      handle.status = "idle";
+    }
+    this._saveChildSession(handle);
+    const queued = handle.session._takeQueuedMessagesAsTurnInput();
+    if (handle.mode === "persistent" && queued) {
+      this._startChildTurn(handle, queued);
+    }
+  }
+
+  private _sendMessageToChild(childId: string, msg: AgentMessage): ToolResult {
+    const handle = this._childSessions.get(childId);
+    if (!handle) {
+      return new ToolResult({ content: `Agent '${childId}' not found.` });
+    }
+    if (handle.mode !== "persistent") {
+      return new ToolResult({ content: `Agent '${childId}' is one-shot and cannot receive messages.` });
+    }
+    if (handle.lifecycle === "terminated") {
+      return new ToolResult({ content: `Agent '${childId}' has been terminated.` });
+    }
+    if (handle.lifecycle === "completed") {
+      return new ToolResult({ content: `Agent '${childId}' has already completed and is read-only.` });
+    }
+
+    handle.lastActivityAt = Date.now();
+    if (handle.status === "working") {
+      handle.session._deliverMessage(msg);
+      return new ToolResult({ content: `Message sent to '${childId}'.` });
+    }
+
+    (handle.session as Session)._inbox.push(msg);
+    const queuedInput = handle.session._takeQueuedMessagesAsTurnInput();
+    if (queuedInput) {
+      this._startChildTurn(handle, queuedInput);
+    }
+    return new ToolResult({ content: `Message sent to '${childId}'.` });
+  }
+
+  interruptChildSession(childId: string): { accepted: boolean; reason?: string } {
+    const handle = this._childSessions.get(childId);
+    if (!handle) return { accepted: false, reason: "not_found" };
+    if (handle.lifecycle !== "live") return { accepted: false, reason: "not_live" };
+    if (handle.status !== "working") return { accepted: false, reason: "idle" };
+    handle.abortController?.abort();
+    return { accepted: true };
+  }
+
   private async _execSpawnAgents(args: Record<string, unknown>): Promise<ToolResult> {
     const fileArg = this._argRequiredString("spawn_agent", args, "file", { nonEmpty: true });
     if (fileArg instanceof ToolResult) return fileArg;
@@ -4323,7 +5037,6 @@ export class Session {
       );
     }
 
-    // Team support: `team:` field makes all agents interactive
     const teamName = ((callFile["team"] as string) ?? "").trim() || null;
 
     const tasksSpec = (callFile["agents"] ?? callFile["tasks"]) as Array<Record<string, unknown>> ?? [];
@@ -4345,8 +5058,7 @@ export class Session {
       const templateName = ((spec["template"] as string) ?? "").trim();
       const templatePath = ((spec["template_path"] as string) ?? "").trim();
       const taskDesc = ((spec["task"] as string) ?? "").trim();
-      const includeLog = spec["include_important_log"] !== false;
-      const isInteractive = teamName ? true : (spec["interactive"] === true);
+      const modeRaw = ((spec["mode"] as string) ?? "").trim();
 
       if (!taskId || !taskDesc) {
         errors.push("Skipped entry: missing 'id' or 'task'.");
@@ -4360,9 +5072,27 @@ export class Session {
         errors.push(`'${taskId}': cannot specify both 'template' and 'template_path'.`);
         continue;
       }
-      if (this._activeAgents.has(taskId)) {
+      if (this._childSessions.has(taskId)) {
         errors.push(`'${taskId}': already running.`);
         continue;
+      }
+
+      let mode: ChildSessionMode;
+      if (teamName) {
+        if (!modeRaw) {
+          mode = "persistent";
+        } else if (modeRaw === "persistent") {
+          mode = "persistent";
+        } else {
+          errors.push(`'${taskId}': team members cannot use mode '${modeRaw}'.`);
+          continue;
+        }
+      } else {
+        if (modeRaw !== "oneshot" && modeRaw !== "persistent") {
+          errors.push(`'${taskId}': non-team agents must set mode to 'oneshot' or 'persistent'.`);
+          continue;
+        }
+        mode = modeRaw;
       }
 
       let agent: Agent;
@@ -4381,113 +5111,58 @@ export class Session {
         continue;
       }
 
-      // Inject SEND_TOOL ToolDef for team agents so the LLM can see it.
-      // Team agents get send tool for cross-agent communication.
-      // Non-team interactive agents don't get send — their turn output
-      // auto-delivers to primary, and they don't need cross-agent communication.
-      if (teamName && !agent.tools.some((t) => t.name === "send")) {
-        agent.tools.push(SEND_TOOL);
-      }
-
-      // Give primary agent the send tool when interactive agents exist
-      // (so primary can send follow-up messages to interactive agents)
-      if (isInteractive && !this.primaryAgent.tools.some((t) => t.name === "send")) {
+      if (mode === "persistent" && !this.primaryAgent.tools.some((t) => t.name === "send")) {
         this.primaryAgent.tools.push(SEND_TOOL);
       }
 
-      const extraMessages = this._buildSubAgentContext(includeLog);
-      this._subAgentCounter += 1;
-      const numericId = this._subAgentCounter;
-
-      // Persistent agent storage
-      const persistDir = join(this._resolveSessionArtifacts(), "agents", taskId);
-      mkdirSync(persistDir, { recursive: true });
-
-      // Team membership: add send tool for team members, inject team roster
       if (teamName) {
         const team = this._teams.get(teamName)!;
-        // Broadcast new member to existing team members
-        for (const memberId of team.members) {
-          const memberEntry = this._activeAgents.get(memberId);
-          if (memberEntry) {
-            const broadcastMsg: AgentMessage = {
-              from: "system", to: memberId, timestamp: Date.now(),
-              content: `[Team Update] New member joined: ${taskId} (${templateLabel}) — "${taskDesc.slice(0, 120)}"`,
-            };
-            if (memberEntry.agentState === "idle") {
-              // Don't auto-activate for broadcasts — just queue
-              memberEntry.inbox.push(broadcastMsg);
-            } else {
-              memberEntry.inbox.push(broadcastMsg);
-            }
-          }
-        }
         team.members.add(taskId);
+        for (const memberId of team.members) {
+          if (memberId === taskId) continue;
+          const memberEntry = this._childSessions.get(memberId);
+          if (!memberEntry) continue;
+          memberEntry.session._inbox.push({
+            from: "system",
+            to: memberId,
+            timestamp: Date.now(),
+            content: `[Team Update] New member joined: ${taskId} (${templateLabel}) — "${taskDesc.slice(0, 120)}"`,
+          });
+        }
       }
 
-      const agentLog: LogEntry[] = [];
-      const agentIdAllocator = new LogIdAllocator();
-      const abortController = new AbortController();
-      const promise = this._runSubAgent(
-        taskId, agent, taskDesc, numericId, extraMessages, abortController.signal,
-        agentLog, agentIdAllocator, isInteractive, teamName,
-      );
-
-      this._activeAgents.set(taskId, {
-        promise,
-        abortController,
-        numericId,
-        template: templateLabel,
-        startTime: performance.now(),
-        status: "working",
-        resultText: "",
-        elapsed: 0,
-        delivered: false,
-        phase: "idle",
-        recentActivity: [],
-        toolCallCount: 0,
-        // Persistent fields
-        interactive: isInteractive,
-        teamId: teamName,
-        log: agentLog,
-        idAllocator: agentIdAllocator,
-        persistDir,
-        agent,
-        systemPrompt: agent.systemPrompt,
-        task: taskDesc,
-        inbox: [],
-        agentState: "working",
-        turnBudget: 20,
-        turnBudgetRemaining: 20,
-      });
+      const handle = this._createChildSession(taskId, templateLabel, mode, teamName, agent);
+      this._childSessions.set(taskId, handle);
       spawned.push(taskId);
-      spawnedInfo.push({ numericId, taskId, template: templateLabel, task: taskDesc });
+      spawnedInfo.push({ numericId: handle.numericId, taskId, template: templateLabel, task: taskDesc });
 
       if (this._progress) {
         this._progress.onAgentStart(
-          this._turnCount, taskId, { sub_agent_id: numericId, template: templateLabel },
+          this._turnCount,
+          taskId,
+          { sub_agent_id: handle.numericId, template: templateLabel },
         );
       }
 
-      // v2 log: sub_agent_start
-      this._appendEntry(
-        createSubAgentStart(
-          this._nextLogId("sub_agent_start"),
-          this._turnCount,
-          `Sub-agent #${numericId} (${taskId}) started`,
-          numericId,
-          taskId,
-          taskDesc,
-        ),
-        false,
-      );
+      this._startChildTurn(handle, taskDesc);
+
+      if (teamName) {
+        const team = this._teams.get(teamName)!;
+        for (const memberId of team.members) {
+          if (memberId === taskId) continue;
+          const memberEntry = this._childSessions.get(memberId);
+          if (memberEntry) {
+            memberEntry.session._recordSessionEvent(`team update: new member ${taskId}`);
+          }
+        }
+      }
     }
 
     const parts: string[] = [];
     if (spawned.length) {
       parts.push(
-        `Spawned ${spawned.length} sub-agent(s): ${spawned.join(", ")}. ` +
-        "Results will be delivered as each agent completes.",
+        `Spawned ${spawned.length} sub-session(s): ${spawned.join(", ")}. ` +
+        "Results will be delivered as each child session completes a turn.",
       );
     }
     if (errors.length) {
@@ -4538,21 +5213,25 @@ export class Session {
     const notFound: string[] = [];
 
     for (const name of ids) {
-      const entry = this._activeAgents.get(name);
-      if (!entry) {
+      const handle = this._childSessions.get(name);
+      if (!handle) {
         notFound.push(name);
         continue;
       }
-      this._persistAgentLog(entry);
-      entry.abortController.abort();
-      entry.status = "killed";
-      this._activeAgents.delete(name);
-      // Remove from team
-      if (entry.teamId) {
-        const team = this._teams.get(entry.teamId);
+
+      handle.abortController?.abort();
+      handle.lifecycle = "terminated";
+      handle.status = "terminated";
+      handle.lastOutcome = "interrupted";
+      handle.lastActivityAt = Date.now();
+      handle.session._recordSessionEvent("terminated by parent");
+      this._saveChildSession(handle);
+
+      if (handle.teamId) {
+        const team = this._teams.get(handle.teamId);
         if (team) {
           team.members.delete(name);
-          if (team.members.size === 0) this._teams.delete(entry.teamId);
+          if (team.members.size === 0) this._teams.delete(handle.teamId);
         }
       }
       killed.push(name);
@@ -4562,11 +5241,11 @@ export class Session {
           step: this._turnCount,
           agent: name,
           action: "agent_killed",
-          message: `  [#${entry.numericId} ${name}] killed`,
+          message: `  [#${handle.numericId} ${name}] terminated`,
           level: "normal" as ProgressLevel,
           timestamp: Date.now() / 1000,
           usage: {},
-          extra: { sub_agent_id: entry.numericId },
+          extra: { sub_agent_id: handle.numericId },
         });
       }
     }
@@ -4587,258 +5266,25 @@ export class Session {
     if (!to || !content) {
       return new ToolResult({ content: "Error: 'to' and 'content' are required." });
     }
-
-    const entry = this._activeAgents.get(to);
-    if (!entry) {
-      return new ToolResult({ content: `Agent '${to}' not found.` });
-    }
-    if (!entry.interactive) {
-      return new ToolResult({ content: `Agent '${to}' is one-shot and cannot receive messages.` });
-    }
-    if (entry.status === "killed") {
-      return new ToolResult({ content: `Agent '${to}' has been terminated.` });
-    }
-
-    // Reset turn budget on explicit primary send
-    entry.turnBudgetRemaining = entry.turnBudget;
-
-    this._deliverToAgent(to, { from: "primary", to, content, timestamp: Date.now() });
-    return new ToolResult({ content: `Message sent to '${to}'.` });
-  }
-
-  /**
-   * Deliver a message to an interactive agent's inbox.
-   * If the agent is idle, auto-activates it.
-   */
-  private _deliverToAgent(agentName: string, msg: AgentMessage): void {
-    const entry = this._activeAgents.get(agentName);
-    if (!entry || !entry.interactive) return;
-
-    if (entry.agentState === "idle" && entry.turnBudgetRemaining > 0) {
-      // Inject message into agent log as user_message, then activate
-      const ctxId = allocateContextId(new Set<string>());
-      const formatted = `[Message from ${msg.from}]\n${msg.content}`;
-      entry.log.push(createUserMessageEntry(
-        entry.idAllocator.next("user_message"),
-        0,
-        formatted,
-        formatted,
-        ctxId,
-      ));
-      entry.turnBudgetRemaining--;
-      this._activateInteractiveAgent(agentName, entry);
-    } else {
-      // Working or budget exhausted → queue in agent inbox (push model will inject)
-      entry.inbox.push(msg);
-    }
-  }
-
-  /**
-   * Auto-activate an interactive agent for a new turn.
-   */
-  private _activateInteractiveAgent(agentName: string, entry: AgentEntry): void {
-    entry.agentState = "working";
-    entry.status = "working";
-    entry.startTime = performance.now();
-    entry.delivered = false;
-    entry.resultText = "";
-    entry.phase = "idle";
-    entry.recentActivity = [];
-
-    const abortController = new AbortController();
-    entry.abortController = abortController;
-
-    // Build sub-agent notification callback for its inbox push
-    const getAgentNotification = (): string | null => {
-      if (entry.inbox.length === 0) return null;
-      const sections: string[] = [];
-      const byFrom: Record<string, string[]> = {};
-      for (const m of entry.inbox) {
-        (byFrom[m.from] ??= []).push(m.content);
-      }
-      entry.inbox = [];
-      for (const [from, msgs] of Object.entries(byFrom)) {
-        sections.push(`[Message from ${from}]\n${msgs.join("\n\n")}`);
-      }
-      return `\n\n[Incoming Messages]\n${sections.join("\n\n---\n\n")}`;
-    };
-
-    // Build executors — same as one-shot but with send for team members
-    const subExecutors: Record<string, ToolExecutor> = {};
-    for (const toolName of [
-      "$web_search", "read_file", "list_dir", "glob", "grep",
-      "edit_file", "write_file", "diff", "web_fetch",
-    ]) {
-      if (this._toolExecutors[toolName]) {
-        subExecutors[toolName] = this._toolExecutors[toolName];
-      }
-    }
-    // Team members get send tool
-    if (entry.teamId) {
-      subExecutors["send"] = (args: Record<string, unknown>) => {
-        const sendTo = ((args["to"] as string) ?? "").trim();
-        const sendContent = ((args["content"] as string) ?? "").trim();
-        if (!sendTo || !sendContent) {
-          return new ToolResult({ content: "Error: 'to' and 'content' are required." });
-        }
-        if (sendTo === "primary") {
-          return new ToolResult({ content: "Cannot send to primary — your turn output is automatically delivered. Use send only for teammates." });
-        }
-        const team = this._teams.get(entry.teamId!);
-        if (!team || !team.members.has(sendTo)) {
-          return new ToolResult({ content: `Agent '${sendTo}' is not in your team.` });
-        }
-        this._deliverToAgent(sendTo, { from: agentName, to: sendTo, content: sendContent, timestamp: Date.now() });
-        return new ToolResult({ content: `Message sent to '${sendTo}'.` });
-      };
-    }
-
-    const runtime = createEphemeralLogState([], {
-      requiresAlternatingRoles: (entry.agent as any)._provider?.requiresAlternatingRoles,
-      externalEntries: entry.log,
-      externalIdAllocator: entry.idAllocator,
-    });
-
-    const MAX_SUB_AGENT_ACTIVATIONS = 15;
-    const compactCheck = this._buildSubAgentCompactCheck(entry.agent);
-
-    entry.promise = (async () => {
-      const t0 = performance.now();
-      try {
-        let finalText = "";
-        for (let i = 0; i < MAX_SUB_AGENT_ACTIVATIONS; i++) {
-          if (abortController.signal.aborted) throw new DOMException("Aborted", "AbortError");
-
-          const result = await entry.agent.asyncRunWithMessages(
-            runtime.getMessages,
-            runtime.appendEntry,
-            runtime.allocId,
-            0,
-            runtime.computeNextRoundIndex(),
-            subExecutors, undefined,
-            undefined, undefined, abortController.signal,
-            undefined, compactCheck,
-            undefined, undefined, undefined, undefined, undefined,
-            getAgentNotification,
-            false,
-          );
-
-          if (!result.compactNeeded) {
-            if (result.text) finalText = stripContextTags(result.text);
-            break;
-          }
-          // Compact: simplified — just run compact phase
-          const continuation = await this._runSubAgentCompactPhase(
-            entry.agent, runtime, subExecutors,
-            (ri: number) => runtime.allocateContextId(),
-            result.compactScenario ?? "output",
-            undefined, abortController.signal,
-          );
-          runtime.appendEntry(createCompactMarker(runtime.allocId("compact_marker"), 0, 0, result.lastTotalTokens ?? 0, 0));
-          runtime.appendEntry(createCompactContext(runtime.allocId("compact_context"), 0,
-            continuation + "\n\nContinue from where you left off.", runtime.allocateContextId(), 0));
-        }
-
-        // Deliver final output to primary
-        if (finalText) {
-          this._deliverMessage({ from: agentName, to: "primary", content: finalText, timestamp: Date.now() });
-        }
-
-        entry.elapsed = (performance.now() - t0) / 1000;
-        entry.status = "finished";
-        entry.resultText = finalText;
-        entry.agentState = "idle";
-        this._persistAgentLog(entry);
-
-        // Check if more messages arrived during execution
-        if (entry.inbox.length > 0 && entry.turnBudgetRemaining > 0) {
-          // Drain inbox into log and re-activate
-          const nextMsg = entry.inbox.shift()!;
-          const ctxId = allocateContextId(new Set<string>());
-          const formatted = `[Message from ${nextMsg.from}]\n${nextMsg.content}`;
-          entry.log.push(createUserMessageEntry(
-            entry.idAllocator.next("user_message"), 0, formatted, formatted, ctxId,
-          ));
-          entry.turnBudgetRemaining--;
-          this._activateInteractiveAgent(agentName, entry);
-        }
-
-        return { name: agentName, status: "completed", text: finalText, usage: {}, elapsed: entry.elapsed };
-      } catch (e: any) {
-        entry.elapsed = (performance.now() - t0) / 1000;
-        if (e?.name === "AbortError" || abortController.signal.aborted) {
-          entry.status = "killed";
-          entry.agentState = "idle";
-          return { name: agentName, status: "killed", text: "(killed)", usage: {}, elapsed: entry.elapsed };
-        }
-        entry.status = "error";
-        entry.agentState = "idle";
-        entry.resultText = `Sub-agent error: ${e}`;
-        return { name: agentName, status: "error", text: entry.resultText, usage: {}, elapsed: entry.elapsed };
-      }
-    })();
+    return this._sendMessageToChild(to, { from: "primary", to, content, timestamp: Date.now() });
   }
 
   private async _execCheckStatus(_args: Record<string, unknown>): Promise<ToolResult> {
-    // Non-blocking sweep: check if any working agents have settled
-    this._sweepSettledAgents();
-
-    // Unified delivery: drain queue + build agent report (marks delivered)
-    const content = this._buildDeliveryContent();
-    return new ToolResult({ content });
-  }
-
-  /**
-   * Non-blocking sweep: check if any working agents have settled.
-   */
-  /**
-   * Unified settle: update status, agentState, and persist log.
-   * Called from _sweepSettledAgents, settleEntry (in wait), and _execWait tail sweep.
-   */
-  private _settleAgentEntry(name: string, entry: AgentEntry, result?: SubAgentResult, error?: unknown): void {
-    entry.elapsed = this._getElapsed(entry);
-    if (result) {
-      entry.status = result.status === "completed" ? "finished" : (result.status as "finished" | "error");
-      entry.resultText = result.text;
-    } else {
-      entry.status = "error";
-      entry.resultText = `Sub-agent error: ${error}`;
-    }
-    // Sync agentState for interactive agents so _deliverToAgent can re-activate
-    if (entry.interactive) {
-      entry.agentState = "idle";
-      this._persistAgentLog(entry);
-      // If messages accumulated in inbox during the run, auto-activate
-      if (entry.inbox.length > 0 && entry.turnBudgetRemaining > 0) {
-        const nextMsg = entry.inbox.shift()!;
-        const ctxId = allocateContextId(new Set<string>());
-        const formatted = `[Message from ${nextMsg.from}]\n${nextMsg.content}`;
-        entry.log.push(createUserMessageEntry(
-          entry.idAllocator.next("user_message"), 0, formatted, formatted, ctxId,
-        ));
-        entry.turnBudgetRemaining--;
-        this._activateInteractiveAgent(name, entry);
-      }
-    }
+    const sections = [
+      "# Sub-Session Status",
+      this._buildDetailedChildStatusReport(),
+      "",
+      "# Pending Root Messages",
+      this._buildQueuedRootMessageSummary(),
+      "",
+      "# Shell",
+      this._buildShellReport(),
+    ];
+    return new ToolResult({ content: sections.join("\n") });
   }
 
   private _sweepSettledAgents(): void {
-    for (const [name, entry] of this._activeAgents) {
-      if (entry.status !== "working") continue;
-      // Zero-delay race to check if promise has settled
-      const settled = Promise.race([
-        entry.promise.then(
-          (result) => ({ result, error: undefined }),
-          (error: unknown) => ({ result: undefined, error }),
-        ),
-        new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-      ]);
-      void settled.then((r) => {
-        if (r === "pending") return;
-        const res = r as { result?: SubAgentResult; error?: unknown };
-        this._settleAgentEntry(name, entry, res.result, res.error);
-      });
-    }
+    // Child sessions settle themselves via _startChildTurn/_finishChildTurn.
   }
 
   // ------------------------------------------------------------------
@@ -4864,6 +5310,7 @@ export class Session {
     const throwIfTurnAborted = (): never => {
       this._waitResolver = null;
       this._agentState = "working";
+      this._setSelfPhase("idle");
       throw new DOMException("The operation was aborted.", "AbortError");
     };
 
@@ -4871,23 +5318,24 @@ export class Session {
       throwIfTurnAborted();
     }
 
-    if (this._activeAgents.size === 0 && !this._hasTrackedShells() && !this._hasInboxMessages()) {
+    if (this._childSessions.size === 0 && !this._hasTrackedShells() && !this._hasInboxMessages()) {
       this._agentState = "working";
+      this._setSelfPhase("idle");
       return new ToolResult({ content: "No tracked workers and no messages queued." });
     }
 
-    // Validate agent filter if specified
     if (agentFilter) {
-      const targetEntry = this._activeAgents.get(agentFilter);
+      const targetEntry = this._childSessions.get(agentFilter);
       if (!targetEntry) {
         this._agentState = "working";
+        this._setSelfPhase("idle");
         return new ToolResult({
           content: `Error: agent '${agentFilter}' not found. Use check_status to see current agents.`,
         });
       }
       if (targetEntry.status !== "working") {
-        // Agent already done — return status immediately
         this._agentState = "working";
+        this._setSelfPhase("idle");
         const content = this._buildDeliveryContent();
         return new ToolResult({ content });
       }
@@ -4897,81 +5345,42 @@ export class Session {
       const targetShell = this._activeShells.get(shellFilter);
       if (!targetShell) {
         this._agentState = "working";
+        this._setSelfPhase("idle");
         return new ToolResult({
           content: `Error: shell '${shellFilter}' not found. Use check_status to see current shells.`,
         });
       }
       if (targetShell.status !== "running") {
         this._agentState = "working";
+        this._setSelfPhase("idle");
         const content = this._buildDeliveryContent();
         return new ToolResult({ content });
       }
     }
 
-    // Collect working agents
-    const working: Array<{ name: string; entry: AgentEntry }> = [];
-    for (const [n, entry] of this._activeAgents) {
-      if (entry.status === "working") {
-        working.push({ name: n, entry });
-      }
-    }
-
+    const working = this._getWorkingChildHandles(agentFilter ?? undefined);
     const hasRunningShells = this._hasRunningShells();
     if (!working.length && !hasRunningShells) {
       this._agentState = "working";
+      this._setSelfPhase("idle");
       const content = this._buildDeliveryContent();
       return new ToolResult({ content });
     }
 
-    // Helper: settle one entry from its promise result
-    const settleEntry = (entryName: string, result?: SubAgentResult, error?: unknown) => {
-      const entry = this._activeAgents.get(entryName);
-      if (!entry) return;
-      this._settleAgentEntry(entryName, entry, result, error);
-
-      // v2 log: sub_agent_end
-      const elapsedSec = entry.elapsed;
-      const statusStr = entry.status === "finished" ? "completed" : "errored";
-      this._appendEntry(
-        createSubAgentEnd(
-          this._nextLogId("sub_agent_end"),
-          this._turnCount,
-          `Sub-agent #${entry.numericId} (${entryName}) ${statusStr} (${elapsedSec.toFixed(1)}s, ${entry.toolCallCount} tool calls)`,
-          entry.numericId,
-          entryName,
-          elapsedSec,
-          entry.toolCallCount,
-        ),
-        false,
-      );
-    };
-
-    // Create message wake-up promise
     const messageWake = new Promise<"message">((resolve) => {
       this._waitResolver = () => resolve("message");
     });
+    this._setSelfPhase("waiting");
 
     let wakeReason: "timeout" | "message" | "agent" | "shell" = "timeout";
-
-    const activeAgentRacers = () => working
-      .filter((w) => {
-        const e = this._activeAgents.get(w.name);
-        return e && e.status === "working";
-      })
-      .map(({ name: n, entry: ent }) =>
-        ent.promise.then(
-          (result) => ({ name: n, result, error: undefined as unknown }),
-          (error: unknown) => ({ name: n, result: undefined as SubAgentResult | undefined, error }),
-        ),
-      );
+    const startedAt = performance.now();
+    const timeoutMs = seconds * 1000;
 
     if (agentFilter) {
-      // Work-time mode: poll until target agent accumulates enough wall time
       const POLL_INTERVAL = 1000;
-      const timeoutMs = seconds * 1000;
 
       while (true) {
-        const currentEntry = this._activeAgents.get(agentFilter);
+        const currentEntry = this._childSessions.get(agentFilter);
         if (!currentEntry || currentEntry.status !== "working") {
           wakeReason = "agent";
           break;
@@ -4979,11 +5388,10 @@ export class Session {
 
         const workMs = (performance.now() - currentEntry.startTime);
         if (workMs >= timeoutMs) {
-          break; // Reached target work time
+          break;
         }
 
-        // Race all working promises against a short poll interval + message wake
-        const racers = activeAgentRacers();
+        const racers = this._getWorkingChildRacers();
 
         if (!racers.length) break;
 
@@ -5005,16 +5413,12 @@ export class Session {
           break;
         }
         if (winner !== "poll") {
-          const settled = winner as { name: string; result?: SubAgentResult; error?: unknown };
-          settleEntry(settled.name, settled.result, settled.error);
           wakeReason = "agent";
           break;
         }
       }
     } else if (shellFilter) {
       const POLL_INTERVAL = 1000;
-      const timeoutMs = seconds * 1000;
-      const started = performance.now();
 
       while (true) {
         const currentShell = this._activeShells.get(shellFilter);
@@ -5023,7 +5427,7 @@ export class Session {
           break;
         }
 
-        if ((performance.now() - started) >= timeoutMs) {
+        if ((performance.now() - startedAt) >= timeoutMs) {
           break;
         }
 
@@ -5032,7 +5436,7 @@ export class Session {
         );
 
         const winner = await Promise.race([
-          ...activeAgentRacers(),
+          ...this._getWorkingChildRacers(),
           poll,
           messageWake,
           ...(abortPromise ? [abortPromise] : []),
@@ -5046,19 +5450,16 @@ export class Session {
           break;
         }
         if (winner !== "poll") {
-          const settled = winner as { name: string; result?: SubAgentResult; error?: unknown };
-          settleEntry(settled.name, settled.result, settled.error);
           wakeReason = "agent";
           break;
         }
       }
     } else {
-      // Wall-clock mode: simple race with sleep + message wake
       const timeout = new Promise<"timeout">((resolve) =>
         setTimeout(() => resolve("timeout"), seconds * 1000),
       );
 
-      const racers = activeAgentRacers();
+      const racers = this._getWorkingChildRacers();
 
       const winner = await Promise.race([
         ...racers,
@@ -5072,41 +5473,20 @@ export class Session {
       if (winner === "message") {
         wakeReason = "message";
       } else if (winner !== "timeout") {
-        const settled = winner as { name: string; result?: SubAgentResult; error?: unknown };
-        settleEntry(settled.name, settled.result, settled.error);
         wakeReason = "agent";
       }
     }
 
-    // Cleanup wait resolver
     this._waitResolver = null;
-
-    // Non-blocking sweep: check if other working agents have also settled
-    for (const [name, entry] of this._activeAgents) {
-      if (entry.status !== "working") continue;
-      const zeroTimeout = new Promise<"pending">((resolve) =>
-        setTimeout(() => resolve("pending"), 0),
-      );
-      const check = entry.promise.then(
-        (result) => ({ result, error: undefined as unknown }),
-        (error: unknown) => ({ result: undefined as SubAgentResult | undefined, error }),
-      );
-      const r = await Promise.race([check, zeroTimeout]);
-      if (r !== "pending") {
-        const res = r as { result?: SubAgentResult; error?: unknown };
-        this._settleAgentEntry(name, entry, res.result, res.error);
-      }
-    }
-
     this._agentState = "working";
+    this._setSelfPhase("idle");
 
-    // Build return value with unified delivery content
     const hasNewContent = this._hasInboxMessages() || this._hasUndeliveredAgentResults();
     let header: string;
     if (wakeReason === "message") {
       header = `Waited — new message arrived.`;
     } else if (wakeReason === "agent") {
-      header = `Waited — agent completed.`;
+      header = `Waited — sub-session state changed.`;
     } else if (wakeReason === "shell") {
       header = `Waited — shell exited.`;
     } else if (hasNewContent) {
@@ -5116,100 +5496,71 @@ export class Session {
     }
 
     const deliveryContent = this._buildDeliveryContent();
-    return new ToolResult({ content: header + "\n\n" + deliveryContent });
+    return new ToolResult({ content: `${header}\n\n${deliveryContent}` });
   }
 
   // ------------------------------------------------------------------
   // Elapsed helpers
   // ------------------------------------------------------------------
 
-  private _getElapsed(entry: AgentEntry): number {
+  private _getElapsed(entry: ChildSessionHandle): number {
     return (performance.now() - entry.startTime) / 1000;
   }
 
-  // ------------------------------------------------------------------
-  // Agent report — built at consumption time (check_status, wait,
-  // activation boundary injection). Sets delivered=true only here.
-  // ------------------------------------------------------------------
-
-  private _buildAgentReport(): string {
-    const statusLines: string[] = [];
-    const newResultParts: string[] = [];
-
-    for (const [name, entry] of this._activeAgents) {
-      if (entry.status === "working") {
-        const workSec = this._getElapsed(entry);
-        let line = `- [#${entry.numericId} ${name}] (${entry.template}): working (${workSec.toFixed(1)}s)`;
-        line += ` | ${entry.toolCallCount} tools called`;
-
-        if (entry.recentActivity.length > 0) {
-          line += "\n    recent: " + entry.recentActivity.join(" → ");
-        }
-        statusLines.push(line);
-      } else if (
-        (entry.status === "finished" || entry.status === "error") &&
-        !entry.delivered
-      ) {
-        statusLines.push(
-          `- [#${entry.numericId} ${name}] (${entry.template}): ${entry.status} (took ${entry.elapsed.toFixed(1)}s) [result below]`,
-        );
-        const resultDict = {
-          name,
-          status: entry.status,
-          text: entry.resultText,
-          elapsed: entry.elapsed,
-        };
-        newResultParts.push(this._formatAgentOutput(resultDict));
-        entry.delivered = true;  // ★ marked at consumption time
-      } else if (entry.delivered) {
-        statusLines.push(
-          `- [#${entry.numericId} ${name}] (${entry.template}): ${entry.status} (took ${entry.elapsed.toFixed(1)}s) [result already consumed]`,
-        );
-      } else if (entry.status === "killed") {
-        statusLines.push(
-          `- [#${entry.numericId} ${name}] (${entry.template}): killed`,
-        );
-      }
+  private _buildQueuedRootMessageSummary(): string {
+    if (this._inbox.length === 0) return "No pending root messages.";
+    const counts = new Map<string, number>();
+    for (const msg of this._inbox) {
+      counts.set(msg.from, (counts.get(msg.from) ?? 0) + 1);
     }
-
-    let output = "## Agent Status\n" + statusLines.join("\n");
-
-    if (newResultParts.length > 0) {
-      output += "\n\n## New Results (" + newResultParts.length + ")\n\n" + newResultParts.join("\n\n---\n\n");
-    }
-
-    // Hint about still-working agents
-    let workingCount = 0;
-    for (const entry of this._activeAgents.values()) {
-      if (entry.status === "working") workingCount++;
-    }
-    if (workingCount > 0) {
-      output +=
-        `\n\n(${workingCount} agent(s) still working. ` +
-        "Use wait to wait efficiently, or continue working with tools.)";
-    }
-
-    return output;
+    return [...counts.entries()]
+      .map(([from, count]) => `- ${from}: ${count} queued`)
+      .join("\n");
   }
 
   private _hasActiveAgents(): boolean {
-    for (const entry of this._activeAgents.values()) {
-      if (entry.status === "working") return true;
+    const childSessions = this._childSessions ?? new Map<string, ChildSessionHandle>();
+    for (const entry of childSessions.values()) {
+      if (entry.lifecycle === "live" && entry.status === "working") return true;
     }
     return false;
   }
 
+  private _getWorkingChildHandles(filterId?: string): ChildSessionHandle[] {
+    return [...this._childSessions.values()].filter((handle) => {
+      if (filterId && handle.id !== filterId) return false;
+      return handle.lifecycle === "live" && handle.status === "working" && handle.turnPromise !== null;
+    });
+  }
+
+  private _getWorkingChildRacers(filterId?: string): Array<Promise<{ name: string }>> {
+    return this._getWorkingChildHandles(filterId)
+      .map((handle) =>
+        handle.turnPromise!.then(
+          () => ({ name: handle.id }),
+          () => ({ name: handle.id }),
+        ),
+      );
+  }
+
+  private _interruptAllChildTurns(): void {
+    for (const handle of this._childSessions.values()) {
+      if (handle.lifecycle !== "live" || handle.status !== "working") continue;
+      handle.abortController?.abort();
+      handle.session._recordSessionEvent("interrupted by parent");
+    }
+  }
 
   private _forceKillAllAgents(): void {
-    for (const [name, entry] of this._activeAgents) {
+    for (const [name, entry] of this._childSessions) {
       if (entry.status === "working") {
-        entry.abortController.abort();
+        entry.abortController?.abort();
         if (this._progress) {
           this._progress.emit({
             step: this._turnCount,
             agent: name,
             action: "agent_killed",
-            message: `  [#${entry.numericId} ${name}] killed`,
+            message: `  [#${entry.numericId} ${name}] terminated`,
             level: "normal" as ProgressLevel,
             timestamp: Date.now() / 1000,
             usage: {},
@@ -5217,70 +5568,18 @@ export class Session {
           });
         }
       }
-      // Persist agent log before clearing
-      this._persistAgentLog(entry);
+      entry.lifecycle = "terminated";
+      entry.status = "terminated";
+      entry.lastOutcome = "interrupted";
+      entry.lastActivityAt = Date.now();
+      this._saveChildSession(entry);
     }
-    this._activeAgents.clear();
+    this._childSessions.clear();
     this._teams.clear();
   }
 
-  /**
-   * At turn end: kill one-shot agents, preserve interactive/team agents as idle.
-   */
   private _cleanupNonInteractiveAgents(): void {
-    const toRemove: string[] = [];
-    for (const [name, entry] of this._activeAgents) {
-      if (entry.interactive) {
-        // Interactive agents survive — if working, let them finish
-        // (their promise will settle and result will be delivered via push)
-        if (entry.status !== "working") {
-          entry.agentState = "idle";
-        }
-        continue;
-      }
-      // One-shot: abort if still working, remove
-      if (entry.status === "working") {
-        entry.abortController.abort();
-        if (this._progress) {
-          this._progress.emit({
-            step: this._turnCount, agent: name, action: "agent_killed",
-            message: `  [#${entry.numericId} ${name}] killed`,
-            level: "normal" as ProgressLevel,
-            timestamp: Date.now() / 1000,
-            usage: {}, extra: { sub_agent_id: entry.numericId },
-          });
-        }
-      }
-      this._persistAgentLog(entry);
-      toRemove.push(name);
-    }
-    for (const name of toRemove) {
-      this._activeAgents.delete(name);
-    }
-  }
-
-  /**
-   * Persist a sub-agent's log to disk.
-   */
-  private _persistAgentLog(entry: AgentEntry): void {
-    if (!entry.log?.length || !entry.persistDir) return;
-    try {
-      mkdirSync(entry.persistDir, { recursive: true });
-      const metaPath = join(entry.persistDir, "meta.json");
-      const logPath = join(entry.persistDir, "log.json");
-      writeFileSync(metaPath, JSON.stringify({
-        template: entry.template,
-        interactive: entry.interactive,
-        teamId: entry.teamId,
-        status: entry.status,
-        task: entry.task,
-        numericId: entry.numericId,
-        createdAt: new Date().toISOString(),
-      }));
-      writeFileSync(logPath, JSON.stringify(entry.log));
-    } catch (e) {
-      console.warn(`Failed to persist agent log for ${entry.persistDir}:`, e);
-    }
+    // One-shot and persistent child sessions remain in the session tree.
   }
 
   private _forceKillAllShells(): void {
@@ -5391,57 +5690,25 @@ export class Session {
     return this.primaryAgent.modelConfig;
   }
 
-  private _buildSubAgentContext(includeImportantLog: boolean): Array<Record<string, unknown>> {
-    const extra: Array<Record<string, unknown>> = [];
-    if (includeImportantLog) {
-      const logContent = this._readImportantLog();
-      if (logContent.trim()) {
-        extra.push({
-          role: "user",
-          content:
-            "[IMPORTANT LOG]\n" +
-            "The following is the primary agent's engineering notebook. " +
-            "Use it as background context for your task:\n\n" +
-            logContent,
-        });
-      }
-    }
-    // Always inject AGENTS.md for sub-agents (persistent memory is always relevant)
-    const agentsMdContent = this._readAgentsMd();
-    if (agentsMdContent.trim()) {
-      extra.push({
-        role: "user",
-        content:
-          "[AGENTS.MD — PERSISTENT MEMORY]\n" +
-          "The following is persistent memory across sessions. " +
-          "Use it as background context for your task:\n\n" +
-          agentsMdContent,
-      });
-    }
-    return extra;
-  }
-
   /**
-   * Build a sub-agent's full system prompt by layering:
-   * 1. Template system_prompt.md (role/capabilities)
-   * 2. Mode-specific prompt (oneshot / interactive)
-   * 3. Team prompt (if in a team)
+   * Build a child session's full system prompt by layering:
+   * 1. Template system prompt
+   * 2. Mode-specific prompt
+   * 3. Team prompt
    */
   private _buildSubAgentSystemPrompt(
     basePrompt: string,
-    interactive: boolean,
+    persistent: boolean,
     teamId: string | null,
   ): string {
     const parts = [basePrompt];
 
-    // Mode-specific layer
     try {
-      const modeFile = interactive ? "interactive.md" : "oneshot.md";
+      const modeFile = persistent ? "persistent.md" : "oneshot.md";
       const modePrompt = this._readPromptFile(`sub-agent/${modeFile}`);
       if (modePrompt) parts.push(modePrompt);
     } catch { /* optional */ }
 
-    // Team layer
     if (teamId) {
       try {
         let teamPrompt = this._readPromptFile("sub-agent/team.md");
@@ -5449,9 +5716,9 @@ export class Session {
           const team = this._teams.get(teamId);
           const roster = team
             ? [...team.members].map((memberId) => {
-                const entry = this._activeAgents.get(memberId);
+                const entry = this._childSessions.get(memberId);
                 return entry
-                  ? `- **${memberId}** (${entry.template}): ${entry.task.slice(0, 100)}`
+                  ? `- **${memberId}** (${entry.template})`
                   : `- **${memberId}**`;
               }).join("\n")
             : "(team roster unavailable)";
@@ -5466,9 +5733,6 @@ export class Session {
     return parts.join("\n\n");
   }
 
-  /**
-   * Read a prompt file from the prompts directories.
-   */
   private _readPromptFile(relativePath: string): string {
     if (this._promptsDirs) {
       for (const dir of this._promptsDirs) {
@@ -5481,580 +5745,16 @@ export class Session {
     return "";
   }
 
-  private async _runSubAgent(
-    name: string,
-    agent: Agent,
-    task: string,
-    agentId: number,
-    extraMessages?: Array<Record<string, unknown>>,
-    signal?: AbortSignal,
-    persistentLog?: LogEntry[],
-    persistentIdAllocator?: LogIdAllocator,
-    interactive?: boolean,
-    teamId?: string | null,
-  ): Promise<SubAgentResult> {
-    const subExtra = { sub_agent_id: agentId };
-    const MAX_SUB_AGENT_ACTIVATIONS = 15;
-
-    let onToolCall: ((agentName: string, tool: string, args: Record<string, unknown>, summary: string) => void) | undefined;
-    let onSubTextChunk: ((roundIndex: number, chunk: string) => boolean | void) | undefined;
-    let onSubReasoningChunk: ((roundIndex: number, chunk: string) => boolean | void) | undefined;
-
-    // Track whether phase-signal has been emitted this activation.
-    // Reset on tool_call so subsequent thinking/generating is detected.
-    let reasoningSignalEmitted = false;
-    let textSignalEmitted = false;
-
-    if (this._progress) {
-      const progress = this._progress;
-      const step = this._turnCount;
-
-      let subToolCallCount = 0;
-      onToolCall = (agentName: string, tool: string, args: Record<string, unknown>, summary: string) => {
-        progress.onToolCall(step, agentName, tool, args, summary, { sub_agent_id: agentId });
-        // Reset phase-signal flags so next thinking/generating is detected
-        reasoningSignalEmitted = false;
-        textSignalEmitted = false;
-
-        // v2 log: sub_agent_tool_call
-        subToolCallCount++;
-        this._appendEntry(
-          createSubAgentToolCall(
-            this._nextLogId("sub_agent_tool_call"),
-            this._turnCount,
-            `[#${agentId} ${name}] (${subToolCallCount} tool called) -> ${summary}`,
-            agentId,
-            name,
-            tool,
-            subToolCallCount,
-          ),
-          false,
-        );
-      };
-
-      // Lightweight signal-only callbacks (empty chunk, once per phase)
-      onSubReasoningChunk = (_roundIndex: number, _chunk: string) => {
-        if (!reasoningSignalEmitted) {
-          reasoningSignalEmitted = true;
-          textSignalEmitted = false;
-          progress.emit({
-            step, agent: name, action: "reasoning_chunk",
-            message: "", level: "quiet" as ProgressLevel,
-            timestamp: Date.now() / 1000,
-            usage: {}, extra: { chunk: "", sub_agent_id: agentId },
-          });
-        }
-        return false;
-      };
-
-      onSubTextChunk = (_roundIndex: number, _chunk: string) => {
-        if (!textSignalEmitted) {
-          textSignalEmitted = true;
-          reasoningSignalEmitted = false;
-          progress.emit({
-            step, agent: name, action: "text_chunk",
-            message: "", level: "quiet" as ProgressLevel,
-            timestamp: Date.now() / 1000,
-            usage: {}, extra: { chunk: "", sub_agent_id: agentId },
-          });
-        }
-        return false;
-      };
-    }
-
-    // Wrap callbacks to write back live state to AgentEntry unconditionally
-    // (works even when this._progress is null)
-    const getEntry = (): AgentEntry | undefined => this._activeAgents.get(name);
-
-    const origOnToolCall = onToolCall;
-    onToolCall = (ag: string, tool: string, args: Record<string, unknown>, summary: string) => {
-      origOnToolCall?.(ag, tool, args, summary);
-      const e = getEntry();
-      if (e) {
-        e.phase = "tool_calling";
-        e.recentActivity.push(summary);
-        if (e.recentActivity.length > 3) e.recentActivity.shift();
-        e.toolCallCount++;
-      }
-    };
-
-    const origOnReasoningChunk = onSubReasoningChunk;
-    onSubReasoningChunk = (roundIndex: number, c: string) => {
-      origOnReasoningChunk?.(roundIndex, c);
-      const e = getEntry();
-      if (e) e.phase = "thinking";
-      return false;
-    };
-
-    const origOnTextChunk = onSubTextChunk;
-    onSubTextChunk = (roundIndex: number, c: string) => {
-      origOnTextChunk?.(roundIndex, c);
-      const e = getEntry();
-      if (e) e.phase = "generating";
-      return false;
-    };
-
-    const t0 = performance.now();
-    try {
-      // Check abort before starting
-      if (signal?.aborted) {
-        throw new DOMException("Aborted", "AbortError");
-      }
-
-      // Build sub-agent system prompt with mode-specific layers
-      const fullSystemPrompt = this._buildSubAgentSystemPrompt(
-        agent.systemPrompt, interactive ?? false, teamId ?? null,
-      );
-      // Build sub-agent log state (persistent-backed when available)
-      const initialMessages: Array<Record<string, unknown>> = [
-        { role: "system", content: fullSystemPrompt },
-      ];
-      if (extraMessages) {
-        initialMessages.push(...extraMessages);
-      }
-      initialMessages.push({ role: "user", content: task });
-      const runtime = createEphemeralLogState(initialMessages, {
-        requiresAlternatingRoles: (agent as any)._provider.requiresAlternatingRoles,
-        externalEntries: persistentLog,
-        externalIdAllocator: persistentIdAllocator,
-      });
-      const roundContextIds = new Map<number, string>();
-      const getSubAgentRoundContextId = (roundIndex: number): string => {
-        let contextId = roundContextIds.get(roundIndex);
-        if (!contextId) {
-          contextId = runtime.allocateContextId();
-          roundContextIds.set(roundIndex, contextId);
-        }
-        return contextId;
-      };
-
-      // Build sub-agent compact check
-      const compactCheck = this._buildSubAgentCompactCheck(agent);
-
-      // Pass a small, explicit subset of Session-scoped executors to sub-agents.
-      // This preserves project-root path enforcement for file tools while keeping
-      // comm tools unavailable.
-      const subExecutors: Record<string, ToolExecutor> = {};
-      for (const toolName of [
-        "$web_search",
-        "read_file",
-        "list_dir",
-        "glob",
-        "grep",
-        "edit_file",
-        "write_file",
-        "diff",
-        "web_fetch",
-      ]) {
-        if (this._toolExecutors[toolName]) {
-          subExecutors[toolName] = this._toolExecutors[toolName];
-        }
-      }
-
-      // Team members get send executor for cross-agent communication
-      if (teamId) {
-        subExecutors["send"] = (args: Record<string, unknown>) => {
-          const sendTo = ((args["to"] as string) ?? "").trim();
-          const sendContent = ((args["content"] as string) ?? "").trim();
-          if (!sendTo || !sendContent) {
-            return new ToolResult({ content: "Error: 'to' and 'content' are required." });
-          }
-          if (sendTo === "primary") {
-            return new ToolResult({ content: "Cannot send to primary — your turn output is automatically delivered. Use send only for teammates." });
-          }
-          const team = this._teams.get(teamId);
-          if (!team || !team.members.has(sendTo)) {
-            return new ToolResult({ content: `Agent '${sendTo}' is not in your team.` });
-          }
-          this._deliverToAgent(sendTo, { from: name, to: sendTo, content: sendContent, timestamp: Date.now() });
-          return new ToolResult({ content: `Message sent to '${sendTo}'.` });
-        };
-      }
-
-      let totalUsage = { inputTokens: 0, outputTokens: 0 };
-      let finalText = "";
-      let compactCount = 0;
-
-      // Activation loop with compact support
-      for (let i = 0; i < MAX_SUB_AGENT_ACTIVATIONS; i++) {
-        if (signal?.aborted) {
-          throw new DOMException("Aborted", "AbortError");
-        }
-
-        // Reset phase-signal flags at the start of each activation
-        reasoningSignalEmitted = false;
-        textSignalEmitted = false;
-
-        const subAgentName = agent.name;
-        const result = await agent.asyncRunWithMessages(
-          runtime.getMessages,
-          runtime.appendEntry,
-          runtime.allocId,
-          0,
-          runtime.computeNextRoundIndex(),
-          subExecutors, onToolCall,
-          onSubTextChunk, onSubReasoningChunk, signal,
-          getSubAgentRoundContextId, compactCheck,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          false,
-          (attempt, max, delaySec, errMsg) => this._progress?.onRetryAttempt(subAgentName, attempt, max, delaySec, errMsg),
-          (attempt) => this._progress?.onRetrySuccess(subAgentName, attempt),
-          (max, errMsg) => this._progress?.onRetryExhausted(subAgentName, max, errMsg),
-        );
-
-        totalUsage.inputTokens += result.totalUsage.inputTokens;
-        totalUsage.outputTokens += result.totalUsage.outputTokens;
-
-        if (!result.compactNeeded) {
-          // Normal completion
-          this._appendEphemeralAgentOutput(runtime, result, getSubAgentRoundContextId);
-          if (result.text) finalText = stripContextTags(result.text);
-          break;
-        }
-
-        // Compact triggered — run compact phase for sub-agent
-        if (result.compactScenario === "output") {
-          this._appendEphemeralAgentOutput(runtime, result, getSubAgentRoundContextId);
-        }
-
-        const continuation = await this._runSubAgentCompactPhase(
-          agent,
-          runtime,
-          subExecutors,
-          getSubAgentRoundContextId,
-          result.compactScenario ?? "output",
-          onToolCall,
-          signal,
-        );
-
-        // Insert compact marker and reconstruct context
-        compactCount += 1;
-        runtime.appendEntry(createCompactMarker(
-          runtime.allocId("compact_marker"),
-          0,
-          compactCount - 1,
-          result.lastTotalTokens ?? 0,
-          0,
-        ));
-        runtime.appendEntry(createCompactContext(
-          runtime.allocId("compact_context"),
-          0,
-          continuation + "\n\nContinue from where you left off.",
-          runtime.allocateContextId(),
-          compactCount - 1,
-        ));
-      }
-
-      const elapsed = (performance.now() - t0) / 1000;
-
-      if (signal?.aborted) {
-        throw new DOMException("Aborted", "AbortError");
-      }
-
-      if (this._progress) {
-        this._progress.onAgentEnd(
-          this._turnCount, name, elapsed,
-          totalUsage as Record<string, number>,
-          subExtra,
-        );
-      }
-
-      return { name, status: "completed", text: finalText, usage: totalUsage as Record<string, number>, elapsed };
-    } catch (e: any) {
-      const elapsed = (performance.now() - t0) / 1000;
-
-      if (e?.name === "AbortError" || signal?.aborted) {
-        if (this._progress) {
-          this._progress.emit({
-            step: this._turnCount,
-            agent: name,
-            action: "agent_killed",
-            message: `  [#${agentId} ${name}] killed`,
-            level: "normal" as ProgressLevel,
-            timestamp: Date.now() / 1000,
-            usage: {},
-            extra: subExtra,
-          });
-        }
-        return { name, status: "killed", text: "(killed)", usage: {}, elapsed };
-      }
-
-      console.error(`Sub-agent '${name}' failed:`, e);
-      if (this._progress) {
-        this._progress.emit({
-          step: this._turnCount,
-          agent: name,
-          action: "agent_error",
-          message: `  [#${agentId} ${name}] error: ${e}`,
-          level: "normal" as ProgressLevel,
-          timestamp: Date.now() / 1000,
-          usage: {},
-          extra: subExtra,
-        });
-      }
-      return { name, status: "error", text: `Sub-agent error: ${e}`, usage: {}, elapsed };
-    }
-  }
-
-  private _appendEphemeralAgentOutput(
-    runtime: ReturnType<typeof createEphemeralLogState>,
-    result: Pick<ToolLoopResult, "text" | "reasoningContent" | "reasoningState" | "textHandledInLog" | "reasoningHandledInLog">,
-    getRoundContextId: (roundIndex: number) => string,
-  ): void {
-    if (!result.text && !result.reasoningContent) return;
-
-    const roundIndex = (result.textHandledInLog || result.reasoningHandledInLog)
-      ? Math.max(0, runtime.computeNextRoundIndex() - 1)
-      : runtime.computeNextRoundIndex();
-
-    // Check if this round has tool_call entries (i.e., is NOT text-only).
-    // Text-only final rounds inherit the preceding user-side contextId.
-    const hasToolCallsInRound = runtime.entries.some(
-      (e) => e.roundIndex === roundIndex && e.type === "tool_call" && !e.discarded,
-    );
-    let contextId: string;
-    if (hasToolCallsInRound) {
-      contextId = getRoundContextId(roundIndex);
-    } else {
-      // Inherit: find the most recent user-side contextId in the ephemeral log
-      let inherited: string | undefined;
-      for (let i = runtime.entries.length - 1; i >= 0; i--) {
-        const e = runtime.entries[i];
-        if (e.discarded || e.summarized) continue;
-        if (e.apiRole === "user" || e.apiRole === "tool_result") {
-          const cid = (e.meta as Record<string, unknown>)["contextId"];
-          if (typeof cid === "string" && cid.trim()) { inherited = cid; break; }
-        }
-      }
-      contextId = inherited ?? getRoundContextId(roundIndex);
-    }
-
-    if (result.reasoningContent && !result.reasoningHandledInLog) {
-      runtime.appendEntry(createReasoning(
-        runtime.allocId("reasoning"),
-        0,
-        roundIndex,
-        result.reasoningContent,
-        result.reasoningContent,
-        result.reasoningState,
-        contextId,
-      ));
-    }
-
-    if (!result.text || result.textHandledInLog) return;
-
-    const trimmedText = result.text.trimEnd();
-    const hasNoReply = isNoReply(result.text) || trimmedText.endsWith(NO_REPLY_MARKER);
-    if (hasNoReply) {
-      const precedingText = trimmedText
-        .slice(0, trimmedText.length - NO_REPLY_MARKER.length)
-        .trim();
-      runtime.appendEntry(createNoReply(
-        runtime.allocId("no_reply"),
-        0,
-        roundIndex,
-        precedingText || "<NO_REPLY>",
-        contextId,
-      ));
-      return;
-    }
-
-    const cleanText = stripContextTags(result.text);
-    runtime.appendEntry(createAssistantText(
-      runtime.allocId("assistant_text"),
-      0,
-      roundIndex,
-      cleanText,
-      cleanText,
-      contextId,
-    ));
-  }
-
-  /**
-   * Build a compact check callback for sub-agents.
-   * Similar to _buildCompactCheck but without sub-agent deferral logic.
-   */
-  private _buildSubAgentCompactCheck(agent: Agent) {
-    const mc = agent.modelConfig;
-    const provider = (agent as any)._provider;
-    const effectiveMax = mc.maxTokens;
-    const budget = provider.budgetCalcMode === "full_context"
-      ? this._effectiveContextLength(mc)
-      : this._effectiveContextLength(mc) - effectiveMax;
-
-    if (budget <= 0) return undefined;
-
-    const compactOutputRatio = this._thresholds.compact_output / 100;
-    const compactToolcallRatio = this._thresholds.compact_toolcall / 100;
-
-    return (inputTokens: number, outputTokens: number, hasToolCalls: boolean) => {
-      const tokensToCheck = provider.budgetCalcMode === "full_context"
-        ? inputTokens
-        : inputTokens + outputTokens;
-
-      const threshold = hasToolCalls ? compactToolcallRatio : compactOutputRatio;
-
-      if (tokensToCheck > threshold * budget) {
-        return { compactNeeded: true, scenario: hasToolCalls ? "toolcall" as const : "output" as const };
-      }
-      return { compactNeeded: false };
-    };
-  }
-
-  /**
-   * Run compact phase for a sub-agent: inject compact prompt, let agent produce
-   * a continuation prompt (possibly using tools), then return it.
-   * Simplified version — does not inject important log or phase plan.
-   */
-  private async _runSubAgentCompactPhase(
-    agent: Agent,
-    runtime: ReturnType<typeof createEphemeralLogState>,
-    subExecutors: Record<string, ToolExecutor>,
-    getRoundContextId: (roundIndex: number) => string,
-    scenario: "output" | "toolcall",
-    onToolCall?: ((agentName: string, tool: string, args: Record<string, unknown>, summary: string) => void),
-    signal?: AbortSignal,
-  ): Promise<string> {
-    const prompt = scenario === "output" ? SUB_AGENT_COMPACT_PROMPT_OUTPUT : SUB_AGENT_COMPACT_PROMPT_TOOLCALL;
-    runtime.appendEntry(createUserMessageEntry(
-      runtime.allocId("user_message"),
-      0,
-      "",
-      prompt,
-      runtime.allocateContextId(),
-    ));
-
-    let continuationPrompt = "";
-    for (let i = 0; i < MAX_COMPACT_PHASE_ROUNDS; i++) {
-      if (signal?.aborted) break;
-
-      const compactAgentName = agent.name;
-      const result = await agent.asyncRunWithMessages(
-        runtime.getMessages,
-        runtime.appendEntry,
-        runtime.allocId,
-        0,
-        runtime.computeNextRoundIndex(),
-        subExecutors, onToolCall,
-        undefined, undefined, signal,
-        getRoundContextId, undefined, undefined, undefined, undefined, undefined,
-        undefined,
-        undefined,
-        false,
-        (attempt, max, delaySec, errMsg) => this._progress?.onRetryAttempt(compactAgentName, attempt, max, delaySec, errMsg),
-        (attempt) => this._progress?.onRetrySuccess(compactAgentName, attempt),
-        (max, errMsg) => this._progress?.onRetryExhausted(compactAgentName, max, errMsg),
-      );
-
-      if (result.text) {
-        this._appendEphemeralAgentOutput(runtime, result, getRoundContextId);
-        continuationPrompt = stripContextTags(result.text);
-        break;
-      }
-    }
-
-    if (!continuationPrompt) {
-      continuationPrompt = "[Compact phase did not produce a continuation prompt.]";
-    }
-
-    return continuationPrompt;
-  }
-
-  // -- Result collection & delivery --
-
   private async _waitForAnyAgent(signal?: AbortSignal): Promise<void> {
-    const working: Array<{ name: string; entry: AgentEntry }> = [];
-    for (const [name, entry] of this._activeAgents) {
-      if (entry.status === "working") {
-        working.push({ name, entry });
-      }
-    }
-    if (!working.length) return;
-
-    // Race all working promises + a timeout
-    const timeout = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), SUB_AGENT_TIMEOUT),
-    );
-
-    // Wrap each promise to return its name on settle
-    const racers = working.map(({ name, entry }) =>
-      entry.promise.then(
-        (result) => ({ name, result, error: undefined }),
-        (error) => ({ name, result: undefined, error }),
-      ),
-    );
-
+    const racers = this._getWorkingChildRacers();
+    if (racers.length === 0) return;
     const abortPromise = this._makeAbortPromise(signal);
     const winner = await Promise.race([
       ...racers,
-      timeout,
       ...(abortPromise ? [abortPromise] : []),
     ]);
-
-    if (winner === "timeout") {
-      // Kill the agent with the most elapsed work time
-      let candidate: { name: string; entry: AgentEntry; workTime: number } | undefined;
-      for (const w of working) {
-        const workTime = performance.now() - w.entry.startTime;
-        if (!candidate || workTime > candidate.workTime) {
-          candidate = { ...w, workTime };
-        }
-      }
-      if (candidate && candidate.workTime > SUB_AGENT_TIMEOUT) {
-        console.warn(`Sub-agent '${candidate.name}' killed after ${(candidate.workTime / 1000).toFixed(0)}s elapsed time`);
-        this._execKillAgent({ ids: [candidate.name] });
-      }
-      return;
-    }
-    if (winner === "aborted") {
-      return;
-    }
-
-    // Update the entry that just finished
-    const settled = winner as { name: string; result?: SubAgentResult; error?: unknown };
-    const entry = this._activeAgents.get(settled.name);
-    if (entry) {
-      entry.elapsed = this._getElapsed(entry);
-      if (settled.result) {
-        entry.status = settled.result.status === "completed" ? "finished" : (settled.result.status as any);
-        entry.resultText = settled.result.text;
-      } else if (settled.error) {
-        entry.status = "error";
-        entry.resultText = `Sub-agent error: ${settled.error}`;
-      }
-    }
-
-    // Also check if other agents have settled
-    for (const w of working) {
-      if (w.name === settled.name) continue;
-      const e = this._activeAgents.get(w.name);
-      if (!e || e.status !== "working") continue;
-      // Check with a zero-delay race
-      const zeroTimeout = new Promise<"pending">((resolve) =>
-        setTimeout(() => resolve("pending"), 0),
-      );
-      const check = e.promise.then(
-        (result) => ({ result, error: undefined }),
-        (error) => ({ result: undefined, error }),
-      );
-      const r = await Promise.race([check, zeroTimeout]);
-      if (r !== "pending") {
-        const res = r as { result?: SubAgentResult; error?: unknown };
-        e.elapsed = this._getElapsed(e);
-        if (res.result) {
-          e.status = res.result.status === "completed" ? "finished" : (res.result.status as any);
-          e.resultText = res.result.text;
-        } else {
-          e.status = "error";
-          e.resultText = `Sub-agent error: ${res.error}`;
-        }
-      }
-    }
+    if (winner === "aborted") return;
+    await Promise.resolve();
   }
 
   private _formatAgentOutput(result: Record<string, unknown>): string {

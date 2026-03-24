@@ -45,15 +45,17 @@ const PRIMARY_ROUND_ENTRY_TYPES = new Set<LogEntry["type"]>([
   "tool_result",
 ]);
 
-function isHiddenSubAgentLifecycle(entry: LogEntry): boolean {
-  return entry.type === "sub_agent_start";
-}
-
 function isProjectableTuiEntry(entry: LogEntry): boolean {
   if (entry.discarded) return false;
   if (!entry.tuiVisible) return false;
   if (entry.type === "summary") return false;
-  if (isHiddenSubAgentLifecycle(entry)) return false;
+  if (
+    entry.type === "sub_agent_start" ||
+    entry.type === "sub_agent_tool_call" ||
+    entry.type === "sub_agent_end"
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -403,11 +405,10 @@ export interface ApiProjectionOptions {
    * If not provided, the system_prompt entry's content is used.
    */
   systemPrompt?: string;
-  /**
-   * Important log content to inject after system prompt.
-   * If not empty, merged into first user message or inserted as standalone.
-   */
+  /** Legacy support for important log injection. Runtime no longer uses this. */
   importantLog?: string;
+  /** Active plan content to inject after the system prompt, when present. */
+  activePlan?: string;
   /**
    * AGENTS.md content (global + project) to inject after system prompt.
    * If not empty, injected similarly to importantLog.
@@ -614,16 +615,29 @@ export function projectToApiMessages(
     }
   }
 
-  // Inject important log if provided
   const importantLog = options?.importantLog?.trim();
   if (importantLog) {
-    injectImportantLog(messages, importantLog);
+    injectLabeledUserContext(
+      messages,
+      "[IMPORTANT LOG]\nThe following is your persistent engineering notebook:\n\n",
+      importantLog,
+    );
+  }
+
+  // Inject active plan if provided
+  const activePlan = options?.activePlan?.trim();
+  if (activePlan) {
+    injectLabeledUserContext(
+      messages,
+      "[ACTIVE PLAN]\nThe following is the current execution plan:\n\n",
+      activePlan,
+    );
   }
 
   // Inject AGENTS.md content if provided
   const agentsMd = options?.agentsMd?.trim();
   if (agentsMd) {
-    injectAgentsMd(messages, agentsMd, { ensureUserBoundary: !importantLog });
+    injectAgentsMd(messages, agentsMd, { ensureUserBoundary: !importantLog && !activePlan });
   }
 
   let projected = options?.truncateSummarizeToolArgs === false
@@ -752,19 +766,12 @@ function buildAssistantMessage(
   return msg;
 }
 
-/**
- * Inject important log content after the system prompt.
- * Merges into the first user message if possible.
- */
-function injectImportantLog(
+function injectLabeledUserContext(
   messages: InternalMessage[],
-  logContent: string,
+  header: string,
+  content: string,
 ): void {
-  const header =
-    "[IMPORTANT LOG]\n" +
-    "The following is your persistent engineering notebook " +
-    "(\"(empty file)\" means the notebook is blank — it is not real content):\n\n";
-  const fullContent = header + logContent;
+  const fullContent = header + content;
 
   // Find position after system prompt(s)
   let insertIdx = 0;

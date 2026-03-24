@@ -5,7 +5,7 @@
 When your context approaches the model's limit, the system triggers auto-compact:
 
 1. You write a **continuation prompt** — a briefing summarizing the full conversation state.
-2. Context is reset. System prompt, important log, master plan, and phase plan are re-injected.
+2. Context is reset. System prompt and AGENTS.md memory are re-injected.
 3. Your briefing becomes the new starting context for a fresh instance.
 
 **Proactive compression is better than forced compact.** Use `summarize_context` regularly. A forced compact is disruptive — it interrupts your workflow and compresses everything at once.

@@ -10,6 +10,7 @@ import type {
   Session as TuiSession,
 } from "../src/tui/types.js";
 import type { SessionStore } from "../src/persistence.js";
+import type { ChildSessionSnapshot } from "../src/session-tree-types.js";
 import { saveLog } from "../src/persistence.js";
 import { projectToTuiEntries } from "../src/log-projection.js";
 import { isCommandExitSignal } from "../src/commands.js";
@@ -953,32 +954,6 @@ function CodexUsageCard(
   );
 }
 
-function PlanCard(
-  { checkpoints, colors }: { checkpoints: PlanCheckpointUi[]; colors: OpenTuiPalette },
-): React.ReactElement | null {
-  if (checkpoints.length === 0) return null;
-
-  return (
-    <box
-      flexDirection="column"
-      width="100%"
-      gap={1}
-    >
-      <text fg={colors.text} bold content={`Plan (${checkpoints.filter((checkpoint) => checkpoint.checked).length}/${checkpoints.length})`} />
-      {checkpoints.map((checkpoint, index) => (
-        <box key={`sidebar-plan-${index}`} flexDirection="column" width="100%">
-          <text
-            fg={checkpoint.checked ? colors.dim : colors.text}
-            content={`${checkpoint.checked ? "✓" : "○"} ${checkpoint.text}`}
-            wrapMode="word"
-            width="100%"
-          />
-        </box>
-      ))}
-    </box>
-  );
-}
-
 function SidebarTitle({ colors }: { colors: OpenTuiPalette }): React.ReactElement {
   const name = "VIGIL";
   const indices = [0, 1, 3, 5, 6];
@@ -992,20 +967,15 @@ function SidebarTitle({ colors }: { colors: OpenTuiPalette }): React.ReactElemen
   );
 }
 
-function AgentStatusIcon(status: string, colors: OpenTuiPalette): { char: string; color: string } {
-  switch (status) {
-    case "working": return { char: "*", color: colors.workingStatus };
-    case "idle": return { char: "-", color: colors.dim };
-    case "finished": return { char: "+", color: colors.green };
-    case "error": return { char: "!", color: colors.errorStatus };
-    case "killed": return { char: "x", color: colors.muted };
-    default: return { char: "?", color: colors.dim };
-  }
+function childLatestSummary(snapshot: ChildSessionSnapshot): string {
+  return snapshot.lastToolCallSummary
+    || snapshot.recentEvents[snapshot.recentEvents.length - 1]
+    || (snapshot.outcome !== "none" ? snapshot.outcome : "no recent activity");
 }
 
-function sameAgentList(
-  a: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>,
-  b: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>,
+function sameChildSessionList(
+  a: ChildSessionSnapshot[],
+  b: ChildSessionSnapshot[],
 ): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -1015,9 +985,14 @@ function sameAgentList(
     const right = b[index];
     if (
       left?.id !== right?.id ||
-      left?.status !== right?.status ||
-      left?.interactive !== right?.interactive ||
-      left?.teamId !== right?.teamId
+      left?.lifecycle !== right?.lifecycle ||
+      left?.phase !== right?.phase ||
+      left?.outcome !== right?.outcome ||
+      left?.running !== right?.running ||
+      left?.lifetimeToolCallCount !== right?.lifetimeToolCallCount ||
+      left?.lastTotalTokens !== right?.lastTotalTokens ||
+      left?.lastToolCallSummary !== right?.lastToolCallSummary ||
+      left?.pendingInboxCount !== right?.pendingInboxCount
     ) {
       return false;
     }
@@ -1026,27 +1001,41 @@ function sameAgentList(
   return true;
 }
 
-function AgentListCard(
-  { agents, colors, width }: {
-    agents: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>;
+function ChildSessionListCard(
+  { sessions, colors, width, selectedId, onSelect }: {
+    sessions: ChildSessionSnapshot[];
     colors: OpenTuiPalette;
     width: number;
+    selectedId: string | null;
+    onSelect: (id: string) => void;
   },
 ): React.ReactElement | null {
-  if (agents.length === 0) return null;
-  const maxIdLen = Math.max(10, width - 8);
+  if (sessions.length === 0) return null;
+  const maxHeadlineLen = Math.max(20, width - 4);
+  const maxDetailLen = Math.max(20, width - 2);
   return (
     <box flexDirection="column" width="100%">
-      <text fg={colors.dim} content="AGENTS" />
-      {agents.map((a) => {
-        const icon = AgentStatusIcon(a.status, colors);
-        const label = a.id.length > maxIdLen ? a.id.slice(0, maxIdLen - 1) + "…" : a.id;
-        const tag = a.interactive ? (a.teamId ? ` [${a.teamId}]` : " [i]") : "";
+      <text fg={colors.dim} content="SUB-SESSIONS" />
+      {sessions.map((snapshot) => {
+        const headline = truncateToWidth(
+          `${snapshot.id} ${snapshot.lifetimeToolCallCount} tools | ${formatCompactTokens(snapshot.lastTotalTokens)}`,
+          maxHeadlineLen,
+        );
+        const detail = truncateToWidth(`└─ ${childLatestSummary(snapshot)}`, maxDetailLen);
+        const isSelected = selectedId === snapshot.id;
         return (
-          <box key={a.id} flexDirection="row">
-            <text fg={icon.color} content={icon.char + " "} />
-            <text fg={colors.text} content={label} />
-            {tag ? <text fg={colors.muted} content={tag} /> : null}
+          <box
+            key={snapshot.id}
+            flexDirection="column"
+            backgroundColor={isSelected ? colors.border : "transparent"}
+            onMouseDown={(e: any) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onSelect(snapshot.id);
+            }}
+          >
+            <text fg={isSelected ? colors.accent : colors.text} content={headline} />
+            <text fg={colors.dim} content={detail} />
           </box>
         );
       })}
@@ -1060,8 +1049,9 @@ function SidebarView(
     contextTokens,
     contextLimit,
     cacheReadTokens,
-    checkpoints,
-    agents,
+    childSessions,
+    selectedChildId,
+    onSelectChild,
     codexUsage,
     colors,
   }: {
@@ -1069,14 +1059,13 @@ function SidebarView(
     contextTokens: number;
     contextLimit?: number;
     cacheReadTokens?: number;
-    checkpoints: PlanCheckpointUi[] | null;
-    agents: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>;
+    childSessions: ChildSessionSnapshot[];
+    selectedChildId: string | null;
+    onSelectChild: (id: string) => void;
     codexUsage: UsageSnapshot | null;
     colors: OpenTuiPalette;
   },
 ): React.ReactElement {
-  const safeCheckpoints = checkpoints ?? [];
-
   return (
     <box
       width={width}
@@ -1108,8 +1097,13 @@ function SidebarView(
             colors={colors}
           />
           <CodexUsageCard snapshot={codexUsage} colors={colors} />
-          <AgentListCard agents={agents} colors={colors} width={width - 3} />
-          <PlanCard checkpoints={safeCheckpoints} colors={colors} />
+          <ChildSessionListCard
+            sessions={childSessions}
+            colors={colors}
+            width={width - 3}
+            selectedId={selectedChildId}
+            onSelect={onSelectChild}
+          />
         </box>
       </scrollbox>
     </box>
@@ -1694,7 +1688,8 @@ export function OpenTuiApp({
   const [cacheReadTokens, setCacheReadTokens] = useState(0);
   const [codexUsage, setCodexUsage] = useState<UsageSnapshot | null>(null);
   const codexPollerRef = useRef<UsagePoller | null>(null);
-  const [activeAgents, setActiveAgents] = useState<Array<{ id: string; status: string; interactive: boolean; teamId: string | null }>>([]);
+  const [childSessions, setChildSessions] = useState<ChildSessionSnapshot[]>([]);
+  const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [markdownMode, setMarkdownMode] = useState<"rendered" | "raw">("rendered");
   const [pendingAsk, setPendingAsk] = useState<PendingAskUi | null>(
@@ -1709,7 +1704,6 @@ export function OpenTuiApp({
   const [reviewMode, setReviewMode] = useState(false);
   const [askInputValue, setAskInputValue] = useState("");
   const [optionNotes, setOptionNotes] = useState<Map<string, string>>(new Map());
-  const [planCheckpoints, setPlanCheckpoints] = useState<PlanCheckpointUi[] | null>(null);
   const [draftValue, setDraftValue] = useState("");
   const [inputVisibleLines, setInputVisibleLines] = useState(1);
   const [commandOverlay, setCommandOverlay] = useState<CommandOverlayState>(EMPTY_COMMAND_OVERLAY);
@@ -1974,20 +1968,31 @@ export function OpenTuiApp({
 
   useEffect(() => {
     const syncFromLog = () => {
-      setEntries(projectToTuiEntries([...(session.log ?? [])] as any[]));
+      const nextChildSessions = session.getChildSessionSnapshots?.() ?? [];
+      setChildSessions((previous) => sameChildSessionList(previous, nextChildSessions) ? previous : nextChildSessions);
+      if (selectedChildId && !nextChildSessions.some((snapshot) => snapshot.id === selectedChildId)) {
+        setSelectedChildId(null);
+      }
+
+      const activeLog = selectedChildId
+        ? session.getChildSessionLog?.(selectedChildId) ?? session.log ?? []
+        : session.log ?? [];
+      setEntries(projectToTuiEntries([...(activeLog ?? [])] as any[]));
       setPendingAsk(session.getPendingAsk?.() ?? null);
       setContextTokens(session.lastInputTokens);
       setCacheReadTokens(session.lastCacheReadTokens ?? 0);
-      if (typeof (session as any).getActiveAgentIds === "function") {
-        const nextAgents = (session as any).getActiveAgentIds();
-        setActiveAgents((previous) => sameAgentList(previous, nextAgents) ? previous : nextAgents);
-      }
     };
 
     syncFromLog();
-    if (typeof session.subscribeLog !== "function") return;
-    return session.subscribeLog(syncFromLog);
-  }, [session]);
+    const unsubscribe = typeof session.subscribeLog === "function"
+      ? session.subscribeLog(syncFromLog)
+      : undefined;
+    const poller = setInterval(syncFromLog, 250);
+    return () => {
+      if (unsubscribe) unsubscribe();
+      clearInterval(poller);
+    };
+  }, [selectedChildId, session]);
 
   useEffect(() => {
     if (!isLongerAgentOpenTuiDiagEnabled()) return;
@@ -2001,9 +2006,9 @@ export function OpenTuiApp({
       markdownMode,
       assistantRenderer: ASSISTANT_RENDERER_MODE,
       markdownPatchDisabled: isLongerAgentMarkdownPatchDisabled(),
-      activeAgents: activeAgents.length,
+      activeAgents: childSessions.length,
     });
-  }, [activeAgents.length, entries, markdownMode, processing]);
+  }, [childSessions.length, entries, markdownMode, processing]);
 
   const handleProgressRef = useRef<(event: ProgressEvent) => void>(() => { });
   handleProgressRef.current = (event) => {
@@ -2034,15 +2039,6 @@ export function OpenTuiApp({
       case "ask_resolved":
         setPendingAsk(session.getPendingAsk?.() ?? null);
         setAskError(null);
-        break;
-      case "plan_submit":
-      case "plan_update": {
-        const checkpoints = event.extra["checkpoints"] as PlanCheckpointUi[] | undefined;
-        if (checkpoints) setPlanCheckpoints(checkpoints);
-        break;
-      }
-      case "plan_finish":
-        setPlanCheckpoints(null);
         break;
       case "token_update":
         setContextTokens((event.extra["input_tokens"] as number) ?? session.lastInputTokens);
@@ -2485,7 +2481,6 @@ export function OpenTuiApp({
         setCacheReadTokens(session.lastCacheReadTokens ?? 0);
         setPendingAsk(null);
         setAskError(null);
-        setPlanCheckpoints(null);
       },
       exit: performExit,
       onTurnRequested: (content: string) => {
@@ -3305,6 +3300,14 @@ export function OpenTuiApp({
       return;
     }
 
+    if (selectedChildId && event.name === "escape") {
+      setSelectedChildId(null);
+      showHint("Back to primary session");
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     if (event.name === "c" && event.ctrl) {
       event.preventDefault();
       event.stopPropagation();
@@ -3323,6 +3326,27 @@ export function OpenTuiApp({
 
       if (commandOverlay.visible) {
         setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        return;
+      }
+
+      if (selectedChildId) {
+        const decision = session.interruptChildSession?.(selectedChildId) ?? { accepted: false, reason: "unsupported" };
+        if (decision.accepted) {
+          session.deliverMessage?.(
+            "system",
+            `${selectedChildId} was interrupted early by the user. Ask the user for next steps if more information is needed.`,
+          );
+          showHint(`Interrupted ${selectedChildId}`);
+        } else {
+          const reason = decision.reason === "idle"
+            ? `${selectedChildId} is already idle`
+            : decision.reason === "not_live"
+              ? `${selectedChildId} is not running`
+              : decision.reason === "not_found"
+                ? `${selectedChildId} not found`
+                : "Child interrupt is unavailable";
+          showHint(reason);
+        }
         return;
       }
 
@@ -3474,12 +3498,17 @@ export function OpenTuiApp({
           >
             <box flexDirection="column" gap={0}>
               {showLogoInScroll ? <LogoBlock colors={colors} /> : null}
+              {selectedChildId ? (
+                <box flexDirection="column" paddingLeft={2} paddingBottom={1}>
+                  <text fg={colors.accent} bold content={`SUB-SESSION ${selectedChildId}`} />
+                  <text fg={colors.dim} content="Esc back to primary session · Ctrl+C interrupt child turn" />
+                </box>
+              ) : null}
               {entries.map((entry, index) => {
                 const prev = index > 0 ? entries[index - 1] : null;
                 const needsSpacing = entry.kind === "reasoning" && (
                   prev?.kind === "progress" ||
-                  prev?.kind === "tool_call" ||
-                  prev?.kind === "sub_agent_rollup"
+                  prev?.kind === "tool_call"
                 );
 
                 return (
@@ -3563,8 +3592,9 @@ export function OpenTuiApp({
             contextTokens={contextTokens}
             contextLimit={session.primaryAgent.modelConfig?.contextLength}
             cacheReadTokens={cacheReadTokens}
-            checkpoints={planCheckpoints}
-            agents={activeAgents}
+            childSessions={childSessions}
+            selectedChildId={selectedChildId}
+            onSelectChild={setSelectedChildId}
             codexUsage={codexUsage}
             colors={colors}
           />
@@ -3587,10 +3617,16 @@ export function OpenTuiApp({
               ref={(node) => {
                 inputRef.current = node;
               }}
-              placeholder={pendingAsk ? "ask pending..." : "message or /command"}
-              focused={phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret}
-              textColor={colors.text}
-              focusedTextColor={colors.text}
+              placeholder={
+                pendingAsk
+                  ? "ask pending..."
+                  : selectedChildId
+                    ? "Esc to return to primary session"
+                    : "message or /command"
+              }
+              focused={phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !selectedChildId}
+              textColor={selectedChildId ? colors.muted : colors.text}
+              focusedTextColor={selectedChildId ? colors.muted : colors.text}
               placeholderColor={colors.muted}
               cursorStyle={{ style: "block", blinking: false }}
               cursorColor={colors.accent}
@@ -3602,6 +3638,10 @@ export function OpenTuiApp({
               syntaxStyle={composerTokenVisuals.syntaxStyle}
               keyBindings={COMPOSER_KEY_BINDINGS}
               onSubmit={() => {
+                if (selectedChildId) {
+                  showHint("Return to the primary session to send messages.");
+                  return;
+                }
                 void handleSubmit(getSerializedComposerInput());
               }}
               wrapMode="word"

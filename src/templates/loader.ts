@@ -405,13 +405,13 @@ export function assembleToolPrompts(
 
 /**
  * Resolve prompt_sections from the spec.
- * Defaults to ["important_log"] if omitted.
+ * Defaults to [] if omitted.
  */
 function resolveSections(spec: Record<string, unknown>): string[] {
   const sections = spec["prompt_sections"];
-  if (sections == null) return ["important_log"];
+  if (sections == null) return [];
   if (Array.isArray(sections)) return sections as string[];
-  return ["important_log"];
+  return [];
 }
 
 /**

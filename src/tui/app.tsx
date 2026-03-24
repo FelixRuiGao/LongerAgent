@@ -34,7 +34,6 @@ import {
   CommandPromptPanel,
   type CommandPromptState,
 } from "./components/command-prompt-panel.js";
-import { PlanPanel, type PlanCheckpointUi } from "./components/plan-panel.js";
 import { InputPanel, type InputPanelHandle } from "./components/input-panel.js";
 import { InputProtocolParser } from "./input/protocol.js";
 import { mapInputEventToCommand } from "./input/keymap.js";
@@ -189,8 +188,6 @@ export function App({
   const [optionNotes, setOptionNotes] = useState<Map<string, string>>(new Map());
   // Review mode: show summary of all answers before submitting (multi-question only)
   const [reviewMode, setReviewMode] = useState(false);
-  // Plan panel state
-  const [planCheckpoints, setPlanCheckpoints] = useState<PlanCheckpointUi[] | null>(null);
   const [commandPrompt, setCommandPrompt] = useState<CommandPromptState | null>(null);
 
   const cancelledRef = useRef(false);
@@ -503,7 +500,6 @@ export function App({
         setPendingAsk(null);
         setAskError(null);
         setHideProgress(false);
-        setPlanCheckpoints(null);
       },
       exit: performExit,
       onTurnRequested: (content: string) => {
@@ -571,16 +567,6 @@ export function App({
         return;
       }
 
-      // ---- Plan panel events ----
-      if (event.action === "plan_submit" || event.action === "plan_update") {
-        const cps = event.extra?.["checkpoints"] as PlanCheckpointUi[] | undefined;
-        if (cps) setPlanCheckpoints(cps);
-        return;
-      }
-      if (event.action === "plan_finish") {
-        setPlanCheckpoints(null);
-        return;
-      }
     },
     [session, setStableActivity, setTransientActivity],
   );
@@ -1323,7 +1309,6 @@ export function App({
         markdownMode={markdownMode}
         streamingAssistantEntryId={null}
       />
-      {planCheckpoints ? <PlanPanel checkpoints={planCheckpoints} active={activityPhase !== "idle"} /> : null}
       {pendingAsk ? (
         <AskPanel
           ask={pendingAsk}

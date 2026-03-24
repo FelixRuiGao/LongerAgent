@@ -1,6 +1,6 @@
 ## `spawn_agent`
 
-Launch sub-agents for bounded, parallel subtasks.
+Launch sub-sessions for bounded, parallel subtasks.
 
 ### Two-Step Flow
 
@@ -16,6 +16,7 @@ Call file format:
 tasks:
   - id: explorer-1
     template: explorer
+    mode: oneshot
     task: |
       Explore the providers/ directory at {PROJECT_ROOT}/src/providers/ ...
 ```
@@ -37,7 +38,6 @@ Behavioral profile:
 - Uses list_dir for structure, read_file for content, grep/glob for search, web tools for external info
 - Leads with direct answers, includes file paths and code references
 - Understands that only its final text output is visible to you — intermediate tool calls are hidden
-- Has access to the important log for background context
 
 Best for: codebase exploration, dependency tracing, pattern searches, code analysis, information gathering. **This is your primary delegation tool — use it liberally.**
 
@@ -50,7 +50,6 @@ Behavioral profile:
 - Examines relevant code before acting, verifies changes when appropriate
 - Reports what was done, what succeeded, and any issues encountered
 - Same output protocol as explorer — final text is the only visible result
-- Has access to the important log for background context
 
 Best for: running test suites, applying known edits across files, installing dependencies, generating files, any bounded task requiring bash or file writes.
 
@@ -130,7 +129,7 @@ The quality of sub-agent results depends almost entirely on your prompt. A well-
 > Keep response under 500 words. Lead with the strategy interface definition.
 > ```
 
-**Share background via important log.** If multiple sub-agents need the same context (project structure, key decisions), write it to your important log first — it's automatically shared with all sub-agents.
+**Share background directly in the task prompt or AGENTS.md.** Do not rely on any separate runtime notebook.
 
 ### When to Delegate vs Do It Yourself
 
@@ -171,7 +170,7 @@ The quality of sub-agent results depends almost entirely on your prompt. A well-
 
 After receiving results, extract key findings, then compress:
 
-> Note the 3-5 key findings, record cross-phase insights in your important log, then `summarize_context` the raw report.
+> Note the 3-5 key findings, persist only durable knowledge to AGENTS.md if warranted, then `summarize_context` the raw report.
 
 > Finished a subtask? Compress its investigation history. Preserve: what was done, key approach, cross-file dependencies still relevant.
 
@@ -186,24 +185,26 @@ After receiving results, extract key findings, then compress:
 - Don't continue working after spawning unless you have a truly independent task.
 - Don't act on assumptions while waiting — if your next step depends on results, wait.
 - Don't over-parallelize — each result needs attention to digest and compress.
-### Interactive Agents
+### Child Session Modes
 
-Add `interactive: true` to a task spec to create a multi-turn agent that survives beyond its initial task:
+Non-team tasks must explicitly set `mode`:
 
 ```yaml
 tasks:
   - id: reviewer
     template: explorer
-    interactive: true
+    mode: persistent
     task: |
       Review the current state of the auth module...
 ```
 
-After completing its initial task, an interactive agent enters idle state. Use `send(to="reviewer", content="...")` to send follow-up messages — the agent auto-activates for a new turn. Use `wait(agent="reviewer")` to get its response.
+- `mode: oneshot` runs one turn, returns its result, then becomes read-only.
+- `mode: persistent` returns to idle after each turn and can receive later messages via `send`.
+- Non-team tasks that omit `mode` are invalid.
 
 ### Agent Teams
 
-Add `team:` to the call file to create a named team. All team members are automatically interactive and get the `send` tool for cross-agent communication:
+Add `team:` to the call file to create a named team. Team members automatically become `persistent` and get the `send` tool for cross-session communication:
 
 ```yaml
 team: research-squad
@@ -218,7 +219,7 @@ agents:
       Wait for researcher's findings. Implement the changes based on what you receive.
 ```
 
-Team members can `send` to each other and to `"primary"`. Their turn output is auto-delivered to you (the primary agent). Communication is async — `send` returns immediately, the recipient is activated automatically.
+Team members can `send` to each other. Their turn output is auto-delivered to you (the primary agent). Communication is async — `send` returns immediately, the recipient is activated automatically.
 
 To add members to an existing team later, use the same `team:` name in a new call file.
 

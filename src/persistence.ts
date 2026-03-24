@@ -29,6 +29,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { getLongerAgentHomeDir } from "./home-path.js";
 import { LogIdAllocator, type LogEntry, type LogEntryType, type TuiDisplayKind } from "./log-entry.js";
+import type { ChildSessionMetaRecord } from "./session-tree-types.js";
 
 // ------------------------------------------------------------------
 // Constants
@@ -504,6 +505,7 @@ export interface LogSessionMeta {
   cacheHitEnabled: boolean;
   activePlanCheckpoints?: string[];
   activePlanChecked?: boolean[];
+  childSessions?: ChildSessionMetaRecord[];
 }
 
 /** Local inference server config (oMLX, LM Studio, etc.) */
@@ -569,6 +571,7 @@ export function createLogSessionMeta(
     compactCount: 0,
     thinkingLevel: "default",
     cacheHitEnabled: false,
+    childSessions: undefined,
     ...partial,
   };
 }
@@ -699,6 +702,7 @@ export function saveLog(
     cache_hit_enabled: meta.cacheHitEnabled,
     active_plan_checkpoints: meta.activePlanCheckpoints ?? null,
     active_plan_checked: meta.activePlanChecked ?? null,
+    child_sessions: meta.childSessions ?? null,
     entries: entries.map(entryToSnake),
   };
 
@@ -750,6 +754,7 @@ export function loadLog(dir: string): LoadLogResult {
     cacheHitEnabled: raw.cache_hit_enabled ?? false,
     activePlanCheckpoints: Array.isArray(raw.active_plan_checkpoints) ? raw.active_plan_checkpoints as string[] : undefined,
     activePlanChecked: Array.isArray(raw.active_plan_checked) ? raw.active_plan_checked as boolean[] : undefined,
+    childSessions: Array.isArray(raw.child_sessions) ? raw.child_sessions as ChildSessionMetaRecord[] : undefined,
   };
 
   const rawEntries = (raw.entries ?? []) as Array<Record<string, unknown>>;
