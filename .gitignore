@@ -26,3 +26,4 @@ hitgrid_*.txt
 buffer_dump/
 crash-diag.log
 tmp_repos/
+experiments/
