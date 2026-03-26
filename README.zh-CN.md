@@ -64,7 +64,7 @@ longeragent --version           # 显示当前版本
 
 ### Agent 驱动的上下文管理
 
-LongerAgent 给 Agent 提供工具来检视自身上下文分布（`show_context`）并精确压缩它自己选择的部分（`summarize_context`）。每个对话片段内部都标记了唯一 ID 和 token 成本注解，让 Agent 能做出理性的成本收益决策。系统只在最后关头作为安全兜底介入。
+LongerAgent 给 Agent 提供工具来检视自身上下文分布（`show_context`）并蒸馏它自己选择的部分（`distill_context`）。每个对话片段内部都标记了唯一 ID 和 token 成本注解，让 Agent 能做出理性的成本收益决策。系统只在最后关头作为安全兜底介入。
 
 三层机制协同工作：提示压缩在早期推动 Agent 主动压缩，Agent 主导的精确压缩给予它精细控制，自动 compact 兜住漏网之鱼。
 
@@ -119,17 +119,17 @@ LongerAgent 重点优化的是这样一条工作流：
 
 ### 工具
 
-**16 个内置工具：**
+**13 个内置工具：**
 
-`read_file` · `list_dir` · `glob` · `grep` · `edit_file` · `write_file` · `apply_patch` · `bash` · `bash_background` · `bash_output` · `kill_shell` · `diff` · `test` · `time` · `web_search` · `web_fetch`
+`read_file` · `list_dir` · `glob` · `grep` · `edit_file` · `write_file` · `bash` · `bash_background` · `bash_output` · `kill_shell` · `time` · `web_search` · `web_fetch`
 
 `read_file` 在多模态模型上支持图片文件（PNG、JPG、GIF、WebP 等）——Agent 可以直接查看和分析图片。
 
 **8 个编排工具：**
 
-`spawn_agent` · `kill_agent` · `check_status` · `wait` · `show_context` · `summarize_context` · `ask` · `plan`
+`spawn` · `spawn_file` · `kill_agent` · `check_status` · `wait` · `show_context` · `distill_context` · `ask`
 
-**Skills 系统** —— 将可复用的技能定义加载为动态 `skill` 工具。通过 `/skills` 管理（勾选启用/禁用），`reload_skills` 热重载。内置 `skill-manager` 可教 Agent 自主搜索、下载和安装新技能。
+**Skills 系统** —— 将可复用的技能定义加载为动态 `skill` 工具。通过 `/skills` 管理（勾选启用/禁用）。技能每轮自动发现——安装或移除技能目录后立即生效，无需手动重载。内置 `skill-manager` 可教 Agent 自主搜索、下载和安装新技能。
 
 **MCP 集成** —— 连接 Model Context Protocol 服务器以扩展工具。可用 `/mcp` 在第一轮对话前主动验证 server 配置并查看工具列表。
 

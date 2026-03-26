@@ -112,16 +112,19 @@ export {
 export {
   loadTemplate,
   loadTemplates,
+  assembleSystemPrompt,
+  type PromptRecipe,
 } from "./templates/loader.js";
 
 // -- Tools ----------------------------------------------------------------
 export { BASIC_TOOLS, BASIC_TOOLS_MAP, executeTool } from "./tools/basic.js";
 export {
-  SPAWN_AGENT_TOOL,
+  SPAWN_TOOL,
+  SPAWN_FILE_TOOL,
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
   WAIT_TOOL,
-  SUMMARIZE_CONTEXT_TOOL,
+  DISTILL_CONTEXT_TOOL,
   ASK_TOOL,
 } from "./tools/comm.js";
 

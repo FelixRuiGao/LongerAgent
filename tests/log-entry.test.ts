@@ -47,7 +47,7 @@ describe("LogIdAllocator", () => {
     const alloc = new LogIdAllocator();
     const entries: LogEntry[] = [
       createUserMessage("user-005", 1, "hi", "hi", "c1"),
-      createToolCall("tc-012", 1, 0, "summary", { id: "1", name: "test", arguments: {} }, { toolCallId: "1", toolName: "test", agentName: "a" }),
+      createToolCall("tc-012", 1, 0, "summary", { id: "1", name: "bash", arguments: {} }, { toolCallId: "1", toolName: "bash", agentName: "a" }),
       createAssistantText("asst-003", 1, 0, "reply", "reply"),
     ];
     alloc.restoreFrom(entries);

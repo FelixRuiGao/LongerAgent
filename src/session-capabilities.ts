@@ -4,11 +4,9 @@ export interface SessionCapabilities {
   includeCheckStatusTool: boolean;
   includeWaitTool: boolean;
   includeShowContextTool: boolean;
-  includeSummarizeContextTool: boolean;
+  includeDistillContextTool: boolean;
   includeAskTool: boolean;
-  includePlanTool: boolean;
   includeSkillTools: boolean;
-  includeReloadSkillsTool: boolean;
 }
 
 export const ROOT_SESSION_CAPABILITIES: SessionCapabilities = {
@@ -17,12 +15,9 @@ export const ROOT_SESSION_CAPABILITIES: SessionCapabilities = {
   includeCheckStatusTool: true,
   includeWaitTool: true,
   includeShowContextTool: true,
-  includeSummarizeContextTool: true,
+  includeDistillContextTool: true,
   includeAskTool: true,
-  // Plan is intentionally soft-disabled at the runtime surface for now.
-  includePlanTool: false,
   includeSkillTools: true,
-  includeReloadSkillsTool: true,
 };
 
 export const CHILD_SESSION_CAPABILITIES: SessionCapabilities = {
@@ -31,9 +26,7 @@ export const CHILD_SESSION_CAPABILITIES: SessionCapabilities = {
   includeCheckStatusTool: false,
   includeWaitTool: false,
   includeShowContextTool: false,
-  includeSummarizeContextTool: false,
+  includeDistillContextTool: false,
   includeAskTool: false,
-  includePlanTool: false,
   includeSkillTools: false,
-  includeReloadSkillsTool: false,
 };

@@ -70,7 +70,7 @@ describe("manual summarize / compact commands", () => {
       expect(session._showContextAnnotations).toBeInstanceOf(Map);
       const injected = session._log.findLast((e: any) => e.type === "user_message");
       expect(injected.display).toBe("[Manual summarize request]");
-      expect(String(injected.content)).toContain("Do not continue the main task beyond this summarize request.");
+      expect(String(injected.content)).toContain("Do not continue the main task beyond this distill request.");
       expect(String(injected.content)).toContain("Additional user instruction for this manual summarize request:");
       expect(String(injected.content)).toContain("keep deployment notes");
     } finally {

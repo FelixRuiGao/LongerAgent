@@ -110,29 +110,6 @@ describe("Phase 2 tool validation and grep limits", () => {
     }
   });
 
-  it("treats explicit empty content_b as provided input for diff", async () => {
-    const root = makeTempDir("longeragent-phase2-diff-empty-");
-    const externalRoot = makeTempDir("longeragent-phase2-diff-ext-");
-    try {
-      writeFileSync(join(root, "a.txt"), "hello\n", "utf-8");
-      const outside = join(externalRoot, "outside.txt");
-      writeFileSync(outside, "outside\n", "utf-8");
-
-      const result = await executeTool(
-        "diff",
-        { file_a: "a.txt", file_b: outside, content_b: "" },
-        { projectRoot: root },
-      );
-
-      expect(result.content).toContain("+++ (provided content)");
-      expect(result.content).not.toContain("project root boundary");
-      expect(result.content).not.toContain("Provide either file_b or content_b");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-      rmSync(externalRoot, { recursive: true, force: true });
-    }
-  });
-
   it("returns a diff preview metadata block for edit_file", async () => {
     const root = makeTempDir("longeragent-phase2-edit-preview-");
     try {
@@ -237,8 +214,8 @@ describe("Phase 2 tool validation and grep limits", () => {
     const killBad = Session.prototype["_execKillAgent"].call(fake, { ids: "a" });
     expect(killBad.content).toContain("invalid arguments for kill_agent");
 
-    const spawnBad = await Session.prototype["_execSpawnAgents"].call(fake, { file: 123 });
-    expect(spawnBad.content).toContain("invalid arguments for spawn_agent");
+    const spawnBad = await Session.prototype["_execSpawnFile"].call(fake, { file: 123 });
+    expect(spawnBad.content).toContain("invalid arguments for spawn_file");
 
     const askBad = Session.prototype["_execAsk"].call(fake, { questions: "bad" });
     expect(askBad.content).toContain("Error: 'questions' must be an array of 1-4 items.");

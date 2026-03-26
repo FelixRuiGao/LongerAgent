@@ -95,7 +95,6 @@ export interface ConversationEntry {
 export interface SessionPreferences {
   thinkingLevel: string;
   thinkingLevels: string[];
-  cacheHitEnabled: boolean;
   contextRatio: number;
   accentColor: string;
 }

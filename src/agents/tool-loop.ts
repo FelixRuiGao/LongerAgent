@@ -117,16 +117,11 @@ export function generateToolCallDisplay(
     case "edit_file":
     case "write_file":
       return path ? `${toolName} ${path}` : toolName;
-    case "apply_patch":
-      return toolName;
     case "glob":
       return pattern ? `${toolName} ${pattern}` : toolName;
     case "grep":
       return pattern && path ? `${toolName} ${pattern} in ${path}` : pattern ? `${toolName} ${pattern}` : toolName;
-    case "diff":
-      return compactDisplayValue(toolArgs["file_a"]) ? `${toolName} ${compactDisplayValue(toolArgs["file_a"])}` : toolName;
     case "bash":
-    case "test":
       return command ? `${toolName} ${command}` : toolName;
     case "bash_background":
       return command ? `${toolName} ${command}` : toolName;
@@ -139,7 +134,9 @@ export function generateToolCallDisplay(
     case "web_search":
     case "$web_search":
       return compactDisplayValue(toolArgs["query"]) ? `${toolName} ${compactDisplayValue(toolArgs["query"])}` : toolName;
-    case "spawn_agent":
+    case "spawn":
+      return id ? `${toolName} ${id}` : toolName;
+    case "spawn_file":
       return file ? `${toolName} ${file}` : toolName;
     case "kill_agent":
       return ids ? `${toolName} ${ids}` : toolName;
@@ -150,7 +147,7 @@ export function generateToolCallDisplay(
           : `${toolName} ${shell}`;
       }
       return toolArgs["seconds"] !== undefined ? `${toolName} ${String(toolArgs["seconds"])}s` : toolName;
-    case "summarize_context":
+    case "distill_context":
       return contextIds ? `${toolName} ${contextIds}` : toolName;
     case "skill":
       return name ? `${toolName} ${name}` : toolName;
@@ -278,8 +275,8 @@ export interface ToolLoopOptions {
   ) => { compactNeeded: boolean; scenario?: "output" | "toolcall" } | null;
   /** Unified thinking level override (passed to provider). */
   thinkingLevel?: string;
-  /** Whether to enable provider-specific prompt caching. */
-  cacheEnabled?: boolean;
+  /** Routing key for OpenAI prompt cache affinity (e.g. child session id). */
+  promptCacheKey?: string;
   /** Called after each tool_result is appended, for incremental persistence. */
   onSaveCheckpoint?: () => void;
   /** Optional preflight gate before executing a tool call (may ask/pause/deny). */
@@ -326,7 +323,7 @@ export async function asyncRunToolLoop(
     onTokenUpdate,
     compactCheck,
     thinkingLevel,
-    cacheEnabled,
+    promptCacheKey,
     onSaveCheckpoint,
     beforeToolExecute,
     getNotification,
@@ -398,7 +395,7 @@ export async function asyncRunToolLoop(
             onReasoningChunk: wrappedReasoningChunk,
             signal,
             thinkingLevel,
-            cacheEnabled,
+            promptCacheKey,
           },
         );
         if (networkRetryCount > 0) {

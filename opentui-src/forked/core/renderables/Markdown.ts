@@ -622,7 +622,7 @@ export class MarkdownRenderable extends Renderable {
     this.renderInlineContent(cell.tokens, chunks)
 
     const baseChunks = chunks.length > 0 ? chunks : [this.createDefaultChunk(" ")]
-    const headingStyle = this.getStyle("markup.heading") || this.getStyle("default")
+    const headingStyle = this.getStyle("markup.heading.table") || this.getStyle("markup.heading") || this.getStyle("default")
     if (!headingStyle) {
       return baseChunks
     }

@@ -64,7 +64,7 @@ longeragent --version           # Show the current version
 
 ### Agent-Driven Context Management
 
-LongerAgent gives the agent tools to inspect its own context distribution (`show_context`) and surgically compress what it chooses (`summarize_context`). Each conversation segment is internally tagged with a unique ID and a token-cost annotation, so the agent can make rational cost-benefit decisions about what to keep and what to compress. The system only steps in as a last-resort safety net.
+LongerAgent gives the agent tools to inspect its own context distribution (`show_context`) and distill what it chooses (`distill_context`). Each conversation segment is internally tagged with a unique ID and a token-cost annotation, so the agent can make rational cost-benefit decisions about what to keep and what to let go. The system only steps in as a last-resort safety net.
 
 Three layers work together: hint compression nudges the agent early, agent-initiated summarization gives it precise control, and auto-compact catches anything that slips through.
 
@@ -119,17 +119,17 @@ That combination is the core of the demo, more than any individual slash command
 
 ### Tools
 
-**16 built-in tools:**
+**13 built-in tools:**
 
-`read_file` · `list_dir` · `glob` · `grep` · `edit_file` · `write_file` · `apply_patch` · `bash` · `bash_background` · `bash_output` · `kill_shell` · `diff` · `test` · `time` · `web_search` · `web_fetch`
+`read_file` · `list_dir` · `glob` · `grep` · `edit_file` · `write_file` · `bash` · `bash_background` · `bash_output` · `kill_shell` · `time` · `web_search` · `web_fetch`
 
 `read_file` supports image files (PNG, JPG, GIF, WebP, etc.) on multimodal models — the agent can directly see and analyze images.
 
 **8 orchestration tools:**
 
-`spawn_agent` · `kill_agent` · `check_status` · `wait` · `show_context` · `summarize_context` · `ask` · `plan`
+`spawn` · `spawn_file` · `kill_agent` · `check_status` · `wait` · `show_context` · `distill_context` · `ask`
 
-**Skills system** — Load reusable skill definitions as a dynamic `skill` tool. Manage with `/skills` (checkbox picker for enable/disable), hot-reload with `reload_skills`. Includes a built-in `skill-manager` that teaches the agent to search, download, and install new skills autonomously.
+**Skills system** — Load reusable skill definitions as a dynamic `skill` tool. Manage with `/skills` (checkbox picker for enable/disable). Skills are auto-discovered each turn — install or remove skill directories and changes take effect immediately. Includes a built-in `skill-manager` that teaches the agent to search, download, and install new skills autonomously.
 
 **MCP Integration** — Connect to Model Context Protocol servers for additional tools. Use `/mcp` to verify configured servers and inspect discovered tools before your first turn.
 

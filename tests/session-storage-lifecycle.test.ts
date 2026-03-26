@@ -144,7 +144,6 @@ describe("session storage lifecycle", () => {
         modelSelectionKey: "moonshotai/kimi-k2.5",
         modelId: "moonshotai/kimi-k2.5",
         thinkingLevel: "high",
-        cacheHitEnabled: false,
       });
 
       expect(store.loadGlobalPreferences()).toEqual(
@@ -154,8 +153,7 @@ describe("session storage lifecycle", () => {
           modelSelectionKey: "moonshotai/kimi-k2.5",
           modelId: "moonshotai/kimi-k2.5",
           thinkingLevel: "high",
-          cacheHitEnabled: false,
-        }),
+          }),
       );
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
@@ -255,13 +253,11 @@ describe("session storage lifecycle", () => {
         modelSelectionKey: "gpt-5.2",
         modelId: "gpt-5.2",
         thinkingLevel: "high",
-        cacheHitEnabled: false,
       });
 
       session.resetForNewSession(store);
 
       expect(session.thinkingLevel).toBe("high");
-      expect(session.cacheHitEnabled).toBe(false);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
@@ -333,7 +329,6 @@ describe("session storage lifecycle", () => {
       idAllocator.restoreFrom(entries);
 
       session.thinkingLevel = "low";
-      session.cacheHitEnabled = true;
 
       session.restoreFromLog(
         createLogSessionMeta({
@@ -344,8 +339,7 @@ describe("session storage lifecycle", () => {
           projectPath: projectRoot,
           modelConfigName: "restored-model",
           thinkingLevel: "high",
-          cacheHitEnabled: false,
-        }),
+          }),
         entries,
         idAllocator,
       );
@@ -356,9 +350,7 @@ describe("session storage lifecycle", () => {
       expect(session.thinkingLevel).toBe(
         session._resolveThinkingLevelForModel("claude-sonnet-4-5", "high"),
       );
-      expect(session.cacheHitEnabled).toBe(false);
       expect(session._preferredThinkingLevel).toBe("high");
-      expect(session._preferredCacheHitEnabled).toBe(false);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
@@ -408,7 +400,6 @@ describe("session storage lifecycle", () => {
           modelSelectionKey: "kimi-k2.5",
           modelId: "kimi-k2.5",
           thinkingLevel: "default",
-          cacheHitEnabled: true,
         }),
         entries,
         idAllocator,
@@ -499,7 +490,6 @@ describe("session storage lifecycle", () => {
       const originalLog = session.log;
       const originalModelConfigName = session.currentModelConfigName;
       const originalThinkingLevel = session.thinkingLevel;
-      const originalCacheHitEnabled = session.cacheHitEnabled;
 
       const entries = [createSystemPrompt("sys-001", "prompt")];
       const idAllocator = new LogIdAllocator();
@@ -522,62 +512,7 @@ describe("session storage lifecycle", () => {
 
       expect(session.currentModelConfigName).toBe(originalModelConfigName);
       expect(session.thinkingLevel).toBe(originalThinkingLevel);
-      expect(session.cacheHitEnabled).toBe(originalCacheHitEnabled);
       expect(session.log).toBe(originalLog);
-    } finally {
-      rmSync(baseDir, { recursive: true, force: true });
-      rmSync(projectRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves a persisted plan internally after resume without re-injecting it into provider messages", async () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
-    try {
-      const store = new SessionStore({ baseDir, projectPath: projectRoot });
-      const session = makeSession(projectRoot, store) as any;
-      const sessionDir = store.createSession();
-
-      const submit = session._execPlan({
-        action: "submit",
-        checkpoints: ["Explore auth flow", "Implement fix"],
-      });
-      expect(submit.content).toContain("Plan submitted with 2 checkpoints.");
-
-      const persisted = session.getLogForPersistence();
-      saveLog(sessionDir, persisted.meta, [...persisted.entries]);
-
-      const loaded = loadLog(sessionDir);
-      expect(loaded.meta.activePlanCheckpoints).toEqual(["Explore auth flow", "Implement fix"]);
-
-      const restoredStore = new SessionStore({ baseDir, projectPath: projectRoot });
-      restoredStore.sessionDir = sessionDir;
-      const restored = makeSession(projectRoot, restoredStore) as any;
-      restored.restoreFromLog(loaded.meta, loaded.entries, loaded.idAllocator);
-      expect(restored._activePlanCheckpoints).toEqual(["Explore auth flow", "Implement fix"]);
-      expect(restored._activePlanChecked).toEqual([false, false]);
-
-      restored.primaryAgent.asyncRunWithMessages = async (
-        getMessages: () => Array<Record<string, unknown>>,
-      ) => {
-        const messages = getMessages();
-        const injected = messages.find((msg) => String(msg.content ?? "").includes("## Active Plan"));
-        expect(injected).toBeUndefined();
-        return {
-          text: "",
-          toolHistory: [],
-          totalUsage: { inputTokens: 1, outputTokens: 0 },
-          intermediateText: [],
-          lastInputTokens: 1,
-          reasoningContent: "",
-          reasoningState: null,
-          lastTotalTokens: 1,
-          textHandledInLog: false,
-          reasoningHandledInLog: false,
-        };
-      };
-
-      await restored._runActivation();
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });

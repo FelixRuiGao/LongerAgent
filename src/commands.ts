@@ -479,45 +479,7 @@ async function cmdThinking(ctx: CommandContext, args: string): Promise<void> {
   ctx.showMessage(`Thinking level set to: ${trimmed}`);
 }
 
-function cacheHitOptions(ctx: CommandOptionsContext): CommandOption[] {
-  const session = ctx.session;
-  const enabled = session.cacheHitEnabled ?? true;
-  return [
-    { label: enabled ? "ON  (current)" : "ON", value: "on" },
-    { label: enabled ? "OFF" : "OFF  (current)", value: "off" },
-  ];
-}
 
-async function cmdCacheHit(ctx: CommandContext, args: string): Promise<void> {
-  const session = ctx.session;
-  const trimmed = args.trim().toLowerCase();
-
-  if (trimmed === "on") {
-    session.cacheHitEnabled = true;
-  } else if (trimmed === "off") {
-    session.cacheHitEnabled = false;
-  } else {
-    // No argument toggles the current setting.
-    session.cacheHitEnabled = !session.cacheHitEnabled;
-  }
-
-  persistGlobalPreferences(ctx);
-
-  const state = session.cacheHitEnabled ? "ON" : "OFF";
-  const provider = session.primaryAgent?.modelConfig?.provider ?? "";
-  let note = "";
-  if (provider === "anthropic") {
-    note = session.cacheHitEnabled
-      ? " (cache_control markers will be sent)"
-      : " (cache_control markers disabled)";
-  } else if (provider === "openrouter") {
-    note = " (Cache is automatic via OpenRouter for supported models)";
-  } else {
-    note = " (Cache is automatic for this provider)";
-  }
-
-  ctx.showMessage(`Prompt caching: ${state}${note}`);
-}
 
 // ------------------------------------------------------------------
 // /model command
@@ -982,7 +944,6 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/quit", description: "Exit the application", handler: cmdQuit });
   registry.register({ name: "/exit", description: "Exit the application", handler: cmdQuit });
   registry.register({ name: "/thinking", description: "Set thinking level", handler: cmdThinking, options: thinkingOptions });
-  registry.register({ name: "/cachehit", description: "Prompt caching", handler: cmdCacheHit, options: cacheHitOptions });
   registry.register({ name: "/theme", description: "Change accent color", handler: cmdTheme, options: themeOptions });
   registry.register({ name: "/skills", description: "Manage installed skills", handler: cmdSkills, options: skillsOptions, checkboxMode: true });
   registry.register({ name: "/mcp", description: "Show MCP server status and tools", handler: cmdMcp });

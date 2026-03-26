@@ -41,7 +41,6 @@ describe("path security integration", () => {
         ["grep", { pattern: "outside", path: externalRoot }],
         ["edit_file", { path: outsideFile, old_str: "outside", new_str: "edited" }],
         ["write_file", { path: join(externalRoot, "new.txt"), content: "x" }],
-        ["diff", { file_a: outsideFile, content_b: "changed" }],
       ];
 
       for (const [toolName, args] of cases) {
@@ -54,13 +53,13 @@ describe("path security integration", () => {
     }
   });
 
-  it("rejects spawn_agents call files outside SESSION_ARTIFACTS", async () => {
+  it("rejects spawn_file call files outside SESSION_ARTIFACTS", async () => {
     const artifactsDir = makeTempDir("longeragent-artifacts-");
     try {
       const fakeSession = Object.create(Session.prototype) as any;
       fakeSession._resolveSessionArtifacts = () => artifactsDir;
 
-      const result = await (Session.prototype as any)._execSpawnAgents.call(
+      const result = await (Session.prototype as any)._execSpawnFile.call(
         fakeSession,
         { file: "../outside.yaml" },
       );
@@ -69,6 +68,28 @@ describe("path security integration", () => {
     } finally {
       rmSync(artifactsDir, { recursive: true, force: true });
     }
+  });
+
+  it("rejects spawn with missing template", async () => {
+    const fakeSession = Object.create(Session.prototype) as any;
+    fakeSession._resolveSessionArtifacts = () => "/tmp/fake";
+
+    const result = await (Session.prototype as any)._execSpawn.call(
+      fakeSession,
+      { id: "test-agent", task: "do stuff", mode: "oneshot" },
+    );
+    expect(result.content).toContain("must specify either 'template' or 'template_path'");
+  });
+
+  it("rejects spawn with both template and template_path", async () => {
+    const fakeSession = Object.create(Session.prototype) as any;
+    fakeSession._resolveSessionArtifacts = () => "/tmp/fake";
+
+    const result = await (Session.prototype as any)._execSpawn.call(
+      fakeSession,
+      { id: "test-agent", template: "explorer", template_path: "custom/", task: "do stuff", mode: "oneshot" },
+    );
+    expect(result.content).toContain("cannot specify both");
   });
 
   it("enforces SESSION_ARTIFACTS boundary for template_path (including symlink escapes)", () => {

@@ -8,12 +8,48 @@
 
 import type { ToolDef } from "../providers/base.js";
 
-export const SPAWN_AGENT_TOOL: ToolDef = {
-  name: "spawn_agent",
+export const SPAWN_TOOL: ToolDef = {
+  name: "spawn",
   description:
-    "Spawn sub-agents from a YAML call file written to {SESSION_ARTIFACTS}. " +
-    "Check pre-defined templates (e.g. 'explorer') before creating custom ones. " +
+    "Spawn a single sub-agent with inline parameters. " +
+    "Check pre-defined templates (e.g. 'explorer', 'executor') before creating custom ones. " +
     "See system prompt for available templates and their capabilities.",
+  parameters: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "Unique agent ID.",
+      },
+      template: {
+        type: "string",
+        description: "Pre-defined template name, e.g. 'explorer', 'executor'.",
+      },
+      template_path: {
+        type: "string",
+        description: "Path to a custom template directory relative to {SESSION_ARTIFACTS}.",
+      },
+      task: {
+        type: "string",
+        description: "Task description for the agent.",
+      },
+      mode: {
+        type: "string",
+        enum: ["oneshot", "persistent"],
+        description: "Agent mode: 'oneshot' (single turn) or 'persistent' (stays alive, receives messages via send).",
+      },
+    },
+    required: ["id", "task", "mode"],
+  },
+  summaryTemplate: "{agent} is spawning sub-agent {id}",
+};
+
+export const SPAWN_FILE_TOOL: ToolDef = {
+  name: "spawn_file",
+  description:
+    "Spawn multiple sub-agents or agent teams from a YAML call file. " +
+    "Use this when spawning 2+ agents in parallel or creating teams with send-based communication. " +
+    "For a single agent, prefer spawn instead.",
   parameters: {
     type: "object",
     properties: {
@@ -25,7 +61,7 @@ export const SPAWN_AGENT_TOOL: ToolDef = {
     },
     required: ["file"],
   },
-  summaryTemplate: "{agent} is spawning sub-agents",
+  summaryTemplate: "{agent} is spawning sub-agents from {file}",
 };
 
 export const KILL_AGENT_TOOL: ToolDef = {
@@ -84,7 +120,7 @@ export const SHOW_CONTEXT_TOOL: ToolDef = {
   description:
     "Display the context distribution of the current active window. " +
     "Returns a Context Map showing all context groups with their sizes and types. " +
-    "Also causes detailed annotations to appear inline until the next summarize_context call or show_context(dismiss=true), " +
+    "Also causes detailed annotations to appear inline until the next distill_context call or show_context(dismiss=true), " +
     "showing exactly what each context ID covers and the approximate size of each part.",
   parameters: {
     type: "object",
@@ -100,17 +136,17 @@ export const SHOW_CONTEXT_TOOL: ToolDef = {
   summaryTemplate: "{agent} is inspecting context",
 };
 
-export const SUMMARIZE_CONTEXT_TOOL: ToolDef = {
-  name: "summarize_context",
+export const DISTILL_CONTEXT_TOOL: ToolDef = {
+  name: "distill_context",
   description:
-    "Compress groups of spatially contiguous contexts into summaries. " +
+    "Distill groups of spatially contiguous contexts — extract and preserve valuable information, discard the rest. " +
     "If you need to inspect the current context distribution first, call show_context.",
   parameters: {
     type: "object",
     properties: {
       operations: {
         type: "array",
-        description: "Each operation summarizes a group of contiguous context_ids.",
+        description: "Each operation distills a group of contiguous context_ids into a preserved extract.",
         items: {
           type: "object",
           properties: {
@@ -119,26 +155,22 @@ export const SUMMARIZE_CONTEXT_TOOL: ToolDef = {
               items: { type: "string" },
               description: "Spatially contiguous context IDs to merge.",
             },
-            summary: {
+            content: {
               type: "string",
-              description: "Summary preserving decisions, key facts, file paths, and unresolved issues. Match length to the information density of the original content.",
+              description: "Distilled content preserving decisions, key facts, file paths, code references, and unresolved issues. Length should match the information density of the original — preserve everything you'd look back at.",
             },
             reason: {
               type: "string",
-              description: "Brief reason for summarizing.",
+              description: "Brief reason for distilling this group.",
             },
           },
-          required: ["context_ids", "summary"],
+          required: ["context_ids", "content"],
         },
       },
-      file: {
-        type: "string",
-        description: "Path to a .yaml file containing the operations. Resolved relative to session artifacts directory. Use this for complex multi-context summarizations.",
-      },
     },
-    required: [],
+    required: ["operations"],
   },
-  summaryTemplate: "{agent} is summarizing context",
+  summaryTemplate: "{agent} is distilling context",
 };
 
 export const CHECK_STATUS_TOOL: ToolDef = {
@@ -208,33 +240,3 @@ export const SEND_TOOL: ToolDef = {
   summaryTemplate: "{agent} sent message to {to}",
 };
 
-export const PLAN_TOOL: ToolDef = {
-  name: "plan",
-  description:
-    "Manage an execution plan with tracked checkpoints. " +
-    "Submit checkpoints, check off completed items, or dismiss the plan.",
-  parameters: {
-    type: "object",
-    properties: {
-      action: {
-        type: "string",
-        enum: ["submit", "check", "dismiss"],
-        description:
-          "Action to perform: 'submit' to activate a plan, 'check' to mark a checkpoint done, 'dismiss' to abandon the plan.",
-      },
-      checkpoints: {
-        type: "array",
-        items: { type: "string" },
-        description:
-          "List of checkpoint descriptions (required for 'submit').",
-      },
-      item: {
-        type: "number",
-        description:
-          "1-based index of the checkpoint to mark as done (required for 'check').",
-      },
-    },
-    required: ["action"],
-  },
-  summaryTemplate: "{agent} is managing plan ({action})",
-};

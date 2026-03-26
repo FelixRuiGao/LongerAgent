@@ -30,7 +30,6 @@ function makeSessionLike(projectRoot: string): any {
   s._usedContextIds = new Set<string>();
   s._hintState = "none";
   s._thinkingLevel = "default";
-  s._cacheHitEnabled = true;
   s._currentMasterPlan = undefined;
   s._currentPhasePlan = undefined;
   s._turnInFlight = null;

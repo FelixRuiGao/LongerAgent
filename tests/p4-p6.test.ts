@@ -107,9 +107,9 @@ describe("P4 shell governance", () => {
   });
 });
 
-describe("P6 summarize_context behavior", () => {
-  it("summarize_context succeeds and hint state is preserved until next API call", () => {
-    const projectRoot = makeTempDir("longeragent-p6-summarize-hint-");
+describe("P6 distill_context behavior", () => {
+  it("distill_context succeeds and hint state is preserved until next API call", () => {
+    const projectRoot = makeTempDir("longeragent-p6-distill-hint-");
     try {
       const session = makeSession(projectRoot);
       (session as any)._hintState = "level1_sent";
@@ -118,16 +118,16 @@ describe("P6 summarize_context behavior", () => {
         createUserMessage("user-001", 1, "hello", "hello", "seed1"),
       );
 
-      const success = (session as any)._execSummarizeContext({
-        operations: [{ context_ids: ["seed1"], summary: "compressed" }],
+      const success = (session as any)._execDistillContext({
+        operations: [{ context_ids: ["seed1"], content: "compressed" }],
       }) as ToolResult;
       expect(success.content).toContain("1 succeeded");
-      // Hint state is NOT reset by summarize_context itself —
+      // Hint state is NOT reset by distill_context itself —
       // it's updated by _updateHintStateAfterApiCall based on actual inputTokens
       expect((session as any)._hintState).toBe("level1_sent");
 
-      const fail = (session as any)._execSummarizeContext({
-        operations: [{ context_ids: ["missing"], summary: "will fail" }],
+      const fail = (session as any)._execDistillContext({
+        operations: [{ context_ids: ["missing"], content: "will fail" }],
       }) as ToolResult;
       expect(fail.content).toContain("0 succeeded");
       expect((session as any)._hintState).toBe("level1_sent");
@@ -211,7 +211,7 @@ describe("P6 summarize_context behavior", () => {
       };
 
       await session._runActivation();
-      // Annotations still active (cleared by summarize_context or show_context(dismiss=true))
+      // Annotations still active (cleared by distill_context or show_context(dismiss=true))
       expect(session._showContextRoundsRemaining).toBe(1);
       expect(session._showContextAnnotations).not.toBeNull();
 

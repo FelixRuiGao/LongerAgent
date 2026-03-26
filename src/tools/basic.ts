@@ -1,9 +1,9 @@
 /**
  * Built-in tool definitions and executors.
  *
- * 16 tools: read_file, list_dir, glob, grep, edit_file, write_file,
- * apply_patch, bash, bash_background, bash_output, kill_shell,
- * diff, test, time, web_search, web_fetch.
+ * 13 tools: read_file, list_dir, glob, grep, edit_file, write_file,
+ * bash, bash_background, bash_output, kill_shell,
+ * time, web_search, web_fetch.
  */
 
 import fs from "node:fs/promises";
@@ -176,12 +176,18 @@ const EDIT: ToolDef = {
 const WRITE: ToolDef = {
   name: "write_file",
   description:
-    "Create or overwrite a file with the given content. Parent directories are created automatically.",
+    "Create or overwrite a file with the given content. Parent directories are created automatically. " +
+    "Set append=true to append content to the end of an existing file instead of overwriting.",
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path to write" },
-      content: { type: "string", description: "Full file content" },
+      content: { type: "string", description: "Full file content (or content to append)" },
+      append: {
+        type: "boolean",
+        description: "If true, append content to the end of the file instead of overwriting.",
+        default: false,
+      },
       expected_mtime_ms: {
         type: "integer",
         description:
@@ -192,33 +198,6 @@ const WRITE: ToolDef = {
     required: ["path", "content"],
   },
   summaryTemplate: "{agent} is writing to {path}",
-};
-
-const APPLY_PATCH: ToolDef = {
-  name: "apply_patch",
-  description:
-    "Apply a structured multi-file patch. " +
-    "Use for multi-hunk edits, appending to large files, and coordinated file changes. " +
-    "Patch syntax uses explicit markers such as '*** Begin Patch', " +
-    "'*** Update File:', '*** Append File:', '*** Add File:', '*** Delete File:', and '*** End Patch'.",
-  parameters: {
-    type: "object",
-    properties: {
-      patch: {
-        type: "string",
-        description:
-          "Full patch text. Example:\n" +
-          "*** Begin Patch\n" +
-          "*** Update File: src/app.ts\n" +
-          "@@\n" +
-          "-old line\n" +
-          "+new line\n" +
-          "*** End Patch",
-      },
-    },
-    required: ["patch"],
-  },
-  summaryTemplate: "{agent} is applying a patch",
 };
 
 const BASH: ToolDef = {
@@ -242,53 +221,6 @@ const BASH: ToolDef = {
     required: ["command"],
   },
   summaryTemplate: "{agent} is running a shell command",
-};
-
-const DIFF: ToolDef = {
-  name: "diff",
-  description:
-    "Show unified diff between two files, or between a file's current content and provided new content.",
-  parameters: {
-    type: "object",
-    properties: {
-      file_a: { type: "string", description: "Path to first file" },
-      file_b: {
-        type: "string",
-        description: "Path to second file (optional if content_b is given)",
-        default: "",
-      },
-      content_b: {
-        type: "string",
-        description:
-          "Content to compare against file_a (optional if file_b is given)",
-        default: "",
-      },
-    },
-    required: ["file_a"],
-  },
-  summaryTemplate: "{agent} is comparing {file_a}",
-};
-
-const TEST: ToolDef = {
-  name: "test",
-  description: "Run a test command (e.g. pytest, unittest) and return the result.",
-  parameters: {
-    type: "object",
-    properties: {
-      command: {
-        type: "string",
-        description: "Test command to run (default: 'python -m pytest')",
-        default: "python -m pytest",
-      },
-      timeout: {
-        type: "integer",
-        description: "Timeout in seconds (default: 60)",
-        default: 60,
-      },
-    },
-    required: [],
-  },
-  summaryTemplate: "{agent} is running tests",
 };
 
 const TIME: ToolDef = {
@@ -482,13 +414,10 @@ export const BASIC_TOOLS: ToolDef[] = [
   GREP,
   EDIT,
   WRITE,
-  APPLY_PATCH,
   BASH,
   BASH_BACKGROUND_TOOL,
   BASH_OUTPUT_TOOL,
   KILL_SHELL_TOOL,
-  DIFF,
-  TEST,
   TIME,
   WEB_SEARCH,
   WEB_FETCH,
@@ -879,6 +808,7 @@ async function toolWriteFile(
   filePath: string,
   content: string,
   expectedMtimeMs?: number,
+  append = false,
 ): Promise<string | ToolResult> {
   return withFileWriteLock(filePath, async () => {
     try {
@@ -890,8 +820,11 @@ async function toolWriteFile(
       const before = initialVersion.exists
         ? readFileSync(filePath, { encoding: "utf-8" })
         : "";
+
+      const finalContent = append ? before + content : content;
+
       const beforeLines = before.length > 0 ? before.split("\n") : [];
-      const afterLines = content.length > 0 ? content.split("\n") : [];
+      const afterLines = finalContent.length > 0 ? finalContent.split("\n") : [];
       const diffPreview = buildUnifiedDiffPreview(
         simpleUnifiedDiff(
           beforeLines,
@@ -901,11 +834,12 @@ async function toolWriteFile(
         ),
       );
 
-      await atomicWriteTextFile(filePath, content, mode, initialVersion);
+      await atomicWriteTextFile(filePath, finalContent, mode, initialVersion);
 
       const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
+      const verb = append ? "Appended" : "Wrote";
       return new ToolResult({
-        content: `OK: Wrote ${content.length} characters to ${filePath} [mtime_ms=${newMtimeMs}]`,
+        content: `OK: ${verb} ${content.length} characters to ${filePath} [mtime_ms=${newMtimeMs}]`,
         metadata: {
           path: filePath,
           tui_preview: {
@@ -967,343 +901,6 @@ async function atomicWriteTextFile(
       }
     }
   }
-}
-
-// ------------------------------------------------------------------
-// apply_patch
-// ------------------------------------------------------------------
-
-type ApplyPatchOp =
-  | { type: "add"; path: string; contents: string }
-  | { type: "append"; path: string; contents: string }
-  | { type: "delete"; path: string }
-  | { type: "update"; path: string; chunks: ApplyPatchChunk[] };
-
-interface ApplyPatchChunk {
-  oldLines: string[];
-  newLines: string[];
-  changeContext?: string;
-}
-
-interface PreparedPatchChange {
-  type: "add" | "append" | "delete" | "update";
-  requestedPath: string;
-  filePath: string;
-  before: string;
-  after: string | null;
-  mode?: number;
-}
-
-function parsePatchBodyLines(lines: string[], startIdx: number): { contents: string; nextIdx: number } {
-  const contentLines: string[] = [];
-  let i = startIdx;
-  while (i < lines.length && !lines[i].startsWith("***")) {
-    const line = lines[i];
-    if (line.startsWith("+")) {
-      contentLines.push(line.slice(1));
-    } else if (line.trim() !== "") {
-      throw new Error(`Invalid patch line in add/append block: '${line}'`);
-    }
-    i += 1;
-  }
-  return { contents: contentLines.join("\n"), nextIdx: i };
-}
-
-function parsePatchUpdateChunks(lines: string[], startIdx: number): { chunks: ApplyPatchChunk[]; nextIdx: number } {
-  const chunks: ApplyPatchChunk[] = [];
-  let i = startIdx;
-
-  while (i < lines.length && !lines[i].startsWith("***")) {
-    if (!lines[i].startsWith("@@")) {
-      if (!lines[i].trim()) {
-        i += 1;
-        continue;
-      }
-      throw new Error(`Invalid patch chunk header: '${lines[i]}'`);
-    }
-
-    const changeContext = lines[i].slice(2).trim() || undefined;
-    i += 1;
-    const oldLines: string[] = [];
-    const newLines: string[] = [];
-
-    while (i < lines.length && !lines[i].startsWith("@@") && !lines[i].startsWith("***")) {
-      const line = lines[i];
-      if (line.startsWith(" ")) {
-        const content = line.slice(1);
-        oldLines.push(content);
-        newLines.push(content);
-      } else if (line.startsWith("-")) {
-        oldLines.push(line.slice(1));
-      } else if (line.startsWith("+")) {
-        newLines.push(line.slice(1));
-      } else if (line.trim() !== "") {
-        throw new Error(`Invalid patch change line: '${line}'`);
-      }
-      i += 1;
-    }
-
-    if (oldLines.length === 0 && newLines.length === 0) {
-      throw new Error("Empty update chunk is not allowed.");
-    }
-
-    chunks.push({ oldLines, newLines, changeContext });
-  }
-
-  return { chunks, nextIdx: i };
-}
-
-function parseApplyPatchText(patchText: string): ApplyPatchOp[] {
-  const trimmed = patchText.trim();
-  if (!trimmed) throw new Error("patchText is required.");
-
-  const lines = trimmed.split("\n");
-  const beginIdx = lines.findIndex((line) => line.trim() === "*** Begin Patch");
-  const endIdx = lines.findIndex((line) => line.trim() === "*** End Patch");
-  if (beginIdx === -1 || endIdx === -1 || beginIdx >= endIdx) {
-    throw new Error("Invalid patch format: missing Begin/End markers.");
-  }
-
-  const ops: ApplyPatchOp[] = [];
-  let i = beginIdx + 1;
-  while (i < endIdx) {
-    const line = lines[i];
-    if (!line.trim()) {
-      i += 1;
-      continue;
-    }
-
-    if (line.startsWith("*** Add File:")) {
-      const requestedPath = line.slice("*** Add File:".length).trim();
-      if (!requestedPath) throw new Error("Add File is missing a path.");
-      const { contents, nextIdx } = parsePatchBodyLines(lines, i + 1);
-      ops.push({ type: "add", path: requestedPath, contents });
-      i = nextIdx;
-      continue;
-    }
-
-    if (line.startsWith("*** Append File:")) {
-      const requestedPath = line.slice("*** Append File:".length).trim();
-      if (!requestedPath) throw new Error("Append File is missing a path.");
-      const { contents, nextIdx } = parsePatchBodyLines(lines, i + 1);
-      ops.push({ type: "append", path: requestedPath, contents });
-      i = nextIdx;
-      continue;
-    }
-
-    if (line.startsWith("*** Delete File:")) {
-      const requestedPath = line.slice("*** Delete File:".length).trim();
-      if (!requestedPath) throw new Error("Delete File is missing a path.");
-      ops.push({ type: "delete", path: requestedPath });
-      i += 1;
-      continue;
-    }
-
-    if (line.startsWith("*** Update File:")) {
-      const requestedPath = line.slice("*** Update File:".length).trim();
-      if (!requestedPath) throw new Error("Update File is missing a path.");
-      const { chunks, nextIdx } = parsePatchUpdateChunks(lines, i + 1);
-      if (!chunks.length) {
-        throw new Error(`Update File '${requestedPath}' does not contain any chunks.`);
-      }
-      ops.push({ type: "update", path: requestedPath, chunks });
-      i = nextIdx;
-      continue;
-    }
-
-    throw new Error(`Invalid patch directive: '${line}'`);
-  }
-
-  if (!ops.length) {
-    throw new Error("patch rejected: empty patch");
-  }
-
-  return ops;
-}
-
-function seekSequence(lines: string[], needle: string[], startIdx: number): number {
-  if (needle.length === 0) return startIdx;
-  outer:
-  for (let i = Math.max(0, startIdx); i <= lines.length - needle.length; i += 1) {
-    for (let j = 0; j < needle.length; j += 1) {
-      if (lines[i + j] !== needle[j]) continue outer;
-    }
-    return i;
-  }
-  return -1;
-}
-
-function applyUpdateChunksToContent(
-  filePath: string,
-  originalContent: string,
-  chunks: ApplyPatchChunk[],
-): string {
-  let lines = originalContent.split("\n");
-  if (lines.length > 0 && lines[lines.length - 1] === "") {
-    lines = lines.slice(0, -1);
-  }
-
-  let cursor = 0;
-  for (const chunk of chunks) {
-    const oldSeq = chunk.oldLines;
-    let matchIdx = -1;
-
-    if (chunk.changeContext) {
-      for (let i = cursor; i < lines.length; i += 1) {
-        if (lines[i] !== chunk.changeContext) continue;
-        const candidate = seekSequence(lines, oldSeq, i);
-        if (candidate !== -1) {
-          matchIdx = candidate;
-          break;
-        }
-      }
-    } else {
-      matchIdx = seekSequence(lines, oldSeq, cursor);
-      if (matchIdx === -1) {
-        matchIdx = seekSequence(lines, oldSeq, 0);
-      }
-    }
-
-    if (matchIdx === -1) {
-      const detail = chunk.changeContext
-        ? `context '${chunk.changeContext}'`
-        : oldSeq.length > 0
-          ? `sequence '${oldSeq[0]}'`
-          : "target location";
-      throw new Error(`Failed to match patch chunk in ${filePath}: ${detail}`);
-    }
-
-    lines.splice(matchIdx, oldSeq.length, ...chunk.newLines);
-    cursor = matchIdx + chunk.newLines.length;
-  }
-
-  let nextContent = lines.join("\n");
-  if (nextContent && !nextContent.endsWith("\n")) {
-    nextContent += "\n";
-  }
-  return nextContent;
-}
-
-function displayRelativePath(root: string, filePath: string): string {
-  const rel = path.relative(root, filePath) || path.basename(filePath);
-  return rel.split(path.sep).join("/");
-}
-
-async function toolApplyPatch(
-  patchText: string,
-  ctx?: ExecuteToolContext,
-): Promise<ToolResult> {
-  const ops = parseApplyPatchText(patchText);
-  const root = toolRoot(ctx);
-  const prepared: PreparedPatchChange[] = [];
-
-  for (const op of ops) {
-    if (op.type === "add") {
-      const filePath = scopedPath(op.path, "write", ctx, { allowCreate: true, expectFile: true });
-      if (existsSync(filePath)) {
-        throw new Error(`apply_patch verification failed: File already exists: ${displayRelativePath(root, filePath)}`);
-      }
-      prepared.push({
-        type: "add",
-        requestedPath: op.path,
-        filePath,
-        before: "",
-        after: op.contents,
-      });
-      continue;
-    }
-
-    if (op.type === "append") {
-      const filePath = scopedPath(op.path, "write", ctx, { mustExist: true, expectFile: true });
-      const before = readFileSync(filePath, "utf-8");
-      const separator = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
-      let after = before + separator + op.contents;
-      if (after && !after.endsWith("\n")) after += "\n";
-      prepared.push({
-        type: "append",
-        requestedPath: op.path,
-        filePath,
-        before,
-        after,
-        mode: getFileVersionSnapshot(filePath).mode,
-      });
-      continue;
-    }
-
-    if (op.type === "delete") {
-      const filePath = scopedPath(op.path, "write", ctx, { mustExist: true, expectFile: true });
-      prepared.push({
-        type: "delete",
-        requestedPath: op.path,
-        filePath,
-        before: readFileSync(filePath, "utf-8"),
-        after: null,
-        mode: getFileVersionSnapshot(filePath).mode,
-      });
-      continue;
-    }
-
-    const filePath = scopedPath(op.path, "write", ctx, { mustExist: true, expectFile: true });
-    const before = readFileSync(filePath, "utf-8");
-    const after = applyUpdateChunksToContent(filePath, before, op.chunks);
-    prepared.push({
-      type: "update",
-      requestedPath: op.path,
-      filePath,
-      before,
-      after,
-      mode: getFileVersionSnapshot(filePath).mode,
-    });
-  }
-
-  const previewDiffs: string[] = [];
-  for (const change of prepared) {
-    const beforeLines = change.before.split("\n");
-    const afterLines = (change.after ?? "").split("\n");
-    previewDiffs.push(
-      simpleUnifiedDiff(
-        beforeLines,
-        afterLines,
-        change.filePath,
-        change.filePath,
-      ),
-    );
-  }
-  const diffPreview = buildUnifiedDiffPreview(previewDiffs.join("\n"));
-
-  for (const change of prepared) {
-    if (change.after === null) {
-      await fs.unlink(change.filePath);
-      continue;
-    }
-    await fs.mkdir(path.dirname(change.filePath), { recursive: true });
-    const expectedVersion = change.type === "add"
-      ? undefined
-      : getFileVersionSnapshot(change.filePath);
-    await atomicWriteTextFile(change.filePath, change.after, change.mode, expectedVersion);
-  }
-
-  const lines = ["Success. Updated the following files:"];
-  for (const change of prepared) {
-    const kind = change.type === "add"
-      ? "A"
-      : change.type === "delete"
-        ? "D"
-        : "M";
-    lines.push(`${kind} ${displayRelativePath(root, change.filePath)}`);
-  }
-
-  return new ToolResult({
-    content: lines.join("\n"),
-    metadata: {
-      paths: prepared.map((change) => change.filePath),
-      tui_preview: {
-        kind: "diff",
-        text: diffPreview.text,
-        truncated: diffPreview.truncated,
-      },
-    },
-  });
 }
 
 // ------------------------------------------------------------------
@@ -1418,63 +1015,13 @@ async function toolBash(
 }
 
 // ------------------------------------------------------------------
-// diff
+// diff preview helpers (used by edit_file / write_file)
 // ------------------------------------------------------------------
-
-function toolDiff(
-  fileA: string,
-  fileB = "",
-  contentB = "",
-  contentBProvided = false,
-): string {
-  const sensitiveA = getSensitiveFileReadReason(fileA);
-  if (sensitiveA) {
-    return `ERROR: Access to sensitive file is blocked by default: ${fileA} (${sensitiveA}).`;
-  }
-  if (!existsSync(fileA)) {
-    return `ERROR: File not found: ${fileA}`;
-  }
-
-  let linesA: string[];
-  try {
-    linesA = readFileSync(fileA, { encoding: "utf-8" }).split("\n");
-  } catch (e) {
-    return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
-  }
-
-  let linesB: string[];
-  let labelB: string;
-
-  if (contentBProvided) {
-    linesB = contentB.split("\n");
-    labelB = "(provided content)";
-  } else if (fileB) {
-    const sensitiveB = getSensitiveFileReadReason(fileB);
-    if (sensitiveB) {
-      return `ERROR: Access to sensitive file is blocked by default: ${fileB} (${sensitiveB}).`;
-    }
-    if (!existsSync(fileB)) {
-      return `ERROR: File not found: ${fileB}`;
-    }
-    try {
-      linesB = readFileSync(fileB, { encoding: "utf-8" }).split("\n");
-    } catch (e) {
-      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
-    }
-    labelB = fileB;
-  } else {
-    return "ERROR: Provide either file_b or content_b.";
-  }
-
-  // Simple unified diff implementation
-  const result = simpleUnifiedDiff(linesA, linesB, fileA, labelB);
-  return result || "No differences found.";
-}
 
 function buildUnifiedDiffPreview(
   diff: string,
-  maxLines = 80,
-  maxChars = 8_000,
+  maxLines = 500,
+  maxChars = 50_000,
 ): { text: string; truncated: boolean } {
   if (!diff) {
     return { text: "(No textual changes.)", truncated: false };
@@ -1543,7 +1090,7 @@ function buildUnifiedDiffPreview(
   const formatLine = (line: PreviewLine): string => {
     const displayLine = displayLineFor(line);
     const lineCol = displayLine == null ? "".padStart(numberWidth, " ") : String(displayLine).padStart(numberWidth, " ");
-    return `${lineCol} | ${line.raw}`;
+    return `${lineCol} ${line.raw}`;
   };
 
   let previewLines = parsedLines;
@@ -1573,7 +1120,7 @@ function buildUnifiedDiffPreview(
   }
 
   if (truncated && !text.includes("diff preview truncated")) {
-    text += `\n${"".padStart(numberWidth)} | ... [diff preview truncated]`;
+    text += `\n${"".padStart(numberWidth)} ... [diff preview truncated]`;
   }
 
   return { text, truncated };
@@ -1700,14 +1247,6 @@ function simpleUnifiedDiff(
 
   if (hunks.length === 0) return "";
   return `--- ${labelA}\n+++ ${labelB}\n${hunks.join("\n")}`;
-}
-
-// ------------------------------------------------------------------
-// test
-// ------------------------------------------------------------------
-
-async function toolTest(command = "python -m pytest", timeout = 60): Promise<string> {
-  return toolBash(command, timeout);
 }
 
 function formatUtcOffset(date: Date): string {
@@ -2370,21 +1909,10 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
           ctx,
           { allowCreate: true, expectFile: true },
         );
-        return toolWriteFile(filePath, content, expectedMtimeMs);
+        const appendMode = a.append === true;
+        return toolWriteFile(filePath, content, expectedMtimeMs, appendMode);
       } catch (e) {
         return formatToolError("write_file", e);
-      }
-    },
-    apply_patch: async (args) => {
-      try {
-        const a = expectArgsObject("apply_patch", args);
-        const patch = requiredStringArg("apply_patch", a, "patch", { nonEmpty: true, maxLen: 200_000 });
-        return await toolApplyPatch(patch, ctx);
-      } catch (e) {
-        if (e instanceof ToolArgValidationError) {
-          return formatToolError("apply_patch", e);
-        }
-        return `ERROR: apply_patch verification failed: ${e instanceof Error ? e.message : String(e)}`;
       }
     },
     bash: async (args) => {
@@ -2405,47 +1933,6 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         return await toolBash(command, timeout ?? BASH_DEFAULT_TIMEOUT, cwd);
       } catch (e) {
         return formatToolError("bash", e);
-      }
-    },
-    diff: (args) => {
-      try {
-        const a = expectArgsObject("diff", args);
-        const fileAArg = requiredStringArg("diff", a, "file_a", { nonEmpty: true });
-        const rawFileB = optionalStringArg("diff", a, "file_b", "");
-        const hasContentB = Object.prototype.hasOwnProperty.call(a, "content_b");
-        const contentB = optionalStringArg("diff", a, "content_b", "");
-        const fileA = scopedPath(
-          fileAArg,
-          "diff",
-          ctx,
-          { mustExist: true, expectFile: true },
-        );
-
-        let fileB = "";
-        if (!hasContentB && rawFileB) {
-          fileB = scopedPath(
-            rawFileB,
-            "diff",
-            ctx,
-            { mustExist: true, expectFile: true },
-          );
-        } else {
-          fileB = rawFileB;
-        }
-
-        return toolDiff(fileA, fileB, contentB, hasContentB);
-      } catch (e) {
-        return formatToolError("diff", e);
-      }
-    },
-    test: async (args) => {
-      try {
-        const a = expectArgsObject("test", args);
-        const command = optionalStringArg("test", a, "command", "python -m pytest");
-        const timeout = optionalIntegerArg("test", a, "timeout");
-        return await toolTest(command, timeout ?? 60);
-      } catch (e) {
-        return formatToolError("test", e);
       }
     },
     time: (args) => {

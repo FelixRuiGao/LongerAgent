@@ -598,18 +598,22 @@ describe("projectToApiMessages", () => {
     expect((msgs[1].content as string)).toContain("Hello");
   });
 
-  it("injects agents and important log with a single user-message boundary", () => {
+  it("AGENTS.md is included in system prompt via systemPrompt option, not as user message", () => {
     const entries = basicLog();
+    const agentsMdContent = "## Global Memory\n\n(empty file)";
+    const systemPromptWithAgentsMd = "prompt\n\n---\n\n# Persistent Memory (AGENTS.md)\n\n" + agentsMdContent;
     const msgs = projectToApiMessages(entries, {
+      systemPrompt: systemPromptWithAgentsMd,
       importantLog: "(empty file)",
-      agentsMd: "## Global Memory (~/AGENTS.md)\n\n(empty file)\n\n---\n\n## Project Memory (AGENTS.md)\n\n(empty file)",
     });
     expect(msgs).toHaveLength(3);
+    // AGENTS.md is in system prompt, not in user message
+    expect((msgs[0].content as string)).toContain("Persistent Memory (AGENTS.md)");
+    expect((msgs[0].content as string)).toContain("Global Memory");
+    // Important log still in user message
     const content = msgs[1].content as string;
-    expect(content).toContain("[AGENTS.MD — PERSISTENT MEMORY]");
     expect(content).toContain("[IMPORTANT LOG]");
     expect(content).toContain("[User Message]\nHello");
-    expect(content.match(/\[User Message\]\n/g)?.length ?? 0).toBe(1);
   });
 
   it("multiple rounds in same turn", () => {

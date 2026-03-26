@@ -66,8 +66,8 @@ export interface SendMessageOptions {
   signal?: AbortSignal;
   /** Unified thinking level string ("off", "low", "medium", "high", "adaptive", etc.) */
   thinkingLevel?: string;
-  /** Whether to enable provider-specific prompt caching. */
-  cacheEnabled?: boolean;
+  /** Routing key for OpenAI prompt cache affinity (e.g. child session id). */
+  promptCacheKey?: string;
 }
 
 // ------------------------------------------------------------------

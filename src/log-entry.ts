@@ -93,7 +93,7 @@ export interface LogEntry {
 
   // ---- State markers ----
 
-  /** Replaced by summarize_context (skip in projections). */
+  /** Replaced by distill_context (skip in projections). */
   summarized?: boolean;
 
   /** The summary entry ID that replaced this entry. */

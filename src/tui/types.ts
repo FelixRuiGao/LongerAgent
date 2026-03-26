@@ -81,6 +81,8 @@ export interface Session {
   log?: readonly LogEntry[];
   /** Subscribe to log changes. Returns unsubscribe function. */
   subscribeLog?(listener: () => void): () => void;
+  /** Monotonic revision for transcript projection gating. */
+  getLogRevision?(): number;
   /** Read-only child session snapshots for sidebar/status views. */
   getChildSessionSnapshots?(): ChildSessionSnapshot[];
   /** Read-only access to a child session log. */

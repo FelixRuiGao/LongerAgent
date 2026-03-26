@@ -4,34 +4,36 @@ LongerAgent can spawn parallel sub-agents within a session. Sub-agents run concu
 
 ## Spawning Sub-Agents
 
-There are two ways to spawn sub-agents:
+There are two tools for spawning sub-agents:
 
-### From Chat
+### `spawn` — Single Agent (Preferred)
 
-Simply tell the agent what you want parallelized:
+For most cases, the agent uses `spawn` to create a single sub-agent directly:
 
 ```text
-You: investigate the auth module and the payment module at the same time
+You: investigate the auth module
 ```
 
-The agent will use the `spawn_agent` tool to create sub-agents for each task.
+The agent calls `spawn(id="auth-explorer", template="explorer", mode="oneshot", task="...")` — one tool call, no file needed.
 
-### From YAML Call Files
+### `spawn_file` — Multiple Agents / Teams
 
-For more control, define tasks in a YAML call file:
+For spawning multiple agents in parallel or creating teams, define tasks in a YAML call file:
 
 ```yaml
 # tasks.yaml
-tasks:
-  - name: research
+agents:
+  - id: research
     template: explorer
-    prompt: "Investigate how authentication works in this codebase"
-  - name: refactor
+    mode: oneshot
+    task: "Investigate how authentication works in this codebase"
+  - id: refactor
     template: executor
-    prompt: "Rename all legacy API endpoints to v2"
+    mode: oneshot
+    task: "Rename all legacy API endpoints to v2"
 ```
 
-The agent writes this file to its session artifacts directory and calls `spawn_agent` with the filename.
+The agent writes this file to its session artifacts directory and calls `spawn_file(file="tasks.yaml")`.
 
 ## Templates
 
@@ -55,18 +57,18 @@ The main agent has several tools for managing sub-agents:
 
 | Tool | Description |
 |------|-------------|
-| `spawn_agent` | Spawn sub-agents from a YAML call file |
+| `spawn` | Spawn a single sub-agent with inline parameters |
+| `spawn_file` | Spawn multiple sub-agents or teams from a YAML call file |
 | `kill_agent` | Kill one or more running sub-agents by ID |
 | `check_status` | Check the status of running sub-agents |
 | `wait` | Wait for specific sub-agents to complete |
 
 ## How It Works
 
-1. The main agent creates a YAML call file defining the tasks.
-2. `spawn_agent` reads the file and creates a sub-agent for each task.
-3. Sub-agents run concurrently, each in their own agent loop with their own context.
-4. When a sub-agent finishes, its results are delivered back to the main agent.
-5. The main agent synthesizes the results and continues.
+1. The main agent calls `spawn` (single agent) or writes a YAML call file and calls `spawn_file` (multiple agents).
+2. Sub-agents run concurrently, each in their own agent loop with their own context.
+3. When a sub-agent finishes, its results are delivered back to the main agent.
+4. The main agent synthesizes the results and continues.
 
 Sub-agents share the same model and provider as the main agent. They have access to the same filesystem and project, but maintain separate conversation contexts.
 

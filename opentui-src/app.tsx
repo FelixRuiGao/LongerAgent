@@ -6,13 +6,11 @@ import { execSync } from "node:child_process";
 import type {
   CommandRegistry,
   CommandContext,
-  ConversationEntry,
   Session as TuiSession,
 } from "../src/tui/types.js";
 import type { SessionStore } from "../src/persistence.js";
 import type { ChildSessionSnapshot } from "../src/session-tree-types.js";
 import { saveLog } from "../src/persistence.js";
-import { projectToTuiEntries } from "../src/log-projection.js";
 import { isCommandExitSignal } from "../src/commands.js";
 import { ProgressReporter, type ProgressEvent } from "../src/progress.js";
 import { scanCandidates } from "../src/file-attach.js";
@@ -52,13 +50,11 @@ import {
 } from "../src/tui/checkbox-picker.js";
 import {
   RGBA,
-  StyledText,
   SyntaxStyle,
   type InputRenderable,
   type KeyBinding,
   type ScrollBoxRenderable,
   type TextareaRenderable,
-  getTreeSitterClient,
 } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import "./forked/patch-opentui-markdown.js";
@@ -68,6 +64,8 @@ import {
   isLongerAgentOpenTuiDiagEnabled,
   writeLongerAgentOpenTuiDiag,
 } from "./forked/core/lib/diagnostic.js";
+import { ConversationPanel } from "./components/conversation-panel.js";
+import { useTranscriptModel } from "./transcript/use-transcript-model.js";
 import { getCurrentModelDescriptor, type ModelDescriptor } from "../src/model-presentation.js";
 import { UsagePoller, formatResetRemaining, type UsageSnapshot } from "../src/provider-usage.js";
 import {
@@ -114,12 +112,12 @@ export interface OpenTuiAppProps {
 // Derived from the logo gradient: gold → orange → red → magenta → purple.
 // Background is a near-black warm tone reminiscent of CRT phosphor afterglow.
 
-const BG = "#0d0c0f";
+const BG = "#14121a";
 
 const COLORS = {
   background: BG,
   panel: BG,
-  userBg: "#1f1c26",       // lifted background for user messages
+  userBg: "#322e3e",       // lifted background for user messages
   // Structural
   border: "#2a2630",
   separator: "#2a2630",
@@ -130,14 +128,14 @@ const COLORS = {
   // Logo-derived accents (sampled from the gradient)
   accent: "#ffb703",       // logo line 1 — gold
   orange: "#fb8500",       // logo line 2
-  red: "#f05030",          // logo line 3
+  red: "#f85656",          // logo line 3
   magenta: "#e81860",      // logo line 4
   purple: "#a010a0",       // logo line 6
   // Semantic colors not in the gradient
   yellow: "#e8c468",
-  green: "#73a942",
-  cyan: "#9cd4cc",
-  thinking: "#454a54",
+  green: "#8cc252",
+  cyan: "#86ded4",
+  thinking: "#5c626e",
   toolTime: "#8a8078",     // tool call elapsed time
   // Phase indicators — each maps to a logo gradient stop
   readyStatus: "#fb8500",
@@ -183,7 +181,7 @@ const GOODBYE_MESSAGES = [
   "Later, gator!",
 ] as const;
 
-const MARKDOWN_TREE_SITTER_CLIENT = getTreeSitterClient();
+const LOGO_GRADIENT = ["#ffb703", "#fb8500", "#f05030", "#e81860", "#d01080", "#a010a0", "#5a0c92"];
 const ASSISTANT_RENDERER_MODE = getLongerAgentAssistantRenderer();
 
 const DISABLED_TEXTAREA_ACTION = "__disabled__" as unknown as KeyBinding["action"];
@@ -258,17 +256,18 @@ function buildMarkdownStyle(colors: OpenTuiPalette): SyntaxStyle {
     default: { fg: RGBA.fromHex(colors.text) },
     conceal: { fg: RGBA.fromHex(colors.dim) },
     // Markdown
-    "markup.heading": { fg: RGBA.fromHex(colors.accent), bold: true },
-    "markup.heading.1": { fg: RGBA.fromHex(colors.accent), bold: true },
-    "markup.heading.2": { fg: RGBA.fromHex(colors.orange), bold: true },
+    "markup.heading": { fg: RGBA.fromHex("#f09418"), bold: true },
+    "markup.heading.1": { fg: RGBA.fromHex("#f09418"), bold: true },
+    "markup.heading.2": { fg: RGBA.fromHex("#eca903"), bold: true },
     "markup.heading.3": { fg: RGBA.fromHex(colors.text), bold: true },
     "markup.heading.4": { fg: RGBA.fromHex(colors.text), bold: true },
     "markup.heading.5": { fg: RGBA.fromHex(colors.text), bold: true },
     "markup.heading.6": { fg: RGBA.fromHex(colors.text), bold: true },
+    "markup.heading.table": { fg: RGBA.fromHex(colors.cyan), bold: true },
     "markup.strong": { fg: RGBA.fromHex(colors.text), bold: true },
     "markup.italic": { fg: RGBA.fromHex(colors.text), italic: true },
-    "markup.raw": { fg: RGBA.fromHex("#d0b068") },
-    "markup.raw.block": { fg: RGBA.fromHex("#d0b068") },
+    "markup.raw": { fg: RGBA.fromHex("#b4a0ec") },
+    "markup.raw.block": { fg: RGBA.fromHex("#b4a0ec") },
     "markup.link": { fg: RGBA.fromHex(colors.cyan) },
     "markup.link.label": { fg: RGBA.fromHex(colors.cyan), underline: true },
     "markup.link.url": { fg: RGBA.fromHex(colors.cyan), underline: true },
@@ -525,17 +524,6 @@ function copyToClipboard(text: string, rendererCopy: (text: string) => boolean):
   }
 }
 
-function diffLineColor(line: string, colors: OpenTuiPalette): string | undefined {
-  const payloadIdx = line.indexOf("| ");
-  const payload = payloadIdx >= 0 ? line.slice(payloadIdx + 2) : line;
-  if (payload.startsWith("@@")) return colors.yellow;
-  if (payload.startsWith("+++ ") || payload.startsWith("--- ")) return colors.dim;
-  if (payload.startsWith("+")) return colors.green;
-  if (payload.startsWith("-")) return colors.red;
-  if (payload.startsWith("... [")) return colors.dim;
-  return undefined;
-}
-
 function PlanPanelView(
   { checkpoints, active, colors }: { checkpoints: PlanCheckpointUi[]; active: boolean; colors: OpenTuiPalette },
 ): React.ReactElement | null {
@@ -588,205 +576,6 @@ function PlanPanelView(
       ))}
     </box>
   );
-}
-
-const LOGO_LINES = [
-  "░██    ░██ ░██████  ░██████  ░██████░██         ",
-  "░██    ░██   ░██   ░██   ░██   ░██  ░██         ",
-  "░██    ░██   ░██  ░██          ░██  ░██         ",
-  "░██    ░██   ░██  ░██  █████   ░██  ░██         ",
-  " ░██  ░██    ░██  ░██     ██   ░██  ░██         ",
-  "  ░██░██     ░██   ░██  ░███   ░██  ░██         ",
-  "   ░███    ░██████  ░█████░█ ░██████░██████████ ",
-];
-const LOGO_GRADIENT = ["#ffb703", "#fb8500", "#f05030", "#e81860", "#d01080", "#a010a0", "#5a0c92"];
-
-function LogoBlock(
-  { colors }: { colors: OpenTuiPalette },
-): React.ReactElement {
-  return (
-    <box paddingLeft={1} paddingRight={1} flexDirection="column" width="100%" paddingBottom={1}>
-      {LOGO_LINES.map((line, i) => (
-        <text key={`logo-${i}`} fg={LOGO_GRADIENT[i]} content={line} />
-      ))}
-    </box>
-  );
-}
-
-function conversationEntryKey(entry: ConversationEntry, index: number): string {
-  return entry.id ?? `entry-${index}`;
-}
-
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function LiveTimer({ startedAt, color }: { startedAt: number; color: string }): React.ReactElement {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), 100);
-    return () => clearInterval(timer);
-  }, []);
-  const elapsed = Date.now() - startedAt;
-  return <text fg={color} content={` (${formatElapsed(elapsed)})`} flexShrink={0} />;
-}
-
-function ConversationEntryView(
-  {
-    entry,
-    streaming,
-    markdownMode,
-    colors,
-    markdownStyle,
-    needsSpacing,
-  }: {
-    entry: ConversationEntry;
-    streaming: boolean;
-    markdownMode: "rendered" | "raw";
-    colors: OpenTuiPalette;
-    markdownStyle: SyntaxStyle;
-    needsSpacing?: boolean;
-  },
-): React.ReactElement {
-  switch (entry.kind) {
-    case "user":
-      return (
-        <box>
-          <box height={1} />
-          <box backgroundColor={colors.userBg} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
-            <text fg={colors.text} bold content={entry.text} wrapMode="word" width="100%" />
-            {entry.queued ? <text fg={colors.orange} content=" [queued]" /> : null}
-          </box>
-          <box height={1} />
-        </box>
-      );
-    case "assistant":
-      return (
-        <box paddingLeft={2} paddingTop={1}>
-          {markdownMode === "raw" ? (
-            <text fg={colors.text} content={entry.text} />
-          ) : ASSISTANT_RENDERER_MODE === "code" ? (
-            <code
-              content={entry.text}
-              filetype="markdown"
-              syntaxStyle={markdownStyle}
-              streaming={streaming}
-              conceal={true}
-              drawUnstyledText={false}
-              fg={colors.text}
-              width="100%"
-            />
-          ) : (
-            <markdown
-              content={entry.text}
-              syntaxStyle={markdownStyle}
-              treeSitterClient={MARKDOWN_TREE_SITTER_CLIENT}
-              streaming={streaming}
-              conceal={true}
-              concealCode={false}
-              width="100%"
-              tableOptions={{
-                borders: true,
-                outerBorder: true,
-                wrapMode: "word",
-                selectable: true,
-              }}
-            />
-          )}
-        </box>
-      );
-    case "reasoning": {
-      const thinkingStyled = new StyledText([
-        { __isChunk: true, text: "Thinking: ", fg: RGBA.fromHex(colors.thinkingStatus), attributes: 1 },
-        { __isChunk: true, text: entry.text.replace(/^\n+/, ""), fg: RGBA.fromHex(colors.thinking) },
-      ]);
-      return (
-        <box paddingLeft={2} paddingTop={1}>
-          <text content={thinkingStyled} wrapMode="word" width="100%" />
-        </box>
-      );
-    }
-    case "tool_call":
-      {
-        const trimmed = entry.text.trim();
-        const firstSpace = trimmed.indexOf(" ");
-        const parsedToolName = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
-        const toolName = typeof entry.meta?.toolName === "string" ? entry.meta.toolName : parsedToolName;
-        const restSource = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1);
-        const rest = restSource.replace(/\s+/g, " ").trim();
-        const isLive = entry.elapsedMs === undefined && entry.startedAt !== undefined;
-        const timeDisplay = entry.elapsedMs !== undefined ? formatElapsed(entry.elapsedMs) : null;
-        return (
-          <box flexDirection="row" width="100%" paddingLeft={2} paddingTop={1}>
-            <text fg={colors.cyan} content={toolName} flexShrink={0} />
-            {isLive ? <LiveTimer startedAt={entry.startedAt!} color={colors.dim} /> : null}
-            {timeDisplay ? <text fg={colors.toolTime} content={` (${timeDisplay})`} flexShrink={0} /> : null}
-            {rest ? (
-              <text
-                fg={colors.muted}
-                content={` ${rest}`}
-                wrapMode="none"
-                truncate
-                flexGrow={1}
-                flexShrink={1}
-              />
-            ) : null}
-          </box>
-        );
-      }
-    case "tool_result":
-      return (
-        <box flexDirection="column" paddingLeft={4}>
-          {entry.text.split("\n").map((line, index) => (
-            <text
-              key={`tool-result-${index}`}
-              fg={entry.dim ? colors.dim : diffLineColor(line, colors) ?? colors.text}
-              content={line || " "}
-            />
-          ))}
-        </box>
-      );
-    case "progress":
-      return (
-        <box paddingLeft={2}>
-          <text fg={colors.muted} content={entry.text} />
-        </box>
-      );
-    case "status":
-    case "compact_mark":
-      return (
-        <box paddingLeft={2} paddingTop={1}>
-          <text fg={colors.orange} content={entry.text} />
-        </box>
-      );
-    case "error":
-      return (
-        <box paddingLeft={2} paddingTop={1}>
-          <text fg={colors.red} bold content={`[!] ${entry.text}`} />
-        </box>
-      );
-    case "sub_agent_rollup":
-      return (
-        <box flexDirection="column" paddingLeft={2}>
-          <text fg={colors.dim} content={entry.text} />
-        </box>
-      );
-    case "sub_agent_done":
-      return (
-        <box paddingLeft={2}>
-          <text fg={colors.dim} content={entry.text} />
-        </box>
-      );
-    case "interrupted_marker":
-      return (
-        <box paddingLeft={2}>
-          <text fg={colors.orange} content={entry.text} />
-        </box>
-      );
-    default:
-      return <box />;
-  }
 }
 
 function StatusStrip(
@@ -989,6 +778,7 @@ function sameChildSessionList(
       left?.phase !== right?.phase ||
       left?.outcome !== right?.outcome ||
       left?.running !== right?.running ||
+      left?.logRevision !== right?.logRevision ||
       left?.lifetimeToolCallCount !== right?.lifetimeToolCallCount ||
       left?.lastTotalTokens !== right?.lastTotalTokens ||
       left?.lastToolCallSummary !== right?.lastToolCallSummary ||
@@ -1673,9 +1463,6 @@ export function OpenTuiApp({
 }: OpenTuiAppProps): React.ReactElement {
   const renderer = useRenderer();
   const terminal = useTerminalDimensions();
-  const [entries, setEntries] = useState<ConversationEntry[]>(
-    projectToTuiEntries([...(session.log ?? [])] as any[]),
-  );
   const theme = THEME;
   const [processing, _setProcessing] = useState(false);
   const processingRef = useRef(false);
@@ -1690,6 +1477,7 @@ export function OpenTuiApp({
   const codexPollerRef = useRef<UsagePoller | null>(null);
   const [childSessions, setChildSessions] = useState<ChildSessionSnapshot[]>([]);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
+  const entries = useTranscriptModel({ session, selectedChildId, childSessions });
   const [hint, setHint] = useState<string | null>(null);
   const [markdownMode, setMarkdownMode] = useState<"rendered" | "raw">("rendered");
   const [pendingAsk, setPendingAsk] = useState<PendingAskUi | null>(
@@ -1973,11 +1761,6 @@ export function OpenTuiApp({
       if (selectedChildId && !nextChildSessions.some((snapshot) => snapshot.id === selectedChildId)) {
         setSelectedChildId(null);
       }
-
-      const activeLog = selectedChildId
-        ? session.getChildSessionLog?.(selectedChildId) ?? session.log ?? []
-        : session.log ?? [];
-      setEntries(projectToTuiEntries([...(activeLog ?? [])] as any[]));
       setPendingAsk(session.getPendingAsk?.() ?? null);
       setContextTokens(session.lastInputTokens);
       setCacheReadTokens(session.lastCacheReadTokens ?? 0);
@@ -1996,12 +1779,12 @@ export function OpenTuiApp({
 
   useEffect(() => {
     if (!isLongerAgentOpenTuiDiagEnabled()) return;
-    const assistantEntries = entries.filter((entry) => entry.kind === "assistant");
+    const assistantEntries = entries.filter((item) => item.entry.kind === "assistant");
     const lastAssistant = assistantEntries.length > 0 ? assistantEntries[assistantEntries.length - 1] : null;
     writeLongerAgentOpenTuiDiag("app.entries", {
       totalEntries: entries.length,
       assistantEntries: assistantEntries.length,
-      lastAssistantLength: lastAssistant?.kind === "assistant" ? lastAssistant.text.length : 0,
+      lastAssistantLength: lastAssistant?.entry.kind === "assistant" ? lastAssistant.entry.text.length : 0,
       processing,
       markdownMode,
       assistantRenderer: ASSISTANT_RENDERER_MODE,
@@ -3447,11 +3230,6 @@ export function OpenTuiApp({
 
   });
 
-  const lastAssistantIndex = [...entries]
-    .map((entry, index) => ({ entry, index }))
-    .reverse()
-    .find((item) => item.entry.kind === "assistant")?.index ?? -1;
-
   const modelDescriptor = getCurrentModelDescriptor(session);
   const modelName = modelDescriptor?.compactScopedLabel ?? "unknown";
   const modelNameColor = resolveModelNameColor(modelDescriptor, colors);
@@ -3481,50 +3259,16 @@ export function OpenTuiApp({
     >
       <box flexDirection="row" flexGrow={1} gap={1}>
         <box flexDirection="column" flexGrow={1} gap={1}>
-          <scrollbox
-            ref={scrollRef}
-            flexGrow={1}
-            flexShrink={1}
-            stickyScroll={true}
-            stickyStart="bottom"
-            viewportOptions={{ paddingRight: 1 }}
-            verticalScrollbarOptions={{
-              paddingLeft: 1,
-              trackOptions: {
-                backgroundColor: "transparent",
-                foregroundColor: colors.border + "44",
-              },
-            }}
-          >
-            <box flexDirection="column" gap={0}>
-              {showLogoInScroll ? <LogoBlock colors={colors} /> : null}
-              {selectedChildId ? (
-                <box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-                  <text fg={colors.accent} bold content={`SUB-SESSION ${selectedChildId}`} />
-                  <text fg={colors.dim} content="Esc back to primary session · Ctrl+C interrupt child turn" />
-                </box>
-              ) : null}
-              {entries.map((entry, index) => {
-                const prev = index > 0 ? entries[index - 1] : null;
-                const needsSpacing = entry.kind === "reasoning" && (
-                  prev?.kind === "progress" ||
-                  prev?.kind === "tool_call"
-                );
-
-                return (
-                  <ConversationEntryView
-                    key={conversationEntryKey(entry, index)}
-                    entry={entry}
-                    streaming={processing && index === lastAssistantIndex}
-                    markdownMode={markdownMode}
-                    colors={colors}
-                    markdownStyle={markdownStyle}
-                    needsSpacing={needsSpacing}
-                  />
-                );
-              })}
-            </box>
-          </scrollbox>
+          <ConversationPanel
+            items={entries}
+            processing={processing}
+            markdownMode={markdownMode}
+            colors={colors}
+            markdownStyle={markdownStyle}
+            scrollRef={scrollRef}
+            selectedChildId={selectedChildId}
+            showLogoInScroll={showLogoInScroll}
+          />
 
           {pendingAsk ? (
             <AskPanelView

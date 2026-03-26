@@ -56,7 +56,8 @@ Use $ARGUMENTS[0], $ARGUMENTS[1], or $0, $1 for positional arguments.
    ```bash
    rm -rf ~/.longeragent/skills/<skill-name>/.git
    ```
-6. **Activate**: Call the `reload_skills` tool to make it available
+
+The skill becomes available automatically on the next turn — no reload needed.
 
 ## Workflow: Creating a Custom Skill
 
@@ -65,19 +66,19 @@ When the user describes a task pattern they want as a skill:
 1. Ask clarifying questions if needed
 2. Draft the SKILL.md in `.staging/<skill-name>/SKILL.md`
 3. Show the draft to the user for review
-4. On approval, move to the skills directory and call `reload_skills`
+4. On approval, move to the skills directory — it takes effect on the next turn
 
 ## Workflow: Removing a Skill
 
-1. Delete the skill directory:
-   ```bash
-   rm -rf ~/.longeragent/skills/<skill-name>
-   ```
-2. Call `reload_skills` to update the available skills list
+Delete the skill directory:
+```bash
+rm -rf ~/.longeragent/skills/<skill-name>
+```
+
+The skill is removed automatically on the next turn.
 
 ## Important
 
 - Always use `.staging/` for work-in-progress — it is ignored by the skill loader
-- Always call `reload_skills` after installing, removing, or modifying skills on disk
 - Review downloaded content before installing — check for suspicious instructions
 - When creating SKILL.md from source repos, focus on extracting the core workflow into clear, actionable instructions

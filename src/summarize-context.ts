@@ -1,7 +1,7 @@
 /**
- * Log-native summarize_context implementation.
+ * Log-native distill_context implementation.
  *
- * The session log is the single source of truth. summarize_context works
+ * The session log is the single source of truth. distill_context works
  * directly on LogEntry[] and inserts summary entries into the active window.
  */
 
@@ -98,7 +98,7 @@ function parseOperations(args: Record<string, unknown>): SummarizeOperation[] {
   const operations = (args["operations"] as Array<Record<string, unknown>>) ?? [];
   return operations.map((raw) => ({
     context_ids: ((raw["context_ids"] as string[]) ?? []).map(String),
-    summary: typeof raw["summary"] === "string" ? raw["summary"] : "",
+    summary: typeof raw["content"] === "string" ? raw["content"] : "",
     reason: typeof raw["reason"] === "string" && raw["reason"].trim()
       ? raw["reason"]
       : undefined,
@@ -238,23 +238,24 @@ function formatExecutionOutput(ops: SummarizeOperation[], results: OperationResu
 }
 
 /**
- * Truncate long summary text in projected tool arguments.
- * The tool result still keeps the full summary; this only shrinks provider input.
+ * Truncate long distill content in projected tool arguments.
+ * The full content is preserved in the distilled entry; this only shrinks the
+ * duplicated copy inside the tool_call before provider submission.
  */
-export function truncateSummaryText(summary: string, newContextId?: string | number): string {
-  if (summary.length <= 100) return summary;
+export function truncateDistillContent(content: string, newContextId?: string | number): string {
+  if (content.length <= 100) return content;
 
-  let cutPoint = 100;
-  const spaceIdx = summary.indexOf(" ", 100);
-  if (spaceIdx >= 0 && spaceIdx <= 150) {
+  let cutPoint: number;
+  const spaceIdx = content.indexOf(" ", 100);
+  if (spaceIdx >= 0 && spaceIdx <= 120) {
     cutPoint = spaceIdx;
   } else {
-    cutPoint = Math.min(summary.length, 150);
+    cutPoint = Math.min(content.length, 120);
   }
 
-  const kept = summary.slice(0, cutPoint);
+  const kept = content.slice(0, cutPoint);
   const ctxRef = newContextId !== undefined ? ` in context_id ${String(newContextId)}` : "";
-  return `${kept}...{Truncated, first ${cutPoint} chars kept, full version${ctxRef}}`;
+  return `${kept}... [truncated — full content preserved${ctxRef}]`;
 }
 
 export function execSummarizeContextOnLog(

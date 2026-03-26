@@ -25,11 +25,11 @@ The agent will:
 2. Download it to a staging area (`~/.longeragent/skills/.staging/`).
 3. Inspect and validate the skill definition.
 4. Move it to the skills directory.
-5. Reload skills to make it available.
+5. The skill becomes available automatically on the next turn.
 
-### Hot-Reload
+### Auto-Discovery
 
-After installing, removing, or modifying skills on disk, the agent calls `reload_skills` to update the available skills list without restarting.
+Skills are automatically discovered from disk at every turn. Installing, removing, or modifying skills takes effect immediately — no manual reload step is needed.
 
 ## Skill Directory Layout
 
@@ -107,7 +107,7 @@ Ask the agent to remove it, or delete the directory manually:
 rm -rf ~/.longeragent/skills/skill-name
 ```
 
-Then reload skills in the session (the agent calls `reload_skills` automatically when asked to remove a skill).
+The skill is removed automatically on the next turn.
 
 ### Workflow Summary
 
@@ -116,8 +116,7 @@ Then reload skills in the session (the agent calls `reload_skills` automatically
 | Install from GitHub | Ask the agent: "install skill: name" |
 | Create custom | Write a `SKILL.md` in `~/.longeragent/skills/name/` |
 | Enable/disable | `/skills` command |
-| Remove | Delete the directory, reload |
-| Hot-reload | Agent calls `reload_skills` automatically |
+| Remove | Delete the directory (auto-detected next turn) |
 
 ## The Built-in Skill Manager
 
@@ -129,4 +128,4 @@ The skill manager knows how to:
 - Inspect and validate SKILL.md files
 - Move skills from staging to the active directory
 - Clean up git metadata
-- Call `reload_skills` to activate changes
+- Activate changes automatically (skills are auto-discovered each turn)

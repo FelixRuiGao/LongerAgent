@@ -10,9 +10,9 @@ Context management works through three cooperating layers:
 
 As context grows, the system prompts the agent to proactively summarize older segments. This happens automatically in the background -- you do not need to take any action.
 
-### 2. Agent-Initiated Summarization
+### 2. Agent-Initiated Distillation
 
-The agent can inspect its own context distribution using the `show_context` tool and surgically compress selected segments with the `summarize_context` tool. This preserves key decisions and unresolved issues while freeing space. The agent does this on its own when it detects context pressure.
+The agent can inspect its own context distribution using the `show_context` tool and surgically compress selected segments with the `distill_context` tool. This preserves key decisions and unresolved issues while freeing space. The agent does this on its own when it detects context pressure.
 
 ### 3. Auto-Compact
 

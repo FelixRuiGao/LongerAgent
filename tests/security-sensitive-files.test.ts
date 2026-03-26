@@ -12,11 +12,10 @@ function makeTempDir(prefix: string): string {
 }
 
 describe("sensitive file read guards", () => {
-  it("blocks read_file and diff for .env files", async () => {
+  it("blocks read_file for .env files", async () => {
     const root = makeTempDir("longeragent-sensitive-");
     try {
       writeFileSync(join(root, ".env"), "API_KEY=secret\n", "utf-8");
-      writeFileSync(join(root, "a.txt"), "hello\n", "utf-8");
 
       const readResult = await executeTool(
         "read_file",
@@ -25,13 +24,6 @@ describe("sensitive file read guards", () => {
       );
       expect(readResult.content).toMatch(/sensitive file/i);
       expect(readResult.content).toMatch(/\.env/);
-
-      const diffResult = await executeTool(
-        "diff",
-        { file_a: ".env", file_b: "a.txt" },
-        { projectRoot: root },
-      );
-      expect(diffResult.content).toMatch(/sensitive file/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

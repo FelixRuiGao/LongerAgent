@@ -8,7 +8,7 @@
 import type { LogEntry, TuiDisplayKind } from "./log-entry.js";
 import type { ConversationEntry, ConversationEntryKind } from "./tui/types.js";
 import { mergeConsecutiveSameRole } from "./context-rendering.js";
-import { truncateSummaryText } from "./summarize-context.js";
+import { truncateDistillContent } from "./summarize-context.js";
 
 // ------------------------------------------------------------------
 // TuiDisplayKind → ConversationEntryKind mapping
@@ -105,6 +105,16 @@ function toConversationEntry(
       ce.meta = {};
       if (typeof toolName === "string") ce.meta.toolName = toolName;
       if (toolArgs && typeof toolArgs === "object") ce.meta.toolArgs = toolArgs;
+    }
+  }
+
+  if (entry.type === "tool_result") {
+    const toolName = entry.meta["toolName"];
+    const toolMetadata = entry.meta["toolMetadata"];
+    if (toolName || (toolMetadata && typeof toolMetadata === "object")) {
+      ce.meta ??= {};
+      if (typeof toolName === "string") ce.meta.toolName = toolName;
+      if (toolMetadata && typeof toolMetadata === "object") ce.meta.toolMetadata = toolMetadata;
     }
   }
 
@@ -401,19 +411,12 @@ export type InternalMessage = Record<string, unknown>;
 
 export interface ApiProjectionOptions {
   /**
-   * Fresh system prompt to use (re-rendered, not from log).
-   * If not provided, the system_prompt entry's content is used.
+   * Dynamically assembled system prompt (re-assembled each API call).
+   * If not provided, the system_prompt log entry's content is used as fallback.
    */
   systemPrompt?: string;
   /** Legacy support for important log injection. Runtime no longer uses this. */
   importantLog?: string;
-  /** Active plan content to inject after the system prompt, when present. */
-  activePlan?: string;
-  /**
-   * AGENTS.md content (global + project) to inject after system prompt.
-   * If not empty, injected similarly to importantLog.
-   */
-  agentsMd?: string;
   /**
    * Resolve an image_ref path to base64 data for API consumption.
    * If not provided, image_ref blocks are passed through as-is.
@@ -421,8 +424,8 @@ export interface ApiProjectionOptions {
   resolveImageRef?: (refPath: string) => { data: string; media_type: string } | null;
   /** Merge consecutive same-role messages for providers that require alternation. */
   requiresAlternatingRoles?: boolean;
-  /** Truncate summarize_context tool-call summaries before provider submission. */
-  truncateSummarizeToolArgs?: boolean;
+  /** Truncate distill_context tool-call content before provider submission. */
+  truncateDistillToolArgs?: boolean;
   /**
    * show_context annotations: Map from contextId → annotation text.
    * When provided, §{id}§ + annotation is prepended to user message and
@@ -562,7 +565,7 @@ export function projectToApiMessages(
       messages.push(buildAssistantMessage(roundEntries, entries));
     } else if (entry.apiRole === "user") {
       let content = resolveImageRefs(entry.content, options?.resolveImageRef);
-      // Preserve _context_id for spatial index (summarize_context)
+      // Preserve _context_id for spatial index (distill_context)
       const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
       // Inject show_context annotation if active
       if (ctxId !== undefined && annotations?.has(String(ctxId))) {
@@ -624,25 +627,9 @@ export function projectToApiMessages(
     );
   }
 
-  // Inject active plan if provided
-  const activePlan = options?.activePlan?.trim();
-  if (activePlan) {
-    injectLabeledUserContext(
-      messages,
-      "[ACTIVE PLAN]\nThe following is the current execution plan:\n\n",
-      activePlan,
-    );
-  }
-
-  // Inject AGENTS.md content if provided
-  const agentsMd = options?.agentsMd?.trim();
-  if (agentsMd) {
-    injectAgentsMd(messages, agentsMd, { ensureUserBoundary: !importantLog && !activePlan });
-  }
-
-  let projected = options?.truncateSummarizeToolArgs === false
+  let projected = options?.truncateDistillToolArgs === false
     ? messages
-    : truncateSummarizeToolArgs(messages);
+    : truncateDistillToolArgs(messages);
 
   if (options?.requiresAlternatingRoles) {
     projected = mergeConsecutiveSameRole(projected);
@@ -792,40 +779,7 @@ function injectLabeledUserContext(
   }
 }
 
-/**
- * Inject AGENTS.md content after the system prompt (and after important log).
- * Merges into the first user message if possible.
- */
-function injectAgentsMd(
-  messages: InternalMessage[],
-  agentsMdContent: string,
-  opts?: { ensureUserBoundary?: boolean },
-): void {
-  const header =
-    "[AGENTS.MD — PERSISTENT MEMORY]\n" +
-    "The following is your persistent memory across sessions:\n\n";
-  const fullContent = header + agentsMdContent;
-
-  // Find position after system prompt(s)
-  let insertIdx = 0;
-  while (insertIdx < messages.length && messages[insertIdx].role === "system") {
-    insertIdx++;
-  }
-
-  if (insertIdx < messages.length && messages[insertIdx].role === "user") {
-    // Merge into first user message (important log may already be merged there)
-    const first = messages[insertIdx];
-    messages[insertIdx] = {
-      ...first,
-      content: mergeMessageContent(fullContent, first.content, { ensureUserBoundary: opts?.ensureUserBoundary === true }),
-    };
-  } else {
-    // Insert standalone user message
-    messages.splice(insertIdx, 0, { role: "user", content: fullContent });
-  }
-}
-
-function truncateSummarizeToolArgs(
+function truncateDistillToolArgs(
   messages: InternalMessage[],
 ): InternalMessage[] {
   return messages.map((msg) => {
@@ -834,7 +788,7 @@ function truncateSummarizeToolArgs(
 
     let modified = false;
     const nextToolCalls = toolCalls.map((tc) => {
-      if ((tc["name"] as string) !== "summarize_context") return tc;
+      if ((tc["name"] as string) !== "distill_context") return tc;
 
       const args = tc["arguments"] as Record<string, unknown> | undefined;
       const operations = args?.["operations"] as Array<Record<string, unknown>> | undefined;
@@ -842,9 +796,9 @@ function truncateSummarizeToolArgs(
 
       let opsModified = false;
       const nextOperations = operations.map((op) => {
-        const summary = op["summary"] as string | undefined;
+        const content = op["content"] as string | undefined;
         const resultCtxId = op["_result_context_id"] as string | number | undefined;
-        if (!summary || summary.length <= 100) {
+        if (!content || content.length <= 100) {
           if (resultCtxId === undefined) return op;
           opsModified = true;
           const { _result_context_id: _removed, ...rest } = op;
@@ -855,7 +809,7 @@ function truncateSummarizeToolArgs(
         const { _result_context_id: _removed, ...rest } = op;
         return {
           ...rest,
-          summary: truncateSummaryText(summary, resultCtxId),
+          content: truncateDistillContent(content, resultCtxId),
         };
       });
 

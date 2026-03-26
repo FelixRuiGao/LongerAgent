@@ -145,6 +145,17 @@ export const KNOWN_NO_WEB_SEARCH_MODELS: Set<string> = new Set([
   "MiniMax-M1-40k", "MiniMax-M1-80k",
 ]);
 
+/** Models that support OpenAI's extended 24h prompt cache retention (`prompt_cache_retention: "24h"`). */
+export const KNOWN_EXTENDED_CACHE_MODELS: Set<string> = new Set([
+  // GPT-5 family
+  "gpt-5.4",
+  "gpt-5.2", "gpt-5.2-codex",
+  "gpt-5.1", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-chat-latest",
+  "gpt-5", "gpt-5-codex",
+  // GPT-4.1
+  "gpt-4.1",
+]);
+
 // ------------------------------------------------------------------
 // Max output tokens per model
 // ------------------------------------------------------------------
@@ -299,6 +310,12 @@ export function getThinkingSupport(model: string, explicit?: boolean): boolean {
   if (explicit !== undefined) return explicit;
   return KNOWN_THINKING_MODELS.has(model)
     || KNOWN_THINKING_MODELS.has(normalizeModelId(model));
+}
+
+/** Check whether a model supports OpenAI's extended 24h prompt cache retention. */
+export function getExtendedCacheSupport(model: string): boolean {
+  return KNOWN_EXTENDED_CACHE_MODELS.has(model)
+    || KNOWN_EXTENDED_CACHE_MODELS.has(normalizeModelId(model));
 }
 
 /** Resolve native web search support. Priority: explicit > provider default > blacklist > true. */

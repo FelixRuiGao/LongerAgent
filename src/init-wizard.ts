@@ -61,7 +61,6 @@ function loadExistingPreferences(homeDir: string): GlobalTuiPreferences | null {
       modelSelectionKey: raw.model_selection_key ?? undefined,
       modelId: raw.model_id ?? undefined,
       thinkingLevel: raw.thinking_level ?? "default",
-      cacheHitEnabled: raw.cache_hit_enabled ?? true,
       accentColor: raw.accent_color ?? undefined,
       disabledSkills: Array.isArray(raw.disabled_skills) ? raw.disabled_skills : undefined,
       providerEnvVars: raw.provider_env_vars ?? undefined,
@@ -89,7 +88,6 @@ function savePreferences(homeDir: string, prefs: GlobalTuiPreferences): void {
       model_selection_key: prefs.modelSelectionKey ?? null,
       model_id: prefs.modelId ?? null,
       thinking_level: prefs.thinkingLevel ?? "default",
-      cache_hit_enabled: prefs.cacheHitEnabled ?? true,
       accent_color: prefs.accentColor ?? null,
       disabled_skills: prefs.disabledSkills ?? null,
       provider_env_vars: prefs.providerEnvVars ?? null,
@@ -567,7 +565,6 @@ export async function runInitWizard(): Promise<WizardResult> {
   const prefs: GlobalTuiPreferences = {
     version: 1,
     thinkingLevel: existing?.thinkingLevel ?? "default",
-    cacheHitEnabled: existing?.cacheHitEnabled ?? true,
     accentColor: existing?.accentColor,
     disabledSkills: existing?.disabledSkills,
     providerEnvVars,

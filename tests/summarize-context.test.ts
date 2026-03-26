@@ -11,37 +11,45 @@ import {
   createUserMessage,
   type LogEntry,
 } from "../src/log-entry.js";
-import { execSummarizeContextOnLog, truncateSummaryText } from "../src/summarize-context.js";
+import { execSummarizeContextOnLog, truncateDistillContent } from "../src/summarize-context.js";
 
 function allocIds(prefix: string): () => string {
   let i = 0;
   return () => `${prefix}${++i}`;
 }
 
-describe("truncateSummaryText", () => {
-  it("keeps short summaries unchanged", () => {
-    const text = "short summary";
-    expect(truncateSummaryText(text)).toBe(text);
+describe("truncateDistillContent", () => {
+  it("keeps short content unchanged", () => {
+    const text = "short content";
+    expect(truncateDistillContent(text)).toBe(text);
   });
 
-  it("truncates long summaries and includes the result context reference", () => {
-    const text = "A".repeat(180);
-    const out = truncateSummaryText(text, "ctx9");
-    expect(out).toContain("Truncated");
+  it("truncates long content at space boundary and includes context reference", () => {
+    const text = "A".repeat(95) + " word " + "B".repeat(80);
+    const out = truncateDistillContent(text, "ctx9");
+    expect(out).toContain("truncated");
     expect(out).toContain("context_id ctx9");
-    expect(out.length).toBeLessThan(text.length + 80);
+    expect(out.length).toBeLessThan(text.length);
+  });
+
+  it("hard-truncates at 120 chars when no space found", () => {
+    const text = "A".repeat(200);
+    const out = truncateDistillContent(text);
+    // 120 chars of A + suffix
+    expect(out.startsWith("A".repeat(120))).toBe(true);
+    expect(out).toContain("truncated");
   });
 });
 
 describe("execSummarizeContextOnLog", () => {
-  it("summarizes a visible context range in-place", () => {
+  it("distills a visible context range in-place", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "hello", "hello", "c1"),
     ];
 
     const result = execSummarizeContextOnLog(
-      { operations: [{ context_ids: ["c1"], summary: "compressed" }] },
+      { operations: [{ context_ids: ["c1"], content: "compressed" }] },
       entries,
       allocIds("ctx-"),
       allocIds("sum-"),
@@ -55,7 +63,7 @@ describe("execSummarizeContextOnLog", () => {
     expect((entries[1].meta as Record<string, unknown>)["summaryDepth"]).toBe(1);
   });
 
-  it("allows summarizing compact_context in the active window", () => {
+  it("allows distilling compact_context in the active window", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "old", "old", "old1"),
@@ -65,7 +73,7 @@ describe("execSummarizeContextOnLog", () => {
     ];
 
     const result = execSummarizeContextOnLog(
-      { operations: [{ context_ids: ["cc1"], summary: "compact summary" }] },
+      { operations: [{ context_ids: ["cc1"], content: "compact distilled" }] },
       entries,
       allocIds("ctx-"),
       allocIds("sum-"),
@@ -73,7 +81,7 @@ describe("execSummarizeContextOnLog", () => {
     );
 
     expect(result.output).toContain("1 succeeded");
-    expect(entries.some((e) => e.type === "summary" && String(e.content).includes("compact summary"))).toBe(true);
+    expect(entries.some((e) => e.type === "summary" && String(e.content).includes("compact distilled"))).toBe(true);
     expect(entries.find((e) => e.id === "cc-001")?.summarized).toBe(true);
   });
 
@@ -99,7 +107,7 @@ describe("execSummarizeContextOnLog", () => {
     ];
 
     const result = execSummarizeContextOnLog(
-      { operations: [{ context_ids: ["7"], summary: "tool round summary" }] },
+      { operations: [{ context_ids: ["7"], content: "tool round distilled" }] },
       entries,
       allocIds("ctx-"),
       allocIds("sum-"),
@@ -123,7 +131,7 @@ describe("execSummarizeContextOnLog", () => {
     ];
 
     const result = execSummarizeContextOnLog(
-      { operations: [{ context_ids: ["c1", "c3"], summary: "bad" }] },
+      { operations: [{ context_ids: ["c1", "c3"], content: "bad" }] },
       entries,
       allocIds("ctx-"),
       allocIds("sum-"),
@@ -143,7 +151,7 @@ describe("execSummarizeContextOnLog", () => {
     ];
 
     const result = execSummarizeContextOnLog(
-      { operations: [{ context_ids: ["old1"], summary: "hidden" }] },
+      { operations: [{ context_ids: ["old1"], content: "hidden" }] },
       entries,
       allocIds("ctx-"),
       allocIds("sum-"),
@@ -163,8 +171,8 @@ describe("execSummarizeContextOnLog", () => {
     const result = execSummarizeContextOnLog(
       {
         operations: [
-          { context_ids: ["c1"], summary: "first" },
-          { context_ids: ["c1"], summary: "second" },
+          { context_ids: ["c1"], content: "first" },
+          { context_ids: ["c1"], content: "second" },
         ],
       },
       entries,
@@ -177,7 +185,7 @@ describe("execSummarizeContextOnLog", () => {
     expect(result.output).toContain("already referenced by another operation");
   });
 
-  it("supports re-summarization with depth tracking", () => {
+  it("supports re-distillation with depth tracking", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "hello", "hello", "c1"),
@@ -186,7 +194,7 @@ describe("execSummarizeContextOnLog", () => {
     const logAlloc = allocIds("sum-");
 
     const first = execSummarizeContextOnLog(
-      { operations: [{ context_ids: ["c1"], summary: "first summary" }] },
+      { operations: [{ context_ids: ["c1"], content: "first distilled" }] },
       entries,
       ctxAlloc,
       logAlloc,
@@ -195,7 +203,7 @@ describe("execSummarizeContextOnLog", () => {
     const firstSummaryId = first.results[0].newContextId!;
 
     const second = execSummarizeContextOnLog(
-      { operations: [{ context_ids: [firstSummaryId], summary: "second summary" }] },
+      { operations: [{ context_ids: [firstSummaryId], content: "second distilled" }] },
       entries,
       ctxAlloc,
       logAlloc,
@@ -218,5 +226,38 @@ describe("execSummarizeContextOnLog", () => {
 
     expect(result.output).toBe("Error: no operations provided.");
     expect(result.results[0].success).toBe(false);
+  });
+
+  it("handles multiple independent operations in one call", () => {
+    const entries: LogEntry[] = [
+      createSystemPrompt("sys-001", "prompt"),
+      createUserMessage("user-001", 1, "first msg", "first msg", "c1"),
+      createAssistantText("asst-001", 1, 0, "response 1", "response 1", "c1"),
+      createUserMessage("user-002", 1, "second msg", "second msg", "c2"),
+      createAssistantText("asst-002", 1, 0, "response 2", "response 2", "c2"),
+      createUserMessage("user-003", 1, "third msg", "third msg", "c3"),
+    ];
+
+    const result = execSummarizeContextOnLog(
+      {
+        operations: [
+          { context_ids: ["c1"], content: "Phase 1: initial exploration of the auth module, found strategy pattern in src/auth/provider.ts", reason: "phase 1 complete" },
+          { context_ids: ["c2"], content: "Phase 2: config analysis, roles.yaml at src/config/, no validation on load", reason: "phase 2 complete" },
+        ],
+      },
+      entries,
+      allocIds("ctx-"),
+      allocIds("sum-"),
+      1,
+    );
+
+    expect(result.output).toContain("2 submitted, 2 succeeded, 0 failed");
+    // Both original context groups should be summarized
+    expect(entries.filter((e) => e.summarized).length).toBe(4); // 2 user + 2 assistant
+    // Two new summary entries should exist
+    expect(entries.filter((e) => e.type === "summary").length).toBe(2);
+    // c3 should remain untouched
+    const c3Entry = entries.find((e) => e.id === "user-003");
+    expect(c3Entry?.summarized).toBeFalsy();
   });
 });

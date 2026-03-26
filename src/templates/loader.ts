@@ -52,35 +52,30 @@ export const TOOL_PROMPT_ORDER: string[] = [
   "read_file",
   "write_file",
   "edit_file",
-  "apply_patch",
   "list_dir",
   "glob",
   "grep",
-  "diff",
   // Shell
   "bash",
   "bash_background",
   "bash_output",
   "kill_shell",
-  "test",
   "time",
   // Web
   "web_search",
   "web_fetch",
   // Orchestration
-  "spawn_agent",
+  "spawn",
+  "spawn_file",
   "wait",
   "kill_agent",
   "check_status",
   // Context
   "show_context",
-  "summarize_context",
-  // Planning
-  "plan",
+  "distill_context",
   // Interaction
   "ask",
   "skill",
-  "reload_skills",
 ];
 
 /**
@@ -94,27 +89,37 @@ export const TOOL_REQUIRES: Record<string, string[]> = {
 };
 
 /**
+ * Tool packs — named groups of related tools.
+ * Used in agent.yaml `tools` field: `tools: [read, shell, util]`
+ * Pack names and individual tool names can be freely mixed.
+ */
+export const TOOL_PACKS: Record<string, string[]> = {
+  read:  ["read_file", "list_dir", "glob", "grep"],
+  edit:  ["write_file", "edit_file"],
+  shell: ["bash", "bash_background", "bash_output", "kill_shell"],
+  util:  ["time", "web_search", "web_fetch"],
+};
+
+/**
  * Default tools for custom templates that omit `tools` in agent.yaml.
- * Same set as the executor template.
+ * Same set as the executor template — all packs.
  */
 export const EXECUTOR_DEFAULT_TOOLS: string[] = [
-  "read_file",
-  "write_file",
-  "edit_file",
-  "apply_patch",
-  "list_dir",
-  "glob",
-  "grep",
-  "diff",
-  "bash",
-  "bash_background",
-  "bash_output",
-  "kill_shell",
-  "test",
-  "time",
-  "web_search",
-  "web_fetch",
+  ...TOOL_PACKS.read,
+  ...TOOL_PACKS.edit,
+  ...TOOL_PACKS.shell,
+  ...TOOL_PACKS.util,
 ];
+
+/**
+ * Recipe for dynamic system prompt reassembly.
+ * Stored on Agent so Session can re-run the assembly pipeline at each API call.
+ */
+export interface PromptRecipe {
+  templateDir: string;
+  spec: Record<string, unknown>;
+  promptsDirs: string[];
+}
 
 // ------------------------------------------------------------------
 // Public API
@@ -131,36 +136,21 @@ export const EXECUTOR_DEFAULT_TOOLS: string[] = [
  *                     If omitted or empty, no tool/section prompts are assembled.
  * @returns            Fully constructed Agent, ready to use.
  */
-export function loadTemplate(
-  templateDir: string,
-  config: Config,
-  nameOverride?: string,
-  mcpManager?: MCPClientManager,
-  promptsDirs?: string[],
-): Agent {
-  const yamlPath = join(templateDir, AGENT_YAML);
-  if (!existsSync(yamlPath)) {
-    throw new Error(`Template config not found: ${yamlPath}`);
-  }
-
-  const raw = readFileSync(yamlPath, "utf-8");
-  const spec = (yaml.load(raw) as Record<string, unknown>) ?? {};
-  const typeError = validateTemplateType(spec);
-  if (typeError) {
-    throw new Error(typeError);
-  }
-
-  const name =
-    nameOverride ??
-    (spec["name"] as string | undefined) ??
-    basename(templateDir);
-  const model = spec["model"] as string | undefined;
+/**
+ * Assemble a system prompt from a template recipe.
+ *
+ * This is the core assembly pipeline, extracted so it can be re-run
+ * at each API call for dynamic prompt updates (new skills, prompt edits,
+ * software updates, etc.).
+ */
+export function assembleSystemPrompt(recipe: PromptRecipe): string {
+  const { templateDir, spec, promptsDirs } = recipe;
 
   // --- 1. Resolve core system prompt ---
   let systemPrompt = resolveSystemPrompt(spec, templateDir);
 
   // --- 2. Assemble tool prompts ---
-  if (promptsDirs && promptsDirs.length > 0) {
+  if (promptsDirs.length > 0) {
     const toolNames = resolveToolNames(spec);
     validateToolDependencies(toolNames);
     const toolPrompts = assembleToolPrompts(toolNames, promptsDirs);
@@ -197,7 +187,42 @@ export function loadTemplate(
     }
   }
 
-  return buildAgent(
+  return systemPrompt;
+}
+
+export function loadTemplate(
+  templateDir: string,
+  config: Config,
+  nameOverride?: string,
+  mcpManager?: MCPClientManager,
+  promptsDirs?: string[],
+): Agent {
+  const yamlPath = join(templateDir, AGENT_YAML);
+  if (!existsSync(yamlPath)) {
+    throw new Error(`Template config not found: ${yamlPath}`);
+  }
+
+  const raw = readFileSync(yamlPath, "utf-8");
+  const spec = (yaml.load(raw) as Record<string, unknown>) ?? {};
+  const typeError = validateTemplateType(spec);
+  if (typeError) {
+    throw new Error(typeError);
+  }
+
+  const name =
+    nameOverride ??
+    (spec["name"] as string | undefined) ??
+    basename(templateDir);
+  const model = spec["model"] as string | undefined;
+
+  const resolvedPromptsDirs = promptsDirs && promptsDirs.length > 0
+    ? promptsDirs
+    : [];
+
+  const recipe: PromptRecipe = { templateDir, spec, promptsDirs: resolvedPromptsDirs };
+  const systemPrompt = assembleSystemPrompt(recipe);
+
+  const agent = buildAgent(
     spec,
     name,
     model,
@@ -205,6 +230,11 @@ export function loadTemplate(
     config,
     mcpManager,
   );
+
+  // Store recipe for dynamic reassembly
+  agent.promptRecipe = recipe;
+
+  return agent;
 }
 
 /**
@@ -312,7 +342,17 @@ export function validateTemplate(templateDir: string): string | null {
 
   const toolsSpec = spec["tools"];
   if (toolsSpec != null && toolsSpec !== "all" && !Array.isArray(toolsSpec)) {
-    return `Invalid tools spec: must be "all", a list of tool names, or omitted`;
+    return `Invalid tools spec: must be "all", a list of tool/pack names, or omitted`;
+  }
+  if (Array.isArray(toolsSpec)) {
+    for (const entry of toolsSpec) {
+      if (typeof entry !== "string") {
+        return `Invalid tools entry: expected string, got ${typeof entry}`;
+      }
+      if (!TOOL_PACKS[entry] && !BASIC_TOOLS_MAP[entry]) {
+        return `Unknown tool or pack '${entry}'. Available tools: ${Object.keys(BASIC_TOOLS_MAP).join(", ")}; packs: ${Object.keys(TOOL_PACKS).join(", ")}`;
+      }
+    }
   }
 
   const maxRoundsError = validateTemplateMaxToolRounds(spec);
@@ -343,15 +383,44 @@ export function resolvePromptsDir(templatesRoot: string): string | undefined {
  * Resolve tool names from the `tools` field in agent.yaml.
  *
  * - `"all"` → all tools in TOOL_PROMPT_ORDER
- * - Array of names → as-is
+ * - Array of names/packs → expand packs, deduplicate
  * - Absent / null → EXECUTOR_DEFAULT_TOOLS (for custom templates)
+ *
+ * Pack names and individual tool names can be mixed freely:
+ *   tools: [read, bash, time]   →  read_file, list_dir, glob, grep, bash, time
  */
 export function resolveToolNames(spec: Record<string, unknown>): string[] {
   const toolsSpec = spec["tools"];
   if (toolsSpec == null) return [...EXECUTOR_DEFAULT_TOOLS];
   if (toolsSpec === "all") return [...TOOL_PROMPT_ORDER];
-  if (Array.isArray(toolsSpec)) return toolsSpec as string[];
+  if (Array.isArray(toolsSpec)) return expandToolSpecs(toolsSpec as string[]);
   throw new Error(`Invalid tools spec: ${JSON.stringify(toolsSpec)}`);
+}
+
+/**
+ * Expand an array of tool specs (pack names and/or individual tool names)
+ * into a deduplicated list of individual tool names.
+ */
+function expandToolSpecs(specs: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const spec of specs) {
+    const packTools = TOOL_PACKS[spec];
+    if (packTools) {
+      for (const tool of packTools) {
+        if (!seen.has(tool)) {
+          seen.add(tool);
+          result.push(tool);
+        }
+      }
+    } else {
+      if (!seen.has(spec)) {
+        seen.add(spec);
+        result.push(spec);
+      }
+    }
+  }
+  return result;
 }
 
 /**
@@ -500,7 +569,7 @@ function validateTemplateMaxToolRounds(spec: Record<string, unknown>): string | 
  * Resolve the `tools` field to a list of ToolDef objects.
  *
  * - `"all"` => all built-in tools
- * - A list of name strings => resolve each from BASIC_TOOLS_MAP
+ * - A list of pack/tool names => expand packs, resolve each from BASIC_TOOLS_MAP
  * - Absent / null => empty list (custom templates get defaults via resolveToolNames)
  */
 function resolveTools(spec: Record<string, unknown>): ToolDef[] {
@@ -509,17 +578,18 @@ function resolveTools(spec: Record<string, unknown>): ToolDef[] {
 
   if (toolsSpec === "all") {
     // BASIC_TOOLS includes all basic tools.
-    // Comm tools (spawn_agent, wait, etc.) are injected by Session at runtime.
+    // Comm tools (spawn, spawn_file, wait, etc.) are injected by Session at runtime.
     return [...BASIC_TOOLS];
   }
 
   if (Array.isArray(toolsSpec)) {
+    const toolNames = expandToolSpecs(toolsSpec as string[]);
     const resolved: ToolDef[] = [];
-    for (const name of toolsSpec) {
-      const tool = BASIC_TOOLS_MAP[name as string];
+    for (const name of toolNames) {
+      const tool = BASIC_TOOLS_MAP[name];
       if (!tool) {
         throw new Error(
-          `Unknown tool '${name}'. Available: ${Object.keys(BASIC_TOOLS_MAP).join(", ")}`,
+          `Unknown tool '${name}'. Available: ${Object.keys(BASIC_TOOLS_MAP).join(", ")}, packs: ${Object.keys(TOOL_PACKS).join(", ")}`,
         );
       }
       resolved.push(tool);

@@ -323,7 +323,6 @@ export class SessionStore {
           modelId: raw.model_id ?? undefined,
           thinkingLevel: raw.thinking_level ?? "default",
           accentColor: raw.accent_color ?? undefined,
-          cacheHitEnabled: raw.cache_hit_enabled ?? true,
           disabledSkills: Array.isArray(raw.disabled_skills) ? raw.disabled_skills : undefined,
           providerEnvVars: raw.provider_env_vars ?? undefined,
           localProviders: raw.local_providers ?? undefined,
@@ -354,7 +353,6 @@ export class SessionStore {
             model_selection_key: payload.modelSelectionKey ?? null,
             model_id: payload.modelId ?? null,
             thinking_level: payload.thinkingLevel,
-            cache_hit_enabled: payload.cacheHitEnabled,
             accent_color: payload.accentColor ?? null,
             disabled_skills: payload.disabledSkills ?? null,
             provider_env_vars: payload.providerEnvVars ?? null,
@@ -539,9 +537,6 @@ export interface LogSessionMeta {
   turnCount: number;
   compactCount: number;
   thinkingLevel: string;
-  cacheHitEnabled: boolean;
-  activePlanCheckpoints?: string[];
-  activePlanChecked?: boolean[];
   childSessions?: ChildSessionMetaRecord[];
 }
 
@@ -561,7 +556,6 @@ export interface GlobalTuiPreferences {
   modelSelectionKey?: string;
   modelId?: string;
   thinkingLevel: string;
-  cacheHitEnabled: boolean;
   accentColor?: string;
   disabledSkills?: string[];
   /** Provider → environment variable name mapping (e.g. { "openai": "OPENAI_API_KEY_1" }) */
@@ -584,7 +578,6 @@ export function createGlobalTuiPreferences(
     modelSelectionKey: undefined,
     modelId: undefined,
     thinkingLevel: "default",
-    cacheHitEnabled: true,
     ...partial,
   };
 }
@@ -607,7 +600,6 @@ export function createLogSessionMeta(
     turnCount: 0,
     compactCount: 0,
     thinkingLevel: "default",
-    cacheHitEnabled: false,
     childSessions: undefined,
     ...partial,
   };
@@ -736,9 +728,6 @@ export function saveLog(
     turn_count: meta.turnCount,
     compact_count: meta.compactCount,
     thinking_level: meta.thinkingLevel,
-    cache_hit_enabled: meta.cacheHitEnabled,
-    active_plan_checkpoints: meta.activePlanCheckpoints ?? null,
-    active_plan_checked: meta.activePlanChecked ?? null,
     child_sessions: meta.childSessions ?? null,
     entries: entries.map(entryToSnake),
   };
@@ -788,9 +777,6 @@ export function loadLog(dir: string): LoadLogResult {
     turnCount: raw.turn_count ?? 0,
     compactCount: raw.compact_count ?? 0,
     thinkingLevel: raw.thinking_level ?? "default",
-    cacheHitEnabled: raw.cache_hit_enabled ?? false,
-    activePlanCheckpoints: Array.isArray(raw.active_plan_checkpoints) ? raw.active_plan_checkpoints as string[] : undefined,
-    activePlanChecked: Array.isArray(raw.active_plan_checked) ? raw.active_plan_checked as boolean[] : undefined,
     childSessions: Array.isArray(raw.child_sessions) ? raw.child_sessions as ChildSessionMetaRecord[] : undefined,
   };
 

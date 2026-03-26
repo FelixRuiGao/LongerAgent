@@ -18,8 +18,7 @@ export type PathAccessKind =
   | "search"
   | "attach"
   | "template"
-  | "spawn_call_file"
-  | "diff";
+  | "spawn_call_file";
 
 export type PathDecision =
   | "allow"

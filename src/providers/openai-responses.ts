@@ -6,7 +6,7 @@
  */
 
 import OpenAI from "openai";
-import type { ModelConfig } from "../config.js";
+import { getExtendedCacheSupport, type ModelConfig } from "../config.js";
 import {
   BaseProvider,
   Citation,
@@ -388,6 +388,15 @@ export class OpenAIResponsesProvider extends BaseProvider {
       Object.assign(kwargs, this._config.extra);
     }
     this._applyThinkingParams(kwargs, options);
+
+    // Prompt cache optimization
+    if (options?.promptCacheKey) {
+      kwargs["prompt_cache_key"] = options.promptCacheKey;
+    }
+    // prompt_cache_retention: Codex backend rejects it; other models gated by capability table.
+    if (!isCodex && getExtendedCacheSupport(this._config.model)) {
+      kwargs["prompt_cache_retention"] = "24h";
+    }
 
     // Codex backend requires stream=true for all requests.
     if (options?.onTextChunk || options?.onReasoningChunk || this._config.provider === "openai-codex") {

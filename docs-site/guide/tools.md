@@ -11,13 +11,11 @@ These tools are available to the agent in every session.
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read a file's contents. Supports text files and images (PNG, JPG, GIF, WebP) on multimodal models -- the agent can directly see and analyze images. |
-| `write_file` | Write content to a file, creating it if it does not exist. |
+| `write_file` | Write content to a file, creating it if it does not exist. Set `append=true` to append instead of overwrite. |
 | `edit_file` | Edit a file with targeted find-and-replace operations. |
-| `apply_patch` | Apply a unified diff patch to one or more files. |
 | `list_dir` | List the contents of a directory. |
 | `glob` | Find files matching a glob pattern (e.g., `**/*.ts`). |
 | `grep` | Search file contents with regular expressions. |
-| `diff` | Show the diff between two files or a file and a string. |
 
 ### Shell
 
@@ -28,11 +26,10 @@ These tools are available to the agent in every session.
 | `bash_output` | Read output from a background shell process. |
 | `kill_shell` | Kill a running background shell process. |
 
-### Testing
+### Utility
 
 | Tool | Description |
 |------|-------------|
-| `test` | Run the project's test suite or a specific test file. |
 | `time` | Return the current local time, timezone, and UTC offset. |
 
 ### Web
@@ -50,7 +47,8 @@ These tools manage sub-agents, context, and user interaction.
 
 | Tool | Description |
 |------|-------------|
-| `spawn_agent` | Spawn sub-agents from a YAML call file. See [Sub-Agents](/guide/sub-agents). |
+| `spawn` | Spawn a single sub-agent with inline parameters. See [Sub-Agents](/guide/sub-agents). |
+| `spawn_file` | Spawn multiple sub-agents or teams from a YAML call file. See [Sub-Agents](/guide/sub-agents). |
 | `kill_agent` | Kill one or more running sub-agents by ID. |
 | `check_status` | Check the status of running sub-agents. |
 | `wait` | Wait for specific sub-agents to complete. |
@@ -59,15 +57,14 @@ These tools manage sub-agents, context, and user interaction.
 
 | Tool | Description |
 |------|-------------|
-| `show_context` | Inspect the current context distribution -- how much space each segment uses. The agent uses this to decide what to summarize. |
-| `summarize_context` | Surgically compress selected context segments while preserving key decisions. |
+| `show_context` | Inspect the current context distribution -- how much space each segment uses. The agent uses this to decide what to distill. |
+| `distill_context` | Surgically compress selected context segments while preserving key decisions. |
 
 ### User Interaction
 
 | Tool | Description |
 |------|-------------|
 | `ask` | Ask the user 1-4 structured questions with 1-4 options each. Used when the agent needs a decision before proceeding. |
-| `plan` | Manage an execution plan with tracked checkpoints. |
 
 ## Skills Tool
 

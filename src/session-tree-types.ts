@@ -18,6 +18,7 @@ export type ChildSessionOutcome =
 export interface ChildSessionSnapshot {
   id: string;
   numericId: number;
+  logRevision: number;
   template: string;
   mode: ChildSessionMode;
   teamId: string | null;

@@ -17,7 +17,6 @@ interface SettingsPanelProps {
 interface SessionPreferences {
   thinkingLevel: string;
   thinkingLevels: string[];
-  cacheHitEnabled: boolean;
   contextRatio: number;
   accentColor: string;
 }
@@ -89,7 +88,6 @@ export function SettingsPanel({ open, onClose, initialTab, initialProvider }: Se
   const [prefs, setPrefs] = useState<SessionPreferences>({
     thinkingLevel: "default",
     thinkingLevels: [],
-    cacheHitEnabled: true,
     contextRatio: 1.0,
     accentColor: "",
   });
@@ -148,13 +146,6 @@ export function SettingsPanel({ open, onClose, initialTab, initialProvider }: Se
     setPref("thinkingLevel", level);
     toast(`Thinking level: ${level}`, "info");
   }, [setPref, toast]);
-
-  const handleCacheToggle = useCallback(() => {
-    const newValue = !prefs.cacheHitEnabled;
-    setPrefs((p) => ({ ...p, cacheHitEnabled: newValue }));
-    setPref("cacheHitEnabled", newValue);
-    toast(`Prompt caching: ${newValue ? "ON" : "OFF"}`, "info");
-  }, [prefs.cacheHitEnabled, setPref, toast]);
 
   const handleContextRatioChange = useCallback((ratio: number) => {
     setPrefs((p) => ({ ...p, contextRatio: ratio }));
@@ -305,7 +296,6 @@ export function SettingsPanel({ open, onClose, initialTab, initialProvider }: Se
               mcpStatus={mcpStatus}
               mcpLoading={mcpLoading}
               onThinkingChange={handleThinkingChange}
-              onCacheToggle={handleCacheToggle}
               onContextRatioChange={handleContextRatioChange}
               onCompact={handleCompact}
               onSummarize={handleSummarize}
@@ -339,7 +329,7 @@ export function SettingsPanel({ open, onClose, initialTab, initialProvider }: Se
 function SessionTab({
   prefs, displayModel, providerLabel, providerInfo, providerKey, tokenInfo, budget, pct, cwd,
   skills, mcpStatus, mcpLoading,
-  onThinkingChange, onCacheToggle, onContextRatioChange, onCompact, onSummarize, onSkillToggle,
+  onThinkingChange, onContextRatioChange, onCompact, onSummarize, onSkillToggle,
 }: {
   prefs: SessionPreferences;
   displayModel: string;
@@ -354,7 +344,6 @@ function SessionTab({
   mcpStatus: McpStatusInfo;
   mcpLoading: boolean;
   onThinkingChange: (level: string) => void;
-  onCacheToggle: () => void;
   onContextRatioChange: (ratio: number) => void;
   onCompact: () => void;
   onSummarize: () => void;
@@ -383,11 +372,6 @@ function SessionTab({
           </div>
         </SettingsSection>
       )}
-
-      {/* Prompt Caching */}
-      <SettingsSection title="Prompt Caching">
-        <ToggleSwitch checked={prefs.cacheHitEnabled} onChange={onCacheToggle} label={prefs.cacheHitEnabled ? "Enabled" : "Disabled"} />
-      </SettingsSection>
 
       {/* Context */}
       <SettingsSection title="Context">

@@ -372,10 +372,8 @@ export class AnthropicProvider extends BaseProvider {
     }
     this._applyThinkingParams(kwargs, options);
 
-    // Prompt caching
-    if (options?.cacheEnabled !== false) {
-      this._applyCacheBreakpoint(kwargs);
-    }
+    // Prompt caching (always enabled)
+    this._applyCacheBreakpoint(kwargs);
 
     if (options?.onTextChunk || options?.onReasoningChunk) {
       return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal);

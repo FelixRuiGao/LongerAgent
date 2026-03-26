@@ -373,7 +373,6 @@ describe("/model command", () => {
       modelSelectionKey: "qwen/qwen3.5-9b",
       modelId: "qwen/qwen3.5-9b",
       thinkingLevel: "default",
-      cacheHitEnabled: true,
       providerEnvVars: { glm: "GLM_API_KEY" },
       localProviders: {
         lmstudio: {
@@ -409,8 +408,7 @@ describe("/model command", () => {
         modelSelectionKey: "glm-5",
         modelId: "glm-5",
         thinkingLevel: "default",
-        cacheHitEnabled: true,
-      }),
+        }),
       resetForNewSession,
       primaryAgent: {
         modelConfig: {

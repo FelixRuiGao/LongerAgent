@@ -23,7 +23,7 @@ import * as yaml from "js-yaml";
 import { countTokens as gptCountTokens, encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
 
 
-import { loadTemplate, validateTemplate } from "./templates/loader.js";
+import { loadTemplate, validateTemplate, assembleSystemPrompt } from "./templates/loader.js";
 
 import { Agent, isNoReply, NO_REPLY_MARKER } from "./agents/agent.js";
 import type {
@@ -41,14 +41,14 @@ import { ProgressEvent, type ProgressLevel, type ProgressReporter } from "./prog
 import { ToolResult } from "./providers/base.js";
 import type { ToolDef } from "./providers/base.js";
 import {
-  SPAWN_AGENT_TOOL,
+  SPAWN_TOOL,
+  SPAWN_FILE_TOOL,
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
   WAIT_TOOL,
   SHOW_CONTEXT_TOOL,
-  SUMMARIZE_CONTEXT_TOOL,
+  DISTILL_CONTEXT_TOOL,
   ASK_TOOL,
-  PLAN_TOOL,
   SEND_TOOL,
 } from "./tools/comm.js";
 import {
@@ -216,10 +216,10 @@ Capture:
 Be thorough — include all information that could be useful. The next instance has no access to this conversation.`;
 
 const MANUAL_SUMMARIZE_PROMPT = [
-  "Review the current active context and use `summarize_context` to compress older groups that are no longer needed in full.",
+  "Review the current active context and use `distill_context` to distill older groups that are no longer needed in full.",
   "Preserve the latest working context and anything you still need verbatim.",
-  "Do not continue the main task beyond this summarize request.",
-  "After summarizing, reply briefly with what you compressed and stop.",
+  "Do not continue the main task beyond this distill request.",
+  "After distilling, reply briefly with what you compressed and stop.",
 ].join(" ");
 
 function appendManualInstruction(
@@ -234,11 +234,11 @@ function appendManualInstruction(
 
 // -- Hint Prompt generators (two-tier) --
 function HINT_LEVEL1_PROMPT(pct: string): string {
-  return `[SYSTEM: Context usage has reached ${pct}. Consider reviewing your context to free up space. You can call \`show_context\` to see the current context distribution, then use \`summarize_context\` to compress older groups that are no longer needed in full. Prioritize: completed subtasks, large tool results you've already extracted key info from, and exploratory steps that led to a conclusion. After summarizing, continue your work normally.]`;
+  return `[SYSTEM: Context usage has reached ${pct}. Consider reviewing your context to free up space. You can call \`show_context\` to see the current context distribution, then use \`distill_context\` to distill older groups that are no longer needed in full. Prioritize: completed subtasks, large tool results you've already extracted key info from, and exploratory steps that led to a conclusion. After distilling, continue your work normally.]`;
 }
 
 function HINT_LEVEL2_PROMPT(pct: string): string {
-  return `[SYSTEM: Context usage has reached ${pct} — auto-compact will trigger soon. Strongly recommended: call \`show_context\` now to see context distribution, then immediately use \`summarize_context\` to compress older groups. Prioritize: completed subtasks, large tool results, and exploratory steps. After summarizing, continue your work.]`;
+  return `[SYSTEM: Context usage has reached ${pct} — auto-compact will trigger soon. Strongly recommended: call \`show_context\` now to see context distribution, then immediately use \`distill_context\` to distill older groups. Prioritize: completed subtasks, large tool results, and exploratory steps. After distilling, continue your work.]`;
 }
 
 function formatTokenCount(value: number): string {
@@ -259,8 +259,8 @@ const SYSTEM_PREFIXES = [
 ];
 
 const COMM_TOOL_NAMES = new Set([
-  "spawn_agent", "kill_agent", "check_status", "wait", "show_context", "summarize_context", "ask", "skill", "reload_skills",
-  "bash_background", "bash_output", "kill_shell", "plan", "send",
+  "spawn", "spawn_file", "kill_agent", "check_status", "wait", "show_context", "distill_context", "ask", "skill",
+  "bash_background", "bash_output", "kill_shell", "send",
 ]);
 
 // ------------------------------------------------------------------
@@ -427,6 +427,7 @@ export class Session {
 
   // Structured log (v2 architecture — dual-array transition)
   private _log: LogEntry[] = [];
+  private _logRevision = 0;
   private _idAllocator = new LogIdAllocator();
   private _logListeners = new Set<() => void>();
 
@@ -453,14 +454,13 @@ export class Session {
   private _showContextRoundsRemaining = 0;
   private _showContextAnnotations: Map<string, string> | null = null;
 
-  // Plan tracking (inline-only, no plan file)
-  private _activePlanCheckpoints: string[] = [];
-  private _activePlanChecked: boolean[] = [];
-
   // Skills
   private _skills = new Map<string, SkillMeta>();
   private _skillRoots: string[] = [];
   private _disabledSkills = new Set<string>();
+
+  // Cached system prompt (static between reloads for prompt cache stability)
+  private _cachedSystemPrompt: string | null = null;
 
   // Artifacts / persistence
   private _store: any;
@@ -488,13 +488,14 @@ export class Session {
   private _recentSessionEvents: string[] = [];
   private _lastTurnEndStatus: "completed" | "interrupted" | "error" | null = null;
 
-  // Thinking level + cache hit + accent
+  // Thinking level + accent
   private _persistedModelSelection: PersistedModelSelection = {};
   private _preferredThinkingLevel = "default";
-  private _preferredCacheHitEnabled = true;
   private _preferredAccentColor?: string;
   private _thinkingLevel = "default";
-  private _cacheHitEnabled = true;
+
+  /** Stable key for OpenAI prompt cache routing affinity. */
+  private _promptCacheKey: string;
 
   // Agent runtime state (for message delivery mode selection)
   private _agentState: "working" | "idle" | "waiting" = "idle";
@@ -627,6 +628,9 @@ export class Session {
     const pendingInboxCount = typeof (session as any).pendingInboxCount === "number"
       ? (session as any).pendingInboxCount as number
       : 0;
+    const logRevision = typeof (session as any).getLogRevision === "function"
+      ? (session as any).getLogRevision() as number
+      : 0;
     const lifecycle =
       handle.lifecycle === "terminated" ? "terminated" :
       handle.lifecycle === "completed" ? "completed" :
@@ -645,6 +649,7 @@ export class Session {
     return {
       id: handle.id,
       numericId: handle.numericId,
+      logRevision,
       template: handle.template,
       mode: handle.mode,
       teamId: handle.teamId,
@@ -741,6 +746,8 @@ export class Session {
     onTurnOutput?: (text: string) => void;
     toolExecutorOverrides?: Record<string, ToolExecutor>;
     deferQueuedMessageInjectionOnTurnExit?: boolean;
+    /** Stable key for OpenAI prompt cache routing affinity. Auto-generated if omitted. */
+    promptCacheKey?: string;
   }) {
     this.primaryAgent = opts.primaryAgent;
     this.config = opts.config;
@@ -772,6 +779,7 @@ export class Session {
     this._systemData = "";
 
     this._createdAt = new Date().toISOString();
+    this._promptCacheKey = opts.promptCacheKey ?? randomUUID();
     this._initConversation();
     this._toolExecutors = this._buildToolExecutors();
     this._ensureCommTools();
@@ -804,11 +812,14 @@ export class Session {
     this._createdAt = new Date().toISOString();
     this._title = undefined;
     this._cachedSummary = undefined;
-    const systemPrompt = this._renderSystemPrompt(this.primaryAgent.systemPrompt);
     this._log = [];
+    this._logRevision = 0;
     this._idAllocator = new LogIdAllocator();
+
+    // Assemble system prompt and cache it for prompt cache stability
+    this._reloadPromptAndTools();
     this._appendEntry(
-      createSystemPrompt(this._nextLogId("system_prompt"), systemPrompt),
+      createSystemPrompt(this._nextLogId("system_prompt"), this._cachedSystemPrompt!),
       false,
     );
     this._updateInitialTokenEstimate();
@@ -832,12 +843,18 @@ export class Session {
    */
   private _appendEntry(entry: LogEntry, save = true): void {
     this._log.push(entry);
+    this._bumpLogRevision();
     this._notifyLogListeners();
     if (save) this.onSaveRequest?.();
   }
 
   private _touchLog(): void {
+    this._bumpLogRevision();
     this._notifyLogListeners();
+  }
+
+  private _bumpLogRevision(): void {
+    this._logRevision += 1;
   }
 
   private _notifyLogListeners(): void {
@@ -1366,8 +1383,6 @@ export class Session {
     this._shellCounter = 0;
     this._showContextRoundsRemaining = 0;
     this._showContextAnnotations = null;
-    this._activePlanCheckpoints = [];
-    this._activePlanChecked = [];
   }
 
   // ------------------------------------------------------------------
@@ -1377,6 +1392,10 @@ export class Session {
   /** Read-only snapshot of the structured log. */
   get log(): readonly LogEntry[] {
     return this._log;
+  }
+
+  getLogRevision(): number {
+    return this._logRevision;
   }
 
   /** Subscribe to log changes. Returns an unsubscribe function. */
@@ -1426,13 +1445,16 @@ export class Session {
     this._persistedModelSelection = { ...shadow._persistedModelSelection };
 
     this._log = shadow._log;
+    // Do NOT copy shadow._logRevision — it is a transient change-detection
+    // counter that must stay monotonically increasing on *this* session so
+    // that UI subscribers (shouldSyncTranscript) always detect the swap.
+    // Copying the shadow's small value can collide with the current value,
+    // causing the transcript panel to skip the update.
     this._idAllocator = shadow._idAllocator;
     this._turnCount = shadow._turnCount;
     this._compactCount = shadow._compactCount;
     this._preferredThinkingLevel = shadow._preferredThinkingLevel;
-    this._preferredCacheHitEnabled = shadow._preferredCacheHitEnabled;
     this._thinkingLevel = shadow._thinkingLevel;
-    this._cacheHitEnabled = shadow._cacheHitEnabled;
     this._createdAt = shadow._createdAt;
     this._title = shadow._title;
     this._cachedSummary = shadow._cachedSummary;
@@ -1449,8 +1471,6 @@ export class Session {
     this._showContextAnnotations = shadow._showContextAnnotations
       ? new Map(shadow._showContextAnnotations)
       : null;
-    this._activePlanCheckpoints = [...shadow._activePlanCheckpoints];
-    this._activePlanChecked = [...shadow._activePlanChecked];
     this._activeAsk = shadow._activeAsk ? structuredClone(shadow._activeAsk) as AskRequest : null;
     this._askHistory = structuredClone(shadow._askHistory) as AskAuditRecord[];
     this._agentState = shadow._agentState;
@@ -1467,6 +1487,7 @@ export class Session {
     this._subAgentCounter = 0;
     warnings.push(...this._commitPreparedChildren(prepared.children));
 
+    this._bumpLogRevision();
     this._notifyLogListeners();
     return warnings;
   }
@@ -1537,7 +1558,6 @@ export class Session {
     });
     const restoredModelConfig = this.config.getModel(restoredSelection.selectedConfigName);
     const restoredThinkingPreference = meta.thinkingLevel ?? "default";
-    const restoredCachePreference = meta.cacheHitEnabled ?? true;
 
     this._resetTransientState();
     this.primaryAgent.replaceModelConfig(restoredModelConfig);
@@ -1550,18 +1570,17 @@ export class Session {
 
     // Core log state
     this._log = entries;
+    this._logRevision = 0;
     this._idAllocator = idAllocator;
 
     // Counters from meta
     this._turnCount = meta.turnCount;
     this._compactCount = meta.compactCount;
     this._preferredThinkingLevel = restoredThinkingPreference;
-    this._preferredCacheHitEnabled = restoredCachePreference;
     this._thinkingLevel = this._resolveThinkingLevelForModel(
       restoredModelConfig.model,
       restoredThinkingPreference,
     );
-    this._cacheHitEnabled = restoredCachePreference;
     this._createdAt = meta.createdAt || this._createdAt;
     this._title = meta.title;
     this._cachedSummary = meta.summary || undefined;
@@ -1592,12 +1611,6 @@ export class Session {
     // Restore ask state from log: find unclosed ask_request
     this._restoreAskStateFromLog(entries);
 
-    // Restore active plan from meta
-    if (meta.activePlanCheckpoints && meta.activePlanCheckpoints.length > 0) {
-      this._activePlanCheckpoints = meta.activePlanCheckpoints;
-      this._activePlanChecked = meta.activePlanChecked ?? meta.activePlanCheckpoints.map(() => false);
-    }
-
     // Rebuild ask history from ask_resolution entries
     this._askHistory = [];
     for (const e of entries) {
@@ -1614,6 +1627,7 @@ export class Session {
       }
     }
 
+    this._bumpLogRevision();
     this._notifyLogListeners();
   }
 
@@ -1942,11 +1956,8 @@ export class Session {
         turnCount: this._turnCount,
         compactCount: this._compactCount,
         thinkingLevel: this._thinkingLevel,
-        cacheHitEnabled: this._cacheHitEnabled,
         title: this._title,
         summary: this._generateSummary(),
-        activePlanCheckpoints: this._activePlanCheckpoints.length > 0 ? this._activePlanCheckpoints : undefined,
-        activePlanChecked: this._activePlanChecked.length > 0 ? this._activePlanChecked : undefined,
         childSessions: [...this._childSessions.values()].map((handle) => ({
           id: handle.id,
           numericId: handle.numericId,
@@ -1991,12 +2002,11 @@ export class Session {
     this._compactCount = 0;
     this._usedContextIds = new Set<string>();
 
-    // 4. Reset thinking/cache state
+    // 4. Reset thinking state
     this._thinkingLevel = this._resolveThinkingLevelForModel(
       this.primaryAgent.modelConfig.model,
       this._preferredThinkingLevel,
     );
-    this._cacheHitEnabled = this._preferredCacheHitEnabled;
 
     // 5. Reset MCP connection flag (will reconnect on next turn)
     this._mcpConnected = false;
@@ -2015,34 +2025,40 @@ export class Session {
         supportsMultimodal: this.primaryAgent.modelConfig.supportsMultimodal,
       });
 
+    const writeFileWithReload: ToolExecutor = (args) => {
+      const result = scopedBuiltin("write_file")(args);
+      // Auto-reload prompt when AGENTS.md is modified
+      const filePath = String((args as Record<string, unknown>)["path"] ?? "");
+      if (filePath && this._isAgentsMdPath(filePath)) {
+        this._reloadPromptAndTools();
+      }
+      return result;
+    };
+
     return {
       read_file: scopedBuiltin("read_file"),
       list_dir: scopedBuiltin("list_dir"),
       glob: scopedBuiltin("glob"),
       grep: scopedBuiltin("grep"),
       edit_file: scopedBuiltin("edit_file"),
-      write_file: scopedBuiltin("write_file"),
-      apply_patch: scopedBuiltin("apply_patch"),
-      diff: scopedBuiltin("diff"),
+      write_file: writeFileWithReload,
       web_fetch: (args) => executeTool("web_fetch", args),
       bash: (args) => executeTool("bash", args, {
         projectRoot: this._projectRoot,
         externalPathAllowlist: [this._resolveSessionArtifacts()],
       }),
-      test: (args) => executeTool("test", args, { projectRoot: this._projectRoot }),
       bash_background: (args) => this._execBashBackground(args),
       bash_output: (args) => this._execBashOutput(args),
       kill_shell: (args) => this._execKillShell(args),
-      spawn_agent: (args) => this._execSpawnAgents(args),
+      spawn: (args) => this._execSpawn(args),
+      spawn_file: (args) => this._execSpawnFile(args),
       kill_agent: (args) => this._execKillAgent(args),
       check_status: (args) => this._execCheckStatus(args),
       wait: (args) => this._execWait(args),
       show_context: (args) => this._execShowContext(args),
-      summarize_context: (args) => this._execSummarizeContext(args),
+      distill_context: (args) => this._execDistillContext(args),
       ask: (args) => this._execAsk(args),
-      plan: (args) => this._execPlan(args),
       skill: (args) => this._execSkill(args),
-      reload_skills: () => this._execReloadSkills(),
       send: (args) => this._execSend(args),
       $web_search: (args) => toolBuiltinWebSearchPassthrough(args as Record<string, unknown>),
       ...this._toolExecutorOverrides,
@@ -2052,14 +2068,13 @@ export class Session {
   private _ensureCommTools(): void {
     const existing = new Set(this.primaryAgent.tools.map((t) => t.name));
     const wanted: ToolDef[] = [];
-    if (this._capabilities.includeSpawnTool) wanted.push(SPAWN_AGENT_TOOL);
+    if (this._capabilities.includeSpawnTool) wanted.push(SPAWN_TOOL, SPAWN_FILE_TOOL);
     if (this._capabilities.includeKillTool) wanted.push(KILL_AGENT_TOOL);
     if (this._capabilities.includeCheckStatusTool) wanted.push(CHECK_STATUS_TOOL);
     if (this._capabilities.includeWaitTool) wanted.push(WAIT_TOOL);
     if (this._capabilities.includeShowContextTool) wanted.push(SHOW_CONTEXT_TOOL);
-    if (this._capabilities.includeSummarizeContextTool) wanted.push(SUMMARIZE_CONTEXT_TOOL);
+    if (this._capabilities.includeDistillContextTool) wanted.push(DISTILL_CONTEXT_TOOL);
     if (this._capabilities.includeAskTool) wanted.push(ASK_TOOL);
-    if (this._capabilities.includePlanTool) wanted.push(PLAN_TOOL);
     for (const toolDef of wanted) {
       if (!existing.has(toolDef.name)) {
         this.primaryAgent.tools.push(toolDef);
@@ -2135,28 +2150,18 @@ export class Session {
 
   /**
    * Rescan skill directories, apply disabled filter, and rebuild
-   * the skill tool definition + re-register slash commands.
+   * the skill tool definition. Returns change report for callers
+   * that need it (e.g. /skills command).
    */
   reloadSkills(): { added: string[]; removed: string[]; total: number } {
     const oldNames = new Set(this._skills.keys());
-    const freshAll = loadSkillsMulti(this._skillRoots);
+    this._refreshSkills();
+    const newNames = new Set(this._skills.keys());
 
-    // Apply disabled filter
-    const filtered = new Map<string, SkillMeta>();
-    for (const [name, skill] of freshAll) {
-      if (!this._disabledSkills.has(name)) {
-        filtered.set(name, skill);
-      }
-    }
-
-    const newNames = new Set(filtered.keys());
     const added = [...newNames].filter((n) => !oldNames.has(n));
     const removed = [...oldNames].filter((n) => !newNames.has(n));
 
-    this._skills = filtered;
-    this._ensureSkillTool();
-
-    return { added, removed, total: filtered.size };
+    return { added, removed, total: this._skills.size };
   }
 
   /**
@@ -2199,50 +2204,41 @@ export class Session {
     };
   }
 
-  private _buildReloadSkillsToolDef(): ToolDef {
-    return {
-      name: "reload_skills",
-      description:
-        "Rescan skill directories, update the in-memory skills map, and rebuild the skill tool definition. " +
-        "Use after installing, removing, or modifying skills on disk.",
-      parameters: { type: "object", properties: {} },
-      summaryTemplate: "{agent} is reloading skills",
-    };
-  }
-
-  /** Add the skill + reload_skills tools to the primary agent. */
+  /** Add the `skill` tool to the primary agent. */
   private _ensureSkillTool(): void {
-    if (!this._capabilities.includeSkillTools && !this._capabilities.includeReloadSkillsTool) {
+    if (!this._capabilities.includeSkillTools) {
       this.primaryAgent.tools = this.primaryAgent.tools.filter(
-        (t) => t.name !== "skill" && t.name !== "reload_skills",
+        (t) => t.name !== "skill",
       );
       return;
     }
-    // Remove old skill-related tools
+    // Remove old skill tool
     this.primaryAgent.tools = this.primaryAgent.tools.filter(
-      (t) => t.name !== "skill" && t.name !== "reload_skills",
+      (t) => t.name !== "skill",
     );
 
     const skillDef = this._buildSkillToolDef();
-    if (skillDef && this._capabilities.includeSkillTools) {
+    if (skillDef) {
       this.primaryAgent.tools.push(skillDef);
-    }
-
-    // Always add reload_skills if there are skill roots configured
-    if (this._skillRoots.length > 0 && this._capabilities.includeReloadSkillsTool) {
-      this.primaryAgent.tools.push(this._buildReloadSkillsToolDef());
     }
   }
 
-  /** Execute the `reload_skills` tool. */
-  private _execReloadSkills(): ToolResult {
-    const result = this.reloadSkills();
-    const lines = [`Skills reloaded. Total active: ${result.total}`];
-    if (result.added.length) lines.push(`Added: ${result.added.join(", ")}`);
-    if (result.removed.length) lines.push(`Removed: ${result.removed.join(", ")}`);
-    const current = [...this._skills.keys()];
-    lines.push(`\nCurrently available: ${current.join(", ") || "(none)"}`);
-    return new ToolResult({ content: lines.join("\n") });
+  /**
+   * Refresh skills from disk. Called automatically before each API call
+   * so that newly installed, removed, or modified skills take effect
+   * without a manual reload step.
+   */
+  private _refreshSkills(): void {
+    if (this._skillRoots.length === 0) return;
+    const freshAll = loadSkillsMulti(this._skillRoots);
+    const filtered = new Map<string, SkillMeta>();
+    for (const [name, skill] of freshAll) {
+      if (!this._disabledSkills.has(name)) {
+        filtered.set(name, skill);
+      }
+    }
+    this._skills = filtered;
+    this._ensureSkillTool();
   }
 
   /** Execute the `skill` tool — load and return skill instructions. */
@@ -2313,15 +2309,6 @@ export class Session {
     );
   }
 
-  get cacheHitEnabled(): boolean {
-    return this._cacheHitEnabled;
-  }
-
-  set cacheHitEnabled(value: boolean) {
-    this._preferredCacheHitEnabled = value;
-    this._cacheHitEnabled = value;
-  }
-
   get accentColor(): string | undefined {
     return this._preferredAccentColor;
   }
@@ -2357,7 +2344,6 @@ export class Session {
       newModelConfig.model,
       this._preferredThinkingLevel,
     );
-    this._cacheHitEnabled = this._preferredCacheHitEnabled;
     if (this._turnCount === 0) {
       this._updateInitialTokenEstimate();
       this._notifyLogListeners();
@@ -2367,13 +2353,11 @@ export class Session {
   applyGlobalPreferences(preferences: GlobalTuiPreferences): void {
     const prefs = createGlobalTuiPreferences(preferences);
     this._preferredThinkingLevel = prefs.thinkingLevel;
-    this._preferredCacheHitEnabled = prefs.cacheHitEnabled;
     this._preferredAccentColor = prefs.accentColor;
     this._thinkingLevel = this._resolveThinkingLevelForModel(
       this.primaryAgent.modelConfig.model,
       prefs.thinkingLevel,
     );
-    this._cacheHitEnabled = prefs.cacheHitEnabled;
 
     // Restore disabled skills
     if (prefs.disabledSkills && prefs.disabledSkills.length > 0) {
@@ -2389,7 +2373,6 @@ export class Session {
       modelSelectionKey: this._persistedModelSelection.modelSelectionKey ?? undefined,
       modelId: this._persistedModelSelection.modelId ?? undefined,
       thinkingLevel: this._preferredThinkingLevel,
-      cacheHitEnabled: this._preferredCacheHitEnabled,
       accentColor: this._preferredAccentColor,
       disabledSkills: this._disabledSkills.size > 0
         ? [...this._disabledSkills]
@@ -3330,10 +3313,9 @@ export class Session {
   }
 
   private _getLastSendableRole(): string | null {
-    const agentsMd = this._readAgentsMd();
     const messages = projectToApiMessages(this._log, {
+      systemPrompt: this._getSystemPrompt(),
       resolveImageRef: (refPath) => this._resolveImageRef(refPath),
-      agentsMd,
       requiresAlternatingRoles: (this.primaryAgent as any)._provider?.requiresAlternatingRoles,
     });
     if (messages.length === 0) return null;
@@ -3561,10 +3543,9 @@ export class Session {
       const showAnnotations = this._showContextRoundsRemaining > 0
         ? this._showContextAnnotations ?? undefined
         : undefined;
-      const agentsMd = this._readAgentsMd();
       return projectToApiMessages(this._log, {
+        systemPrompt: this._getSystemPrompt(),
         resolveImageRef: (refPath) => this._resolveImageRef(refPath),
-        agentsMd,
         requiresAlternatingRoles: (this.primaryAgent as any)._provider?.requiresAlternatingRoles,
         showContextAnnotations: showAnnotations ?? undefined,
       });
@@ -3598,7 +3579,7 @@ export class Session {
       this._buildCompactCheck(),
       onTokenUpdate,
       this._thinkingLevel === "default" ? undefined : this._thinkingLevel,
-      this._cacheHitEnabled,
+      this._promptCacheKey,
       this._compactInProgress ? undefined : (() => this.onSaveRequest?.()),
       this._beforeToolExecute,
       () => this._buildNotificationContent(),
@@ -3898,76 +3879,20 @@ export class Session {
     return new ToolResult({ content: result.contextMap });
   }
 
-  private _execSummarizeContext(args: Record<string, unknown>): ToolResult {
-    const fileMode = typeof args.file === "string";
-    let effectiveArgs = args;
-
-    if (fileMode) {
-      const fileRel = (args.file as string).trim();
-      if (!fileRel) {
-        return new ToolResult({ content: "Error: 'file' parameter must be a non-empty string." });
-      }
-      const artifactsDir = this._resolveSessionArtifacts();
-      let filePath: string;
-      try {
-        filePath = safePath({
-          baseDir: artifactsDir,
-          requestedPath: fileRel,
-          cwd: artifactsDir,
-          mustExist: true,
-          expectFile: true,
-          accessKind: "read",
-        }).safePath!;
-      } catch (e) {
-        if (e instanceof SafePathError) {
-          const candidatePath = (e as SafePathError).details?.resolvedPath || join(artifactsDir, fileRel);
-          return new ToolResult({
-            content:
-              `Error: summary file not found or not accessible at ${candidatePath}\n` +
-              `The 'file' parameter is resolved relative to SESSION_ARTIFACTS (${artifactsDir}).`,
-          });
-        }
-        throw e;
-      }
-      let parsed: unknown;
-      try {
-        parsed = yaml.load(readFileSync(filePath, "utf-8"));
-      } catch (e) {
-        return new ToolResult({ content: `Error: failed to parse summary file: ${e}` });
-      }
-      if (!parsed || typeof parsed !== "object") {
-        return new ToolResult({ content: "Error: summary file must be a YAML mapping." });
-      }
-      const operations = (parsed as Record<string, unknown>)["operations"];
-      if (!Array.isArray(operations)) {
-        return new ToolResult({ content: "Error: summary file must contain an 'operations' array." });
-      }
-      effectiveArgs = { operations };
-    }
-
+  private _execDistillContext(args: Record<string, unknown>): ToolResult {
     const result = execSummarizeContextOnLog(
-      effectiveArgs,
+      args,
       this._log,
       () => this._allocateContextId(),
       () => this._nextLogId("summary"),
       this._turnCount,
     );
 
-    if (result.results.some((r) => r.success)) {
-      // Don't reset hint state here — wait for next API call's actual inputTokens
-      // to determine the real state (via _updateHintStateAfterApiCall)
-    }
-
-    this._annotateLatestSummarizeToolCall(result.results);
-
-    // In file mode, compress intermediate decision-process entries
-    if (fileMode && result.results.some((r) => r.success)) {
-      this._compressFileModeSummarizeSteps(args.file as string);
-    }
+    this._annotateLatestDistillToolCall(result.results);
 
     this._touchLog();
 
-    // Auto-dismiss show_context annotations after a successful summarize
+    // Auto-dismiss show_context annotations after a successful distill
     if (result.results.some((r) => r.success)) {
       this._showContextRoundsRemaining = 0;
       this._showContextAnnotations = null;
@@ -3976,114 +3901,9 @@ export class Session {
     return new ToolResult({ content: result.output });
   }
 
-  // ==================================================================
-  // Plan tool
-  // ==================================================================
-
-  private _execPlan(args: Record<string, unknown>): ToolResult {
-    const action = args["action"];
-    if (typeof action !== "string" || !["submit", "check", "dismiss"].includes(action)) {
-      return this._toolArgError("plan", "'action' must be one of: submit, check, dismiss.");
-    }
-
-    if (action === "submit") {
-      const raw = args["checkpoints"];
-      if (!Array.isArray(raw) || raw.length === 0) {
-        return this._toolArgError(
-          "plan",
-          "'checkpoints' must be a non-empty array of strings.",
-        );
-      }
-      const checkpoints = raw.map((c) => String(c).trim()).filter(Boolean);
-      if (checkpoints.length === 0) {
-        return this._toolArgError("plan", "'checkpoints' items must not be empty.");
-      }
-
-      this._activePlanCheckpoints = checkpoints;
-      this._activePlanChecked = checkpoints.map(() => false);
-      this._emitPlanProgress("plan_submit");
-
-      return new ToolResult({
-        content: `Plan submitted with ${checkpoints.length} checkpoints.`,
-      });
-    }
-
-    if (action === "check") {
-      if (this._activePlanCheckpoints.length === 0) {
-        return new ToolResult({ content: "Error: no active plan. Use action='submit' first." });
-      }
-      const item = args["item"];
-      if (typeof item !== "number" || !Number.isInteger(item)) {
-        return this._toolArgError("plan", "'item' must be an integer index (1-based).");
-      }
-
-      // Convert 1-based user index to 0-based internal index
-      const idx = item - 1;
-
-      if (idx < 0 || idx >= this._activePlanCheckpoints.length) {
-        return new ToolResult({
-          content: `Error: 'item' ${item} is out of range (1..${this._activePlanCheckpoints.length}).`,
-        });
-      }
-
-      const checkpointText = this._activePlanCheckpoints[idx];
-      this._activePlanChecked[idx] = true;
-
-      // Check if all checkpoints are now complete → auto-finish
-      const allDone = this._activePlanChecked.every(Boolean);
-
-      if (allDone) {
-        // Clear state immediately (so persistence sees no plan on interrupt)
-        // but delay TUI panel dismissal so the user sees the all-checked state
-        this._emitPlanProgress("plan_update");
-        this._activePlanCheckpoints = [];
-        this._activePlanChecked = [];
-        setTimeout(() => {
-          this._emitPlanProgress("plan_finish");
-        }, 5000);
-
-        return new ToolResult({
-          content:
-            `✓ Checkpoint ${item} done: ${checkpointText}\n` +
-            `All checkpoints complete. Plan closed.`,
-        });
-      }
-
-      this._emitPlanProgress("plan_update");
-
-      return new ToolResult({
-        content: `✓ Checkpoint ${item} done: ${checkpointText}`,
-      });
-    }
-
-    // action === "dismiss"
-    this._activePlanCheckpoints = [];
-    this._activePlanChecked = [];
-    this._emitPlanProgress("plan_finish");
-    return new ToolResult({ content: "Plan dismissed." });
-  }
-
-  private _emitPlanProgress(action: "plan_submit" | "plan_update" | "plan_finish"): void {
-    if (!this._progress) return;
-    const checkpoints = this._activePlanCheckpoints.map((text, i) => ({
-      text,
-      checked: this._activePlanChecked[i] ?? false,
-    }));
-    this._progress.emit({
-      step: this._turnCount,
-      agent: this.primaryAgent.name,
-      action,
-      message: "",
-      level: "normal" as ProgressLevel,
-      timestamp: Date.now() / 1000,
-      usage: {},
-      extra: { checkpoints },
-    });
-  }
-
-  private _annotateLatestSummarizeToolCall(results: Array<{ success: boolean; newContextId?: string }>): void {
+  private _annotateLatestDistillToolCall(results: Array<{ success: boolean; newContextId?: string }>): void {
     const resolvedToolCallIds = new Set<string>();
-    let summarizeEntry: LogEntry | null = null;
+    let distillEntry: LogEntry | null = null;
 
     for (let i = this._log.length - 1; i >= 0; i--) {
       const entry = this._log[i];
@@ -4096,13 +3916,13 @@ export class Session {
       if (entry.type !== "tool_call") continue;
       const toolCallId = String((entry.meta as Record<string, unknown>)["toolCallId"] ?? "");
       if (resolvedToolCallIds.has(toolCallId)) continue;
-      if ((entry.meta as Record<string, unknown>)["toolName"] !== "summarize_context") continue;
-      summarizeEntry = entry;
+      if ((entry.meta as Record<string, unknown>)["toolName"] !== "distill_context") continue;
+      distillEntry = entry;
       break;
     }
 
-    if (!summarizeEntry) return;
-    const content = summarizeEntry.content as Record<string, unknown>;
+    if (!distillEntry) return;
+    const content = distillEntry.content as Record<string, unknown>;
     const args = (content["arguments"] as Record<string, unknown>) ?? {};
     const operations = ((args["operations"] as Array<Record<string, unknown>>) ?? []).map((op) => ({ ...op }));
 
@@ -4111,7 +3931,7 @@ export class Session {
       operations[i]["_result_context_id"] = results[i].newContextId;
     }
 
-    summarizeEntry.content = {
+    distillEntry.content = {
       ...content,
       arguments: {
         ...args,
@@ -4120,107 +3940,6 @@ export class Session {
     };
   }
 
-  /**
-   * Compress intermediate tool calls (read_file, write_file, edit_file) between the
-   * last show_context and the current summarize_context when file mode was used.
-   * These entries represent the "decision process" of building the summary file.
-   */
-  private _compressFileModeSummarizeSteps(filePath: string): void {
-    // Resolve the full file path for matching against tool call arguments
-    const artifactsDir = this._resolveSessionArtifacts();
-    const resolvedFilePath = resolve(artifactsDir, filePath.trim());
-
-    // Find the current summarize_context tool_call (most recent unresolved one)
-    let summarizeIdx = -1;
-    const resolvedToolCallIds = new Set<string>();
-    for (let i = this._log.length - 1; i >= 0; i--) {
-      const entry = this._log[i];
-      if (entry.discarded) continue;
-      if (entry.type === "tool_result") {
-        const toolCallId = (entry.meta as Record<string, unknown>)["toolCallId"];
-        if (toolCallId) resolvedToolCallIds.add(String(toolCallId));
-        continue;
-      }
-      if (entry.type !== "tool_call") continue;
-      const toolCallId = String((entry.meta as Record<string, unknown>)["toolCallId"] ?? "");
-      if (resolvedToolCallIds.has(toolCallId)) continue;
-      if ((entry.meta as Record<string, unknown>)["toolName"] !== "summarize_context") continue;
-      summarizeIdx = i;
-      break;
-    }
-    if (summarizeIdx < 0) return;
-
-    // Find the most recent show_context tool_call before the summarize_context
-    let showContextIdx = -1;
-    for (let i = summarizeIdx - 1; i >= 0; i--) {
-      const entry = this._log[i];
-      if (entry.discarded || entry.summarized) continue;
-      if (entry.type !== "tool_call") continue;
-      if ((entry.meta as Record<string, unknown>)["toolName"] === "show_context") {
-        showContextIdx = i;
-        break;
-      }
-    }
-    if (showContextIdx < 0) return;
-
-    // Collect all entries between show_context and summarize_context (exclusive on both ends)
-    const FILE_TOOLS = new Set(["read_file", "write_file", "edit_file"]);
-    const candidateIndices: number[] = [];
-    let allQualify = true;
-
-    for (let i = showContextIdx + 1; i < summarizeIdx; i++) {
-      const entry = this._log[i];
-      if (entry.discarded || entry.summarized) continue;
-
-      if (entry.type === "tool_call") {
-        const toolName = (entry.meta as Record<string, unknown>)["toolName"];
-        if (!FILE_TOOLS.has(String(toolName))) {
-          allQualify = false;
-          break;
-        }
-        // Check that the tool operates on the summary file
-        const content = entry.content as Record<string, unknown>;
-        const toolArgs = (content["arguments"] as Record<string, unknown>) ?? {};
-        const toolPath = String(toolArgs["path"] ?? "");
-        const resolvedToolPath = resolve(artifactsDir, toolPath);
-        if (resolvedToolPath !== resolvedFilePath) {
-          allQualify = false;
-          break;
-        }
-        candidateIndices.push(i);
-      } else if (entry.type === "tool_result" || entry.type === "assistant_text" || entry.type === "reasoning") {
-        candidateIndices.push(i);
-      } else {
-        // Other entry types (e.g. user_message) — don't compress
-        allQualify = false;
-        break;
-      }
-    }
-
-    if (!allQualify || candidateIndices.length === 0) return;
-
-    // Mark all intermediate entries as summarized
-    const summarizedEntryIds: string[] = [];
-    for (const idx of candidateIndices) {
-      this._log[idx].summarized = true;
-      summarizedEntryIds.push(this._log[idx].id);
-    }
-
-    // Insert a synthetic summary entry right before the summarize_context tool_call
-    const newCtxId = this._allocateContextId();
-    const summaryContent =
-      "[Summary (decision process)] summarize_context decision process between show_context and import — omitted.";
-    const summaryEntry = createSummary(
-      this._nextLogId("summary"),
-      this._turnCount,
-      summaryContent,
-      summaryContent,
-      newCtxId,
-      summarizedEntryIds,
-      1,
-    );
-    this._log.splice(summarizeIdx, 0, summaryEntry);
-  }
 
   /**
    * After execSummarizeContext mutates the projected messages array,
@@ -4294,7 +4013,7 @@ export class Session {
       existingSummaryCtxIds.add(String(ctxId));
     }
 
-    this._notifyLogListeners();
+    this._touchLog();
   }
 
   // ==================================================================
@@ -4305,6 +4024,17 @@ export class Session {
    * Read AGENTS.md from user home (~/) and project root, concatenating both.
    * Global file comes first, project file second.
    */
+  /**
+   * Check if a file path refers to an AGENTS.md file (global or project).
+   * Used to auto-reload the system prompt cache after writes.
+   */
+  private _isAgentsMdPath(filePath: string): boolean {
+    const resolved = resolve(filePath);
+    const globalPath = join(getLongerAgentHomeDir(), "AGENTS.md");
+    const projectPath = join(this._projectRoot, "AGENTS.md");
+    return resolved === resolve(globalPath) || resolved === resolve(projectPath);
+  }
+
   private _readAgentsMd(): string {
     const parts: string[] = [];
 
@@ -4339,14 +4069,6 @@ export class Session {
     }
 
     return parts.join("\n\n---\n\n");
-  }
-
-  private _buildActivePlanText(): string {
-    if (this._activePlanCheckpoints.length === 0) return "";
-    const lines = this._activePlanCheckpoints.map((text, i) =>
-      `- [${this._activePlanChecked[i] ? "x" : " "}] ${text}`,
-    );
-    return `## Active Plan\n${lines.join("\n")}`;
   }
 
   private _countProjectedMessageTokens(content: unknown): number {
@@ -4395,10 +4117,9 @@ export class Session {
   }
 
   private _estimateInitialApiInputTokens(): number {
-    const agentsMd = this._readAgentsMd();
     const messages = projectToApiMessages(this._log, {
+      systemPrompt: this._getSystemPrompt(),
       resolveImageRef: (refPath) => this._resolveImageRef(refPath),
-      agentsMd,
       requiresAlternatingRoles: (this.primaryAgent as any)._provider?.requiresAlternatingRoles,
     });
 
@@ -4522,18 +4243,57 @@ export class Session {
   }
 
   /**
+   * Assemble the full system prompt from disk (recipe + AGENTS.md + path rendering).
+   * This is the "compute" method — called by _reloadPromptAndTools(), not per-call.
+   */
+  private _assembleSystemPrompt(): string {
+    const recipe = this.primaryAgent.promptRecipe;
+    let prompt: string;
+
+    if (recipe) {
+      prompt = assembleSystemPrompt(recipe);
+    } else {
+      prompt = this.primaryAgent.systemPrompt;
+    }
+
+    // Append AGENTS.md as a system prompt section
+    const agentsMd = this._readAgentsMd();
+    if (agentsMd) {
+      prompt = prompt.trimEnd() +
+        "\n\n---\n\n# Persistent Memory (AGENTS.md)\n\n" +
+        agentsMd;
+    }
+
+    return this._renderSystemPrompt(prompt);
+  }
+
+  /**
+   * Get the cached system prompt. Computed once and reused across API calls
+   * for prompt cache stability. Refreshed only by _reloadPromptAndTools().
+   */
+  private _getSystemPrompt(): string {
+    if (!this._cachedSystemPrompt) {
+      this._cachedSystemPrompt = this._assembleSystemPrompt();
+    }
+    return this._cachedSystemPrompt;
+  }
+
+  /**
+   * Reload system prompt, skills, and tool definitions.
+   * Called at session init, on `/reload`, and after AGENTS.md writes.
+   * Invalidates the prompt cache so the next API call gets a fresh prompt.
+   */
+  _reloadPromptAndTools(): void {
+    this._refreshSkills();
+    this._cachedSystemPrompt = this._assembleSystemPrompt();
+  }
+
+  /**
    * Update the system message in the conversation with re-rendered paths.
    * Called by setStore() to fix paths after the store is linked.
    */
   private _refreshSystemPromptPaths(): void {
-    const rendered = this._renderSystemPrompt(this.primaryAgent.systemPrompt);
-    // Update the system_prompt entry in _log
-    for (const e of this._log) {
-      if (e.type === "system_prompt" && !e.discarded) {
-        e.content = rendered;
-        break;
-      }
-    }
+    this._reloadPromptAndTools();
     this._updateInitialTokenEstimate();
   }
 
@@ -4545,6 +4305,10 @@ export class Session {
     inputTokens: number, outputTokens: number, hasToolCalls: boolean,
   ) => { compactNeeded: boolean; scenario?: "output" | "toolcall" } | null) | undefined {
     if (this._compactInProgress) return undefined;
+
+    // Child sessions do not auto-compact; they receive a 90% warning instead
+    // (see _checkAndInjectHint) and are expected to finish or stop.
+    if (!this._capabilities.includeSpawnTool) return undefined;
 
     const mc = this.primaryAgent.modelConfig;
     const provider = (this.primaryAgent as any)._provider;
@@ -4738,6 +4502,20 @@ export class Session {
 
     const ratio = this._lastInputTokens / budget;
     const pct = `${Math.round(ratio * 100)}%`;
+
+    // Child sessions: single warning at 90%, no distill_context guidance
+    if (!this._capabilities.includeSpawnTool) {
+      if (ratio >= 0.90 && this._hintState === "none") {
+        this._deliverMessage({
+          from: "system",
+          to: "primary",
+          content: `[SYSTEM: Context usage has reached ${pct}. You are approaching the context limit and do NOT have context management tools. Finish your current work as quickly as possible — avoid reading large files, reduce tool calls, and focus only on producing your final output. If work progress is not promising, stop now and output what you have so far.]`,
+          timestamp: Date.now(),
+        });
+        this._hintState = "level2_sent";
+      }
+      return;
+    }
 
     const level2Ratio = this._thresholds.summarize_hint_level2 / 100;
     const level1Ratio = this._thresholds.summarize_hint_level1 / 100;
@@ -5096,6 +4874,7 @@ export class Session {
       onTurnOutput: (text: string) => this._handleChildTurnOutput(taskId, text),
       toolExecutorOverrides: teamId ? { send: this._createChildSendExecutor(handle) } : {},
       deferQueuedMessageInjectionOnTurnExit: true,
+      promptCacheKey: taskId,
     });
     childSession.onSaveRequest = () => this._saveChildSession(handle);
     handle.session = childSession;
@@ -5242,13 +5021,39 @@ export class Session {
     return { accepted: true };
   }
 
-  private async _execSpawnAgents(args: Record<string, unknown>): Promise<ToolResult> {
-    const fileArg = this._argRequiredString("spawn_agent", args, "file", { nonEmpty: true });
+  private async _execSpawn(args: Record<string, unknown>): Promise<ToolResult> {
+    const idArg = this._argRequiredString("spawn", args, "id", { nonEmpty: true });
+    if (idArg instanceof ToolResult) return idArg;
+    const taskArg = this._argRequiredString("spawn", args, "task", { nonEmpty: true });
+    if (taskArg instanceof ToolResult) return taskArg;
+    const modeArg = this._argRequiredString("spawn", args, "mode", { nonEmpty: true });
+    if (modeArg instanceof ToolResult) return modeArg;
+    const templateArg = this._argOptionalString("spawn", args, "template");
+    if (templateArg instanceof ToolResult) return templateArg;
+    const templatePathArg = this._argOptionalString("spawn", args, "template_path");
+    if (templatePathArg instanceof ToolResult) return templatePathArg;
+
+    const template = (templateArg ?? "").trim();
+    const templatePath = (templatePathArg ?? "").trim();
+
+    if (!template && !templatePath) {
+      return new ToolResult({ content: "Error: must specify either 'template' or 'template_path'." });
+    }
+    if (template && templatePath) {
+      return new ToolResult({ content: "Error: cannot specify both 'template' and 'template_path'." });
+    }
+
+    const spec: Record<string, unknown> = { id: idArg.trim(), task: taskArg.trim(), mode: modeArg.trim() };
+    if (template) spec["template"] = template;
+    if (templatePath) spec["template_path"] = templatePath;
+
+    return this._execSpawnFromSpecs([spec], null);
+  }
+
+  private async _execSpawnFile(args: Record<string, unknown>): Promise<ToolResult> {
+    const fileArg = this._argRequiredString("spawn_file", args, "file", { nonEmpty: true });
     if (fileArg instanceof ToolResult) return fileArg;
     const fileRel = fileArg.trim();
-    if (!fileRel) {
-      return new ToolResult({ content: "Error: 'file' parameter is required." });
-    }
 
     const artifactsDir = this._resolveSessionArtifacts();
     let filePath: string;
@@ -5302,21 +5107,26 @@ export class Session {
       return new ToolResult({ content: "Error: call file must be a YAML mapping." });
     }
 
-    // Warn about deprecated inline templates section
     if (callFile["templates"]) {
       console.warn(
-        "spawn_agent: 'templates:' section in call files is deprecated. " +
+        "spawn_file: 'templates:' section in call files is deprecated. " +
         "Use 'template:' (pre-defined) or 'template_path:' (custom) per task instead.",
       );
     }
 
     const teamName = ((callFile["team"] as string) ?? "").trim() || null;
-
     const tasksSpec = (callFile["agents"] ?? callFile["tasks"]) as Array<Record<string, unknown>> ?? [];
     if (!tasksSpec.length) {
-      return new ToolResult({ content: "Error: call file has no 'tasks' (or 'agents') section." });
+      return new ToolResult({ content: "Error: call file has no 'agents' (or 'tasks') section." });
     }
 
+    return this._execSpawnFromSpecs(tasksSpec, teamName);
+  }
+
+  private _execSpawnFromSpecs(
+    tasksSpec: Array<Record<string, unknown>>,
+    teamName: string | null,
+  ): ToolResult {
     const spawned: string[] = [];
     const spawnedInfo: Array<{ numericId: number; taskId: string; template: string; task: string }> = [];
     const errors: string[] = [];

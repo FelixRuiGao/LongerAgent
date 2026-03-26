@@ -1,31 +1,55 @@
-## `spawn_agent`
+## `spawn` and `spawn_file`
 
 Launch sub-sessions for bounded, parallel subtasks.
 
-### Two-Step Flow
+### `spawn` — single agent (preferred)
 
-**Step 1.** Write a YAML call file to `{SESSION_ARTIFACTS}`:
+Spawn a single agent directly:
 
 ```
-write_file(path="{SESSION_ARTIFACTS}/spawn-task.yaml", content=...)
+spawn(
+  id="explorer-1",
+  template="explorer",
+  mode="oneshot",
+  task="Explore the providers/ directory at {PROJECT_ROOT}/src/providers/ ..."
+)
+```
+
+Required parameters: `id`, `template` (or `template_path`), `task`, `mode`.
+
+### `spawn_file` — multiple agents / teams
+
+For spawning multiple agents or creating teams, write a YAML call file and reference it:
+
+```
+spawn_file(file="spawn-tasks.yaml")
 ```
 
 Call file format:
 
 ```yaml
-tasks:
+agents:
   - id: explorer-1
     template: explorer
     mode: oneshot
     task: |
       Explore the providers/ directory at {PROJECT_ROOT}/src/providers/ ...
+  - id: explorer-2
+    template: explorer
+    mode: oneshot
+    task: |
+      Explore the tools/ directory at {PROJECT_ROOT}/src/tools/ ...
 ```
-
-**Step 2.** Call `spawn_agent(file="spawn-task.yaml")`.
 
 The `file` parameter is resolved relative to `{SESSION_ARTIFACTS}` automatically.
 
-**Before calling**, re-read your call file — is the task description clear and complete? Does it include enough context, precise scope, and explicit deliverables? A minute spent refining the prompt saves far more time than re-spawning after a poor result.
+### Choosing Between Modes
+
+| Scenario | Tool |
+|----------|------|
+| Single agent (most cases) | **`spawn`** — one tool call, no file needed |
+| Multiple parallel agents | **`spawn_file`** — list all tasks in one YAML |
+| Agent teams with `send` | **`spawn_file`** — requires `team:` field |
 
 ### Available Pre-defined Templates
 
@@ -43,7 +67,7 @@ Best for: codebase exploration, dependency tracing, pattern searches, code analy
 
 #### `executor`
 
-Task execution agent with file and shell access. Tools: all basic I/O tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `glob`, `grep`, `diff`, `bash`, `bash_background`, `bash_output`, `kill_shell`, `test`, `web_search`, `web_fetch`). Does NOT have orchestration tools (cannot spawn sub-agents, manage context, or ask the user).
+Task execution agent with file and shell access. Tools: all basic I/O tools (`read_file`, `write_file`, `edit_file`, `list_dir`, `glob`, `grep`, `bash`, `bash_background`, `bash_output`, `kill_shell`, `time`, `web_search`, `web_fetch`). Does NOT have orchestration tools (cannot spawn sub-agents, manage context, or ask the user).
 
 Behavioral profile:
 - Executes bounded tasks with side effects: running tests, making edits, installing dependencies, generating files
@@ -80,24 +104,43 @@ type: agent
 name: my-template
 description: "Brief description of the agent's role."
 system_prompt_file: system_prompt.md
+tools: [read, util]
 max_tool_rounds: 100
 ```
 
-`max_tool_rounds` is required and must be **>= 100**. Tool set defaults to the same as `executor` when omitted.
+`max_tool_rounds` is required and must be **>= 100**. Tool set defaults to all packs when omitted.
+
+**Tool packs** — use these in the `tools` field instead of listing individual tools:
+
+| Pack | Tools included |
+|------|---------------|
+| `read` | `read_file`, `list_dir`, `glob`, `grep` |
+| `edit` | `write_file`, `edit_file` |
+| `shell` | `bash`, `bash_background`, `bash_output`, `kill_shell` |
+| `util` | `time`, `web_search`, `web_fetch` |
+
+Packs and individual tool names can be mixed: `tools: [read, bash, time]`
 
 `system_prompt.md`: Write a focused prompt for the sub-agent's role — include its specific task type, output format expectations, and constraints.
 
-**Step 2.** Reference it with `template_path:` in call files:
+**Step 2.** Reference it with `template_path`:
 
+Inline:
+```
+spawn(id="analyst-1", template_path="my-template", mode="oneshot", task="Analyze the database schema at ...")
+```
+
+Or in a call file:
 ```yaml
-tasks:
+agents:
   - id: analyst-1
     template_path: my-template
+    mode: oneshot
     task: |
       Analyze the database schema at ...
 ```
 
-The template persists in `{SESSION_ARTIFACTS}` for the entire session — you can reuse it across multiple `spawn_agent` calls without recreating it.
+The template persists in `{SESSION_ARTIFACTS}` for the entire session — you can reuse it across multiple `spawn` / `spawn_file` calls without recreating it.
 
 ### Writing Effective Sub-Agent Prompts
 
@@ -146,7 +189,7 @@ The quality of sub-agent results depends almost entirely on your prompt. A well-
 
 > Need to understand a module? **Spawn an explorer.** Even for seemingly simple questions — the explorer works in its own context and doesn't cost you tokens.
 
-> Three independent areas to understand? **Spawn 3 explorers in parallel.** Write one call file with all tasks.
+> Three independent areas to understand? **Spawn 3 explorers in parallel.** Use a call file with all tasks, or spawn them inline one by one.
 
 > Need one function signature in a file you already know? **Use `read_file` directly.**
 
@@ -170,7 +213,7 @@ The quality of sub-agent results depends almost entirely on your prompt. A well-
 
 After receiving results, extract key findings, then compress:
 
-> Note the 3-5 key findings, persist only durable knowledge to AGENTS.md if warranted, then `summarize_context` the raw report.
+> Note the 3-5 key findings, persist only durable knowledge to AGENTS.md if warranted, then `distill_context` the raw report.
 
 > Finished a subtask? Compress its investigation history. Preserve: what was done, key approach, cross-file dependencies still relevant.
 
@@ -187,20 +230,25 @@ After receiving results, extract key findings, then compress:
 - Don't over-parallelize — each result needs attention to digest and compress.
 ### Child Session Modes
 
-Non-team tasks must explicitly set `mode`:
+Every agent must explicitly set `mode` (both inline and file):
 
+- `mode: oneshot` — runs one turn, returns its result, then becomes read-only.
+- `mode: persistent` — returns to idle after each turn and can receive later messages via `send`.
+
+Inline example:
+```
+spawn(id="reviewer", template="explorer", mode="persistent", task="Review the auth module...")
+```
+
+File example:
 ```yaml
-tasks:
+agents:
   - id: reviewer
     template: explorer
     mode: persistent
     task: |
       Review the current state of the auth module...
 ```
-
-- `mode: oneshot` runs one turn, returns its result, then becomes read-only.
-- `mode: persistent` returns to idle after each turn and can receive later messages via `send`.
-- Non-team tasks that omit `mode` are invalid.
 
 ### Agent Teams
 

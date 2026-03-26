@@ -81,7 +81,7 @@ export async function setupSessionBridge(win: BrowserWindow): Promise<void> {
   // Load global preferences from a temporary store
   const tempStore = new SessionStore({ projectPath: projectRoot });
   const globalPreferences = tempStore.loadGlobalPreferences() ?? {
-    version: 1, thinkingLevel: "default", cacheHitEnabled: true,
+    version: 1, thinkingLevel: "default",
   };
 
   // Auto-detect cloud providers from shell env vars
@@ -504,7 +504,6 @@ function registerIpcHandlers(win: BrowserWindow): void {
     return {
       thinkingLevel: (m.session as any).thinkingLevel ?? "default",
       thinkingLevels: levels,
-      cacheHitEnabled: (m.session as any).cacheHitEnabled ?? true,
       contextRatio: (m.session as any).contextRatio ?? 1.0,
       accentColor: (m.session as any).accentColor ?? "",
     };
@@ -514,7 +513,6 @@ function registerIpcHandlers(win: BrowserWindow): void {
     const m = requireSession(sessionId);
     switch (key) {
       case "thinkingLevel": (m.session as any).thinkingLevel = value; break;
-      case "cacheHitEnabled": (m.session as any).cacheHitEnabled = Boolean(value); break;
       case "contextRatio": (m.session as any).contextRatio = Number(value); break;
       case "accentColor": (m.session as any).accentColor = String(value); break;
       default: return;

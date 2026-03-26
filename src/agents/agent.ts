@@ -65,6 +65,8 @@ export class Agent {
   tools: ToolDef[];
   maxToolRounds: number;
   modelConfig: ModelConfig;
+  /** Recipe for dynamic system prompt reassembly. Set by loadTemplate(). */
+  promptRecipe?: { templateDir: string; spec: Record<string, unknown>; promptsDirs: string[] };
 
   private _provider: BaseProvider;
 
@@ -110,7 +112,7 @@ export class Agent {
    * and provider instance. Used for multi-session concurrency.
    */
   clone(): Agent {
-    return new Agent({
+    const cloned = new Agent({
       name: this.name,
       description: this.description,
       modelConfig: { ...this.modelConfig },
@@ -118,6 +120,8 @@ export class Agent {
       tools: [...this.tools],
       maxToolRounds: this.maxToolRounds,
     });
+    cloned.promptRecipe = this.promptRecipe;
+    return cloned;
   }
 
   /**
@@ -212,7 +216,7 @@ export class Agent {
     ) => { compactNeeded: boolean; scenario?: "output" | "toolcall" } | null,
     onTokenUpdate?: (inputTokens: number, usage?: import("../providers/base.js").Usage) => void,
     thinkingLevel?: string,
-    cacheEnabled?: boolean,
+    promptCacheKey?: string,
     onSaveCheckpoint?: () => void,
     beforeToolExecute?: BeforeToolExecuteCallback,
     getNotification?: () => string | null,
@@ -241,7 +245,7 @@ export class Agent {
       onTokenUpdate,
       compactCheck,
       thinkingLevel,
-      cacheEnabled,
+      promptCacheKey,
       onSaveCheckpoint,
       beforeToolExecute,
       getNotification,
