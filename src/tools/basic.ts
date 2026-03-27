@@ -1020,8 +1020,6 @@ async function toolBash(
 
 function buildUnifiedDiffPreview(
   diff: string,
-  maxLines = 500,
-  maxChars = 50_000,
 ): { text: string; truncated: boolean } {
   if (!diff) {
     return { text: "(No textual changes.)", truncated: false };
@@ -1093,37 +1091,11 @@ function buildUnifiedDiffPreview(
     return `${lineCol} ${line.raw}`;
   };
 
-  let previewLines = parsedLines;
-  let truncated = false;
-  if (previewLines.length > 60) {
-    const omitted = previewLines.length - 50;
-    previewLines = [
-      ...previewLines.slice(0, 25),
-      { raw: `... [${omitted} diff lines omitted] ...` },
-      ...previewLines.slice(-25),
-    ];
-    truncated = true;
-  }
-  if (previewLines.length > maxLines) {
-    previewLines = previewLines.slice(0, maxLines);
-    truncated = true;
-  }
-
-  let text = previewLines.map(formatLine).join("\n");
-  if (text.length > maxChars) {
-    text = text.slice(0, maxChars);
-    const lastNewline = text.lastIndexOf("\n");
-    if (lastNewline !== -1) {
-      text = text.slice(0, lastNewline);
-    }
-    truncated = true;
-  }
-
-  if (truncated && !text.includes("diff preview truncated")) {
-    text += `\n${"".padStart(numberWidth)} ... [diff preview truncated]`;
-  }
-
-  return { text, truncated };
+  // Keep every changed line in the preview. Context omission is already handled
+  // upstream by the unified diff hunking logic, which limits unchanged lines
+  // around each change instead of globally truncating the rendered preview.
+  const text = parsedLines.map(formatLine).join("\n");
+  return { text, truncated: false };
 }
 
 /**

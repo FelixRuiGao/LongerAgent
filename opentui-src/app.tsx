@@ -72,6 +72,7 @@ import {
   readOAuthAccessToken,
   hasOAuthTokens,
   isTokenExpiring,
+  getTokenExpiry,
   saveOAuthTokens,
   browserLoginHeadless,
   deviceCodeLoginHeadless,
@@ -159,8 +160,8 @@ function computePickerMaxVisible(terminalHeight: number): number {
   return Math.max(5, Math.floor(terminalHeight * 0.4 - 4));
 }
 const SIDEBAR_MIN_WIDTH = 30;
-const SIDEBAR_MAX_WIDTH = 48;
-const MIN_TERMINAL_WIDTH_FOR_SIDEBAR = 90;
+const SIDEBAR_MAX_WIDTH = 50;
+const MIN_TERMINAL_WIDTH_FOR_SIDEBAR = 120;
 const MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER = 72;
 const MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER = 28;
 const APP_VERSION = "v0.1.3";
@@ -373,7 +374,7 @@ function clamp(value: number, min: number, max: number): number {
 
 function getSidebarWidth(terminalWidth: number): number {
   return clamp(
-    Math.floor(terminalWidth * 0.20),
+    Math.floor(terminalWidth * 0.35),
     SIDEBAR_MIN_WIDTH,
     SIDEBAR_MAX_WIDTH,
   );
@@ -696,7 +697,7 @@ function ContextUsageCard(
       <box flexDirection="row">
         {filledBlocks > 0 ? <text fg={barColor} content={"━".repeat(filledBlocks)} /> : null}
         {emptyBlocks > 0 ? <text fg={colors.border} content={"─".repeat(emptyBlocks)} /> : null}
-        <text fg={colors.dim} content={` ${percentText}`} />
+        <text fg={colors.text} content={` ${percentText}`} />
       </box>
       <box flexDirection="row">
         <text fg={colors.text} content={formatCompactTokens(contextTokens)} />
@@ -707,6 +708,19 @@ function ContextUsageCard(
       </box>
     </box>
   );
+}
+
+function formatExpiryRemaining(expiresAt: Date): string {
+  const ms = expiresAt.getTime() - Date.now();
+  if (ms <= 0) return "expired";
+  const totalMinutes = Math.floor(ms / 60_000);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 48) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remainHours = hours % 24;
+  return remainHours > 0 ? `${days}d ${remainHours}h` : `${days}d`;
 }
 
 function CodexUsageCard(
@@ -722,6 +736,8 @@ function CodexUsageCard(
   if (snapshot.error) return null;
 
   const now = Date.now();
+  const token = readOAuthAccessToken();
+  const expiry = token ? getTokenExpiry(token) : null;
 
   return (
     <box flexDirection="column" width="100%" gap={0}>
@@ -734,11 +750,14 @@ function CodexUsageCard(
         return (
           <text
             key={`codex-window-${i}`}
-            fg={colors.text}
+            fg={colors.muted}
             content={`${w.label.padEnd(3)} ${pctStr}% left${resetSuffix}`}
           />
         );
       })}
+      {expiry ? (
+        <text fg={colors.muted} content={`Expires in ${formatExpiryRemaining(expiry)}`} />
+      ) : null}
     </box>
   );
 }
@@ -3235,6 +3254,8 @@ export function OpenTuiApp({
   const modelNameColor = resolveModelNameColor(modelDescriptor, colors);
   const sidebarVisible = terminal.width >= MIN_TERMINAL_WIDTH_FOR_SIDEBAR;
   const sidebarWidth = sidebarVisible ? getSidebarWidth(terminal.width) : 0;
+  const conversationColumnWidth = terminal.width - 4 - (sidebarVisible ? sidebarWidth + 1 : 0);
+  const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
   // Picker content width: terminal - outer padding(4) - row gap+sidebar border(2) - sidebar - picker border(2) - picker padding(2)
   const pickerContentWidth = terminal.width - 10 - (sidebarVisible ? sidebarWidth : 0);
   const showLogoInScroll = terminal.height >= MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER
@@ -3262,6 +3283,7 @@ export function OpenTuiApp({
           <ConversationPanel
             items={entries}
             processing={processing}
+            contentWidth={conversationContentWidth}
             markdownMode={markdownMode}
             colors={colors}
             markdownStyle={markdownStyle}

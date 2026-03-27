@@ -126,10 +126,11 @@ describe("Phase 2 tool validation and grep limits", () => {
       expect(result.metadata.tui_preview).toBeTruthy();
       const preview = result.metadata.tui_preview as Record<string, unknown>;
       expect(preview.kind).toBe("diff");
-      expect(String(preview.text)).toContain("| -old value");
-      expect(String(preview.text)).toContain("| +new value");
-      expect(String(preview.text)).toMatch(/^\s*2\s+\|\s-old value$/m);
-      expect(String(preview.text)).toMatch(/^\s*2\s+\|\s\+new value$/m);
+      expect(String(preview.text)).toContain("-old value");
+      expect(String(preview.text)).toContain("+new value");
+      expect(String(preview.text)).toMatch(/^\s*2\s+-old value$/m);
+      expect(String(preview.text)).toMatch(/^\s*2\s+\+new value$/m);
+      expect(preview.truncated).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -151,8 +152,9 @@ describe("Phase 2 tool validation and grep limits", () => {
       expect(result.metadata.tui_preview).toBeTruthy();
       const preview = result.metadata.tui_preview as Record<string, unknown>;
       expect(preview.kind).toBe("diff");
-      expect(String(preview.text)).toContain("| -old value");
-      expect(String(preview.text)).toContain("| +new value");
+      expect(String(preview.text)).toContain("-old value");
+      expect(String(preview.text)).toContain("+new value");
+      expect(preview.truncated).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -173,14 +175,15 @@ describe("Phase 2 tool validation and grep limits", () => {
       expect(preview.kind).toBe("diff");
       expect(String(preview.text)).toContain("--- ");
       expect(String(preview.text)).toContain("+++ ");
-      expect(String(preview.text)).toContain("| +first line");
-      expect(String(preview.text)).toContain("| +second line");
+      expect(String(preview.text)).toContain("+first line");
+      expect(String(preview.text)).toContain("+second line");
+      expect(preview.truncated).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("collapses large edit diffs to head and tail previews", async () => {
+  it("keeps all changed lines in large edit diffs without global truncation", async () => {
     const root = makeTempDir("longeragent-phase2-edit-preview-large-");
     try {
       const oldBlock = Array.from({ length: 80 }, (_, i) => `old ${i + 1}`).join("\n");
@@ -196,9 +199,40 @@ describe("Phase 2 tool validation and grep limits", () => {
       const preview = result.metadata.tui_preview as Record<string, unknown>;
       expect(preview.kind).toBe("diff");
       expect(String(preview.text)).toContain("old 1");
+      expect(String(preview.text)).toContain("old 80");
+      expect(String(preview.text)).toContain("new 1");
       expect(String(preview.text)).toContain("new 80");
-      expect(String(preview.text)).toContain("diff lines omitted");
-      expect(String(preview.text)).toContain("diff preview truncated");
+      expect(String(preview.text)).not.toContain("diff lines omitted");
+      expect(String(preview.text)).not.toContain("diff preview truncated");
+      expect(preview.truncated).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still omits unchanged context between distant changes", async () => {
+    const root = makeTempDir("longeragent-phase2-edit-preview-context-gap-");
+    try {
+      const beforeLines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+      const afterLines = [...beforeLines];
+      afterLines[1] = "line 2 changed";
+      afterLines[27] = "line 28 changed";
+      writeFileSync(join(root, "gap.txt"), `${beforeLines.join("\n")}\n`, "utf-8");
+
+      const result = await executeTool(
+        "write_file",
+        { path: "gap.txt", content: `${afterLines.join("\n")}\n` },
+        { projectRoot: root },
+      );
+
+      const preview = result.metadata.tui_preview as Record<string, unknown>;
+      expect(preview.kind).toBe("diff");
+      expect(String(preview.text)).toContain("-line 2");
+      expect(String(preview.text)).toContain("+line 2 changed");
+      expect(String(preview.text)).toContain("-line 28");
+      expect(String(preview.text)).toContain("+line 28 changed");
+      expect(String(preview.text)).not.toContain("line 15");
+      expect(preview.truncated).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -58,6 +58,87 @@ export class OpenAIResponsesProvider extends BaseProvider {
     this._client = new OpenAI(opts);
   }
 
+  private _isCodexProvider(): boolean {
+    return this._config.provider === "openai-codex";
+  }
+
+  private _buildRequestOptions(
+    signal?: AbortSignal,
+    promptCacheKey?: string,
+  ): Record<string, unknown> | undefined {
+    const requestOptions: Record<string, unknown> = {};
+
+    if (signal) {
+      requestOptions["signal"] = signal;
+    }
+
+    if (this._isCodexProvider() && promptCacheKey) {
+      requestOptions["headers"] = {
+        conversation_id: promptCacheKey,
+        session_id: promptCacheKey,
+      };
+    }
+
+    return Object.keys(requestOptions).length > 0 ? requestOptions : undefined;
+  }
+
+  private _ensureCodexInclude(kwargs: Record<string, unknown>): void {
+    if (!this._isCodexProvider()) return;
+
+    const existing = Array.isArray(kwargs["include"])
+      ? (kwargs["include"] as unknown[]).filter((v): v is string => typeof v === "string")
+      : [];
+
+    if (!existing.includes("reasoning.encrypted_content")) {
+      existing.push("reasoning.encrypted_content");
+    }
+
+    kwargs["include"] = existing;
+  }
+
+  private _sanitizeCodexRoundtripItems(items: unknown): Record<string, unknown>[] {
+    if (!Array.isArray(items)) return [];
+
+    const sanitized: Record<string, unknown>[] = [];
+
+    for (const raw of items) {
+      if (!raw || typeof raw !== "object") continue;
+      const item = raw as Record<string, unknown>;
+      const itemType = item["type"] as string;
+
+      if (itemType === "reasoning") {
+        const next: Record<string, unknown> = { type: "reasoning" };
+        if (Array.isArray(item["summary"])) {
+          next["summary"] = item["summary"];
+        }
+        if ("encrypted_content" in item) {
+          next["encrypted_content"] = item["encrypted_content"];
+        }
+        sanitized.push(next);
+        continue;
+      }
+
+      if (itemType === "function_call") {
+        const next: Record<string, unknown> = { type: "function_call" };
+        if (typeof item["call_id"] === "string") {
+          next["call_id"] = item["call_id"];
+        }
+        if (typeof item["name"] === "string") {
+          next["name"] = item["name"];
+        }
+        const args = item["arguments"];
+        if (typeof args === "string") {
+          next["arguments"] = args;
+        } else if (args !== undefined) {
+          next["arguments"] = JSON.stringify(args);
+        }
+        sanitized.push(next);
+      }
+    }
+
+    return sanitized;
+  }
+
   // ------------------------------------------------------------------
   // Tool conversion
   // ------------------------------------------------------------------
@@ -117,8 +198,10 @@ export class OpenAIResponsesProvider extends BaseProvider {
         const reasoningBlocks = m["_reasoning_state"];
 
         if (reasoningBlocks && Array.isArray(reasoningBlocks)) {
-          // Saved output items -- re-inject directly
-          items.push(...(reasoningBlocks as Record<string, unknown>[]));
+          const roundtripItems = this._isCodexProvider()
+            ? this._sanitizeCodexRoundtripItems(reasoningBlocks)
+            : (reasoningBlocks as Record<string, unknown>[]);
+          items.push(...roundtripItems);
           const text = (m["content"] as string) || (m["text"] as string) || "";
           if (text) {
             items.push({
@@ -276,7 +359,9 @@ export class OpenAIResponsesProvider extends BaseProvider {
         }
       }
       if (outputItemsForRoundtrip.length > 0) {
-        reasoningState = outputItemsForRoundtrip;
+        reasoningState = this._isCodexProvider()
+          ? this._sanitizeCodexRoundtripItems(outputItemsForRoundtrip)
+          : outputItemsForRoundtrip;
       }
     }
 
@@ -332,6 +417,10 @@ export class OpenAIResponsesProvider extends BaseProvider {
     options?: SendMessageOptions,
   ): Promise<ProviderResponse> {
     const inputItems = this._buildInput(messages);
+    const requestOptions = this._buildRequestOptions(
+      options?.signal,
+      options?.promptCacheKey,
+    );
 
     const kwargs: Record<string, unknown> = {
       model: this._config.model,
@@ -357,7 +446,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
     }
 
     // Codex backend does not support temperature or max_output_tokens.
-    const isCodex = this._config.provider === "openai-codex";
+    const isCodex = this._isCodexProvider();
 
     // Temperature (skip for model families and Codex that reject this field).
     if (!isCodex && supportsTemperature(this._config.model)) {
@@ -388,6 +477,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
       Object.assign(kwargs, this._config.extra);
     }
     this._applyThinkingParams(kwargs, options);
+    this._ensureCodexInclude(kwargs);
 
     // Prompt cache optimization
     if (options?.promptCacheKey) {
@@ -400,10 +490,15 @@ export class OpenAIResponsesProvider extends BaseProvider {
 
     // Codex backend requires stream=true for all requests.
     if (options?.onTextChunk || options?.onReasoningChunk || this._config.provider === "openai-codex") {
-      return this._callStream(kwargs, options?.onTextChunk, options?.onReasoningChunk, options?.signal);
+      return this._callStream(
+        kwargs,
+        requestOptions,
+        options?.onTextChunk,
+        options?.onReasoningChunk,
+      );
     }
 
-    const response = await (this._client as unknown as { responses: { create: (params: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<Record<string, unknown>> } }).responses.create(kwargs, options?.signal ? { signal: options.signal } : undefined);
+    const response = await (this._client as unknown as { responses: { create: (params: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<Record<string, unknown>> } }).responses.create(kwargs, requestOptions);
     return this._parseResponse(response);
   }
 
@@ -413,9 +508,9 @@ export class OpenAIResponsesProvider extends BaseProvider {
 
   private async _callStream(
     kwargs: Record<string, unknown>,
+    requestOptions?: Record<string, unknown>,
     onTextChunk?: (chunk: string) => void,
     onReasoningChunk?: (chunk: string) => void,
-    signal?: AbortSignal,
   ): Promise<ProviderResponse> {
     kwargs["stream"] = true;
 
@@ -427,7 +522,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
     > = new Map();
     let finalResponse: Record<string, unknown> | null = null;
 
-    const responseStream = await (this._client as unknown as { responses: { create: (params: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<AsyncIterable<Record<string, unknown>>> } }).responses.create(kwargs, signal ? { signal } : undefined);
+    const responseStream = await (this._client as unknown as { responses: { create: (params: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<AsyncIterable<Record<string, unknown>>> } }).responses.create(kwargs, requestOptions);
 
     for await (const event of responseStream) {
       const eventType = event["type"] as string;
@@ -467,7 +562,11 @@ export class OpenAIResponsesProvider extends BaseProvider {
             }
           }
         }
-      } else if (eventType === "response.completed") {
+      } else if (
+        eventType === "response.completed"
+        || eventType === "response.incomplete"
+        || eventType === "response.done"
+      ) {
         finalResponse = (event["response"] as Record<string, unknown>) || null;
       }
     }

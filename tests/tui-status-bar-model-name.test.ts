@@ -10,8 +10,17 @@ describe("status bar model name formatting", () => {
     expect(formatStatusBarModelName("openai", "gpt-5.4")).toBe(
       "OpenAI/GPT-5.4",
     );
+    expect(formatStatusBarModelName("openai", "gpt-5.4-mini")).toBe(
+      "OpenAI/GPT-5.4 Mini",
+    );
+    expect(formatStatusBarModelName("openai", "gpt-5.4-nano")).toBe(
+      "OpenAI/GPT-5.4 Nano",
+    );
     expect(formatStatusBarModelName("openai-codex", "gpt-5.3-codex")).toBe(
       "OpenAI Codex/GPT-5.3 Codex",
+    );
+    expect(formatStatusBarModelName("openai-codex", "gpt-5.4-mini")).toBe(
+      "OpenAI Codex/GPT-5.4 Mini",
     );
   });
 

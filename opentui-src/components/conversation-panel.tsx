@@ -30,6 +30,7 @@ function ConversationPanelInner(
   {
     items,
     colors,
+    contentWidth,
     markdownMode,
     markdownStyle,
     processing,
@@ -81,6 +82,7 @@ function ConversationPanelInner(
               streaming={processing && index === lastAssistantIndex}
               markdownMode={markdownMode}
               colors={colors}
+              contentWidth={contentWidth}
               markdownStyle={markdownStyle}
               needsSpacing={needsSpacing}
             />

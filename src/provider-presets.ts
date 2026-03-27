@@ -96,6 +96,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       { key: "gpt-5.2-codex", id: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
       { key: "gpt-5.3-codex", id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
       { key: "gpt-5.4", id: "gpt-5.4", label: "GPT-5.4" },
+      { key: "gpt-5.4-mini", id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+      { key: "gpt-5.4-nano", id: "gpt-5.4-nano", label: "GPT-5.4 Nano" },
     ],
   },
   // ── OpenAI Codex (ChatGPT OAuth login) ──
@@ -109,6 +111,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       { key: "gpt-5.3-codex", id: "gpt-5.3-codex", label: "GPT-5.3 Codex",
         config: { store: false, supports_web_search: false } },
       { key: "gpt-5.4", id: "gpt-5.4", label: "GPT-5.4",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.4-mini", id: "gpt-5.4-mini", label: "GPT-5.4 Mini",
         config: { store: false, supports_web_search: false } },
     ],
   },

@@ -108,6 +108,8 @@ describe("/model command", () => {
     expect(openai!.children?.some((c) => c.label.includes("gpt-5.1"))).toBe(false);
     expect(openai!.children?.some((c) => c.label.includes("gpt-4o"))).toBe(false);
     expect(openai!.children?.some((c) => c.label.includes("GPT-5.4"))).toBe(true);
+    expect(openai!.children?.some((c) => c.label.includes("GPT-5.4 Mini"))).toBe(true);
+    expect(openai!.children?.some((c) => c.label.includes("GPT-5.4 Nano"))).toBe(true);
     expect(openai!.children?.some((c) => c.label.includes("GPT-5.2 Codex"))).toBe(true);
     expect(openai!.children?.some((c) => c.label.includes("GPT-5.3 Codex"))).toBe(true);
   });

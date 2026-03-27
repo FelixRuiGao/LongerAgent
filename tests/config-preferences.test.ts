@@ -26,6 +26,10 @@ describe("Config preference-backed models", () => {
           name: "openai-codex:gpt-5.4",
           apiKeyRaw: "oauth:openai-codex",
         }),
+        expect.objectContaining({
+          name: "openai-codex:gpt-5.4-mini",
+          apiKeyRaw: "oauth:openai-codex",
+        }),
       ]),
     );
   });

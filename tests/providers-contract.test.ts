@@ -161,6 +161,99 @@ describe("provider response contract (streaming vs non-streaming)", () => {
     expect(stream.citations).toEqual(nonStream.citations);
   });
 
+  it("OpenAI Responses preserves usage when response.incomplete is available", async () => {
+    const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
+
+    const finalResponse = {
+      output: [
+        {
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Reasoning incomplete" }],
+        },
+        {
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: "Answer incomplete",
+          }],
+        },
+      ],
+      incomplete_details: { reason: "max_output_tokens" },
+      usage: {
+        input_tokens: 21,
+        output_tokens: 13,
+        input_tokens_details: { cached_tokens: 7 },
+      },
+    };
+
+    (provider as any)._client = {
+      responses: {
+        create: vi.fn(async () =>
+          streamOf([
+            { type: "response.reasoning_summary_text.delta", delta: "Reasoning incomplete" },
+            { type: "response.output_text.delta", delta: "Answer incomplete" },
+            { type: "response.incomplete", response: finalResponse },
+          ]),
+        ),
+      },
+    };
+
+    const stream = await provider.sendMessage(
+      [{ role: "user", content: "hi" } as any],
+      undefined,
+      { onTextChunk: () => {}, onReasoningChunk: () => {} },
+    );
+
+    expect(stream.text).toBe("Answer incomplete");
+    expect(stream.reasoningContent).toBe("Reasoning incomplete");
+    expect(stream.usage.inputTokens).toBe(21);
+    expect(stream.usage.outputTokens).toBe(13);
+    expect(stream.usage.cacheReadTokens).toBe(7);
+  });
+
+  it("OpenAI Responses preserves usage when response.done is available", async () => {
+    const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
+
+    const finalResponse = {
+      output: [
+        {
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: "Answer done",
+          }],
+        },
+      ],
+      usage: {
+        input_tokens: 9,
+        output_tokens: 4,
+        input_tokens_details: { cached_tokens: 3 },
+      },
+    };
+
+    (provider as any)._client = {
+      responses: {
+        create: vi.fn(async () =>
+          streamOf([
+            { type: "response.output_text.delta", delta: "Answer done" },
+            { type: "response.done", response: finalResponse },
+          ]),
+        ),
+      },
+    };
+
+    const stream = await provider.sendMessage(
+      [{ role: "user", content: "hi" } as any],
+      undefined,
+      { onTextChunk: () => {} },
+    );
+
+    expect(stream.text).toBe("Answer done");
+    expect(stream.usage.inputTokens).toBe(9);
+    expect(stream.usage.outputTokens).toBe(4);
+    expect(stream.usage.cacheReadTokens).toBe(3);
+  });
+
   it("OpenAI Responses stream fallback still returns reasoningState when final response is absent", async () => {
     const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
 

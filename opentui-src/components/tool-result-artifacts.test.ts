@@ -84,4 +84,21 @@ describe("tool-result artifacts", () => {
       }),
     ).toBe("rust");
   });
+
+  it("adds continuation diff prefixes when long changed lines wrap", () => {
+    const artifacts = buildToolResultArtifacts({
+      text: ' 33 +            className="rounded-full border border-[color:var(--line)] px-3 py-1 text-xs font-medium text-slatepaper-300 transition hover:border-[color:var(--accent)] hover:text-[#fff0da]"',
+      toolMetadata: {
+        path: "/tmp/example.tsx",
+        tui_preview: { kind: "diff" },
+      },
+      wrapWidth: 120,
+      colors: COLORS,
+    });
+
+    expect(artifacts.length).toBeGreaterThan(1);
+    expect(artifacts[0]?.content.toString()).toContain("hover:border");
+    expect(artifacts[1]?.content.toString()).toMatch(/^\s+\+hover:text/);
+    expect(artifacts.every((artifact) => artifact.rowBackgroundColor === "#285438")).toBe(true);
+  });
 });

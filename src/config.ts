@@ -70,6 +70,8 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
   "gpt-5.2-codex": 400_000,
   "gpt-5.3-codex": 400_000,
   "gpt-5.4": 1_050_000,
+  "gpt-5.4-mini": 400_000,
+  "gpt-5.4-nano": 400_000,
   // Anthropic
   "claude-opus-4-1-20250805": 200_000,
   "claude-sonnet-4-5-20250929": 200_000,
@@ -109,7 +111,7 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
 
 export const KNOWN_MULTIMODAL_MODELS: Set<string> = new Set([
   // OpenAI
-  "gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4",
+  "gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
   // Anthropic
   "claude-opus-4-1-20250805", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
   "claude-haiku-4-5",
@@ -121,7 +123,7 @@ export const KNOWN_MULTIMODAL_MODELS: Set<string> = new Set([
 
 export const KNOWN_THINKING_MODELS: Set<string> = new Set([
   // OpenAI
-  "gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4",
+  "gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
   // Anthropic
   "claude-opus-4-1-20250805", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
   "claude-haiku-4-5",
@@ -149,6 +151,7 @@ export const KNOWN_NO_WEB_SEARCH_MODELS: Set<string> = new Set([
 export const KNOWN_EXTENDED_CACHE_MODELS: Set<string> = new Set([
   // GPT-5 family
   "gpt-5.4",
+  "gpt-5.4-mini", "gpt-5.4-nano",
   "gpt-5.2", "gpt-5.2-codex",
   "gpt-5.1", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-chat-latest",
   "gpt-5", "gpt-5-codex",
@@ -166,6 +169,8 @@ export const KNOWN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "gpt-5.2-codex": 128_000,
   "gpt-5.3-codex": 128_000,
   "gpt-5.4": 128_000,
+  "gpt-5.4-mini": 128_000,
+  "gpt-5.4-nano": 128_000,
   // Anthropic — Claude 4.6
   "claude-opus-4-6": 128_000,
   "claude-sonnet-4-6": 64_000,
@@ -221,6 +226,8 @@ export const KNOWN_THINKING_LEVELS: Record<string, string[]> = {
   "gpt-5.2-codex": ["low", "medium", "high", "xhigh"],
   "gpt-5.3-codex": ["low", "medium", "high", "xhigh"],
   "gpt-5.4":   ["none", "low", "medium", "high", "xhigh"],
+  "gpt-5.4-mini": ["none", "low", "medium", "high", "xhigh"],
+  "gpt-5.4-nano": ["none", "low", "medium", "high", "xhigh"],
   // Anthropic — adaptive + effort (4.6)
   "claude-opus-4-6":   ["off", "low", "medium", "high", "max"],
   "claude-sonnet-4-6": ["off", "low", "medium", "high", "max"],

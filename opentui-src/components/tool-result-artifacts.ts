@@ -3,6 +3,7 @@ import { extname } from "node:path";
 import { RGBA, StyledText } from "@opentui/core";
 import type { TextChunk } from "../forked/core/text-buffer.js";
 import { highlightToChunks } from "../forked/patch-opentui-markdown.js";
+import { displayWidthWithNewlines } from "../composer-token-logic.js";
 
 import type { ConversationEntry } from "../../src/tui/types.js";
 import type { ConversationPalette } from "./conversation-types.js";
@@ -268,6 +269,7 @@ interface ToolResultArtifactOptions {
   text: string;
   dim?: boolean;
   toolMetadata?: ToolMetadata;
+  wrapWidth?: number;
   colors: ConversationPalette;
 }
 
@@ -400,20 +402,141 @@ function cloneChunksWithBaseStyle(
   });
 }
 
+function chunkDisplayWidth(text: string): number {
+  return displayWidthWithNewlines(text);
+}
+
+function splitChunksToWidth(
+  chunks: TextChunk[],
+  maxWidth: number,
+): TextChunk[][] {
+  if (maxWidth <= 0) return [chunks];
+
+  const lines: TextChunk[][] = [[]];
+  let lineWidth = 0;
+
+  for (const chunk of chunks) {
+    const source = chunk.text;
+    if (!source) continue;
+
+    let buffer = "";
+
+    const flushBuffer = (): void => {
+      if (!buffer) return;
+      lines[lines.length - 1].push({
+        ...chunk,
+        text: buffer,
+      });
+      buffer = "";
+    };
+
+    for (const ch of source) {
+      const chWidth = chunkDisplayWidth(ch);
+      if (lineWidth > 0 && lineWidth + chWidth > maxWidth) {
+        flushBuffer();
+        lines.push([]);
+        lineWidth = 0;
+      }
+      buffer += ch;
+      lineWidth += chWidth;
+    }
+
+    flushBuffer();
+  }
+
+  if (lines.length === 0) return [[]];
+  return lines;
+}
+
+function wrapStandaloneChunks(
+  chunks: TextChunk[],
+  wrapWidth?: number,
+  rowBackgroundColor?: string,
+): ToolResultLineArtifact[] {
+  if (!wrapWidth || wrapWidth <= 0) {
+    return [{
+      content: new StyledText(chunks),
+      rowBackgroundColor,
+    }];
+  }
+
+  return splitChunksToWidth(chunks, wrapWidth).map((line) => ({
+    content: new StyledText(line.length > 0 ? line : [createChunk(" ")]),
+    rowBackgroundColor,
+  }));
+}
+
+function buildWrappedArtifacts(
+  options: {
+    prefixChunks: TextChunk[];
+    continuationPrefixChunks: TextChunk[];
+    payloadChunks: TextChunk[];
+    rowBackgroundColor?: string;
+    wrapWidth?: number;
+  },
+): ToolResultLineArtifact[] {
+  const prefixWidth = options.prefixChunks.reduce((sum, chunk) => sum + chunkDisplayWidth(chunk.text), 0);
+  const continuationPrefixWidth = options.continuationPrefixChunks.reduce((sum, chunk) => sum + chunkDisplayWidth(chunk.text), 0);
+  const availableFirstWidth = Math.max(1, (options.wrapWidth ?? 0) - prefixWidth);
+  const availableContinuationWidth = Math.max(1, (options.wrapWidth ?? 0) - continuationPrefixWidth);
+
+  if (!options.wrapWidth || options.wrapWidth <= 0) {
+    return [{
+      content: new StyledText([...options.prefixChunks, ...options.payloadChunks]),
+      rowBackgroundColor: options.rowBackgroundColor,
+    }];
+  }
+
+  const firstPayloadLine = splitChunksToWidth(options.payloadChunks, availableFirstWidth);
+  if (firstPayloadLine.length === 0) {
+    return [{
+      content: new StyledText(options.prefixChunks),
+      rowBackgroundColor: options.rowBackgroundColor,
+    }];
+  }
+
+  const wrapped: ToolResultLineArtifact[] = [];
+  wrapped.push({
+    content: new StyledText([
+      ...options.prefixChunks,
+      ...(firstPayloadLine[0] ?? []),
+    ]),
+    rowBackgroundColor: options.rowBackgroundColor,
+  });
+
+  let carry = firstPayloadLine.slice(1);
+  if (carry.length === 0) return wrapped;
+
+  const flattenedCarry = carry.flatMap((line) => line);
+  const continuationLines = splitChunksToWidth(flattenedCarry, availableContinuationWidth);
+  for (const line of continuationLines) {
+    wrapped.push({
+      content: new StyledText([
+        ...options.continuationPrefixChunks,
+        ...line,
+      ]),
+      rowBackgroundColor: options.rowBackgroundColor,
+    });
+  }
+
+  return wrapped;
+}
+
 function buildPlainToolResultArtifacts(
-  { text, dim, colors }: Pick<ToolResultArtifactOptions, "text" | "dim" | "colors">,
+  { text, dim, colors, wrapWidth }: Pick<ToolResultArtifactOptions, "text" | "dim" | "colors" | "wrapWidth">,
 ): ToolResultLineArtifact[] {
   const fg = RGBA.fromHex(dim ? colors.dim : colors.text);
-  return text.split("\n").map((line) => ({
-    content: new StyledText([createChunk(line || " ", { fg })]),
-  }));
+  return text.split("\n").flatMap((line) =>
+    wrapStandaloneChunks([createChunk(line || " ", { fg })], wrapWidth),
+  );
 }
 
 function buildDiffLineArtifact(
   line: string,
   colors: ConversationPalette,
   language: string | undefined,
-): ToolResultLineArtifact | null {
+  wrapWidth?: number,
+): ToolResultLineArtifact[] {
   const { prefix, raw } = parsePreviewLine(line);
 
   const dimFg = RGBA.fromHex(colors.dim);
@@ -423,80 +546,92 @@ function buildDiffLineArtifact(
   const additionBg = "#285438";
   const deletionBg = "#6a3232";
 
-  const chunks: TextChunk[] = [];
-
   if (raw.startsWith("@@")) {
-    return null;
+    return [];
   }
 
   if (raw.startsWith("...")) {
+    const chunks: TextChunk[] = [];
     if (prefix) {
       chunks.push(createChunk(prefix, { fg: dimFg }));
     }
     chunks.push(createChunk(raw, { fg: dimFg }));
-    return { content: new StyledText(chunks) };
+    return wrapStandaloneChunks(chunks, wrapWidth);
   }
 
   if (raw.startsWith("+++ ") || raw.startsWith("--- ")) {
+    const chunks: TextChunk[] = [];
     if (prefix) {
       chunks.push(createChunk(prefix, { fg: dimFg }));
     }
     chunks.push(createChunk(raw, { fg: dimFg }));
-    return { content: new StyledText(chunks) };
+    return wrapStandaloneChunks(chunks, wrapWidth);
   }
 
   const marker = raw[0] ?? "";
   const payload = raw.length > 0 ? raw.slice(1) : raw;
+  const blankPrefix = " ".repeat(prefix.length);
 
   if (marker === "+" || marker === "-") {
     const isAddition = marker === "+";
     const markerFg = isAddition ? greenFg : redFg;
     const rowBackgroundColor = isAddition ? additionBg : deletionBg;
     const brightness = isAddition ? DIFF_BRIGHTNESS_ADDITION : DIFF_BRIGHTNESS_DELETION;
+    const prefixChunks: TextChunk[] = [];
     if (prefix) {
-      chunks.push(createChunk(prefix, { fg: markerFg }));
+      prefixChunks.push(createChunk(prefix, { fg: markerFg }));
     }
-    chunks.push(createChunk(marker, { fg: markerFg }));
+    prefixChunks.push(createChunk(marker, { fg: markerFg }));
 
+    let payloadChunks: TextChunk[];
     const highlightedPayload = language ? highlightToChunks(payload, language) : null;
     if (highlightedPayload && highlightedPayload.length > 0) {
-      chunks.push(...cloneChunksWithBaseStyle(highlightedPayload, { fallbackFg: markerFg, brightness }));
+      payloadChunks = cloneChunksWithBaseStyle(highlightedPayload, { fallbackFg: markerFg, brightness });
     } else {
-      chunks.push(createChunk(payload || " ", { fg: adjustBrightness(markerFg, brightness)! }));
+      payloadChunks = [createChunk(payload || " ", { fg: adjustBrightness(markerFg, brightness)! })];
     }
-    return {
-      content: new StyledText(chunks),
+    return buildWrappedArtifacts({
+      prefixChunks,
+      continuationPrefixChunks: [createChunk(`${blankPrefix}${marker}`, { fg: markerFg })],
+      payloadChunks,
       rowBackgroundColor,
-    };
+      wrapWidth,
+    });
   }
 
+  const chunks: TextChunk[] = [];
   if (prefix) {
     chunks.push(createChunk(prefix, { fg: dimFg }));
   }
   if (marker === " ") {
-    chunks.push(createChunk(marker, { fg: dimFg }));
+    const prefixChunks = [...chunks, createChunk(marker, { fg: dimFg })];
+    let payloadChunks: TextChunk[];
     const highlightedPayload = language ? highlightToChunks(payload, language) : null;
     if (highlightedPayload && highlightedPayload.length > 0) {
-      chunks.push(...cloneChunksWithBaseStyle(highlightedPayload, { fallbackFg: textFg, brightness: DIFF_BRIGHTNESS_CONTEXT }));
+      payloadChunks = cloneChunksWithBaseStyle(highlightedPayload, { fallbackFg: textFg, brightness: DIFF_BRIGHTNESS_CONTEXT });
     } else {
-      chunks.push(createChunk(payload || " ", { fg: adjustBrightness(textFg, DIFF_BRIGHTNESS_CONTEXT)! }));
+      payloadChunks = [createChunk(payload || " ", { fg: adjustBrightness(textFg, DIFF_BRIGHTNESS_CONTEXT)! })];
     }
-    return { content: new StyledText(chunks) };
+    return buildWrappedArtifacts({
+      prefixChunks,
+      continuationPrefixChunks: [createChunk(`${blankPrefix}${marker}`, { fg: dimFg })],
+      payloadChunks,
+      wrapWidth,
+    });
   }
 
   chunks.push(createChunk(raw || " ", { fg: textFg }));
-  return { content: new StyledText(chunks) };
+  return wrapStandaloneChunks(chunks, wrapWidth);
 }
 
 function buildDiffToolResultArtifacts(
-  { text, colors, toolMetadata }: Pick<ToolResultArtifactOptions, "text" | "colors" | "toolMetadata">,
+  { text, colors, toolMetadata, wrapWidth }: Pick<ToolResultArtifactOptions, "text" | "colors" | "toolMetadata" | "wrapWidth">,
 ): ToolResultLineArtifact[] {
   const lines = text.split("\n");
   const language = inferDiffLanguage(toolMetadata);
 
   return lines
-    .map((line) => buildDiffLineArtifact(line, colors, language))
-    .filter((artifact): artifact is ToolResultLineArtifact => artifact !== null);
+    .flatMap((line) => buildDiffLineArtifact(line, colors, language, wrapWidth));
 }
 
 export function buildToolResultArtifacts(

@@ -6,16 +6,17 @@ import type { ConversationEntryItemProps } from "./conversation-types.js";
 import { buildToolResultArtifacts, getToolResultMetadata } from "./tool-result-artifacts.js";
 
 function ToolResultEntryInner(
-  { item, colors }: ConversationEntryItemProps,
+  { item, colors, contentWidth }: ConversationEntryItemProps,
 ): React.ReactElement {
   const lineArtifacts = useMemo(
     () => buildToolResultArtifacts({
       text: item.entry.text,
       dim: item.entry.dim,
       toolMetadata: getToolResultMetadata(item.entry),
+      wrapWidth: Math.max(8, contentWidth),
       colors,
     }),
-    [colors, item.entry.dim, item.entry.meta, item.entry.text],
+    [colors, contentWidth, item.entry.dim, item.entry.meta, item.entry.text],
   );
 
   return (
@@ -28,7 +29,7 @@ function ToolResultEntryInner(
           paddingLeft={2}
           paddingRight={1}
         >
-          <text content={artifact.content} wrapMode="char" width="100%" />
+          <text content={artifact.content} wrapMode="none" width="100%" />
         </box>
       ))}
     </box>

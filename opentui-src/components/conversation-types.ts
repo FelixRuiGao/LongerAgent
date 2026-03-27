@@ -23,6 +23,7 @@ export interface ConversationPalette {
 export interface ConversationEntryItemProps {
   item: ReconciledConversationEntry;
   colors: ConversationPalette;
+  contentWidth: number;
   markdownMode: "rendered" | "raw";
   markdownStyle: SyntaxStyle;
   streaming: boolean;
@@ -32,6 +33,7 @@ export interface ConversationEntryItemProps {
 export interface ConversationPanelProps {
   items: readonly ReconciledConversationEntry[];
   colors: ConversationPalette;
+  contentWidth: number;
   markdownMode: "rendered" | "raw";
   markdownStyle: SyntaxStyle;
   processing: boolean;

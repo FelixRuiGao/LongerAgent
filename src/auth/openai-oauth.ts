@@ -168,7 +168,7 @@ export function isTokenExpiring(
   return exp <= Math.floor(Date.now() / 1000) + Math.max(0, skewSeconds);
 }
 
-function getTokenExpiry(accessToken: string): Date | null {
+export function getTokenExpiry(accessToken: string): Date | null {
   const claims = decodeJwtPayload(accessToken);
   const exp = claims["exp"];
   if (typeof exp !== "number") return null;

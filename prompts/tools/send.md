@@ -1,11 +1,11 @@
 ## `send`
 
-Send a follow-up message to a persistent sub-session. Async — returns immediately with a confirmation, not a reply.
+Send a message to an agent. Async — returns immediately with a confirmation, not a reply.
 
-- `to` (required): Target agent ID (must be a persistent sub-session).
+- `to` (required): Target agent ID, `"main"` (parent session), or `"all"` (broadcast to all teammates).
 - `content` (required): Message content.
 - The target agent auto-activates if idle.
 - One-shot sub-sessions cannot receive messages.
-- If you need the agent's response, call `wait(agent="<id>")` after sending.
+- If you need the agent's response, call `wait(seconds=60)` after sending.
 
-> Sent a follow-up question to the researcher. **`wait(seconds=60, agent="researcher")`** to get the response.
+> Sent a follow-up question to the researcher. **`wait(seconds=60)`** to get the response.

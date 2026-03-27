@@ -269,7 +269,7 @@ const COMM_TOOL_NAMES = new Set([
 
 interface AgentMessage {
   from: string;        // "user" | "system" | agent name
-  to: string;          // "primary" (future: agent name for team routing)
+  to: string;          // "main" | agent name (for team routing)
   content: string;
   timestamp: number;
 }
@@ -1008,7 +1008,7 @@ export class Session {
    * Preserves the original (source, content) signature for external callers.
    */
   deliverMessage(source: "user" | "system" | "sub-agent", content: string): void {
-    this._deliverMessage({ from: source, to: "primary", content, timestamp: Date.now() });
+    this._deliverMessage({ from: source, to: "main", content, timestamp: Date.now() });
   }
 
   /**
@@ -4508,7 +4508,7 @@ export class Session {
       if (ratio >= 0.90 && this._hintState === "none") {
         this._deliverMessage({
           from: "system",
-          to: "primary",
+          to: "main",
           content: `[SYSTEM: Context usage has reached ${pct}. You are approaching the context limit and do NOT have context management tools. Finish your current work as quickly as possible — avoid reading large files, reduce tool calls, and focus only on producing your final output. If work progress is not promising, stop now and output what you have so far.]`,
           timestamp: Date.now(),
         });
@@ -4521,10 +4521,10 @@ export class Session {
     const level1Ratio = this._thresholds.summarize_hint_level1 / 100;
 
     if (ratio >= level2Ratio && this._hintState !== "level2_sent") {
-      this._deliverMessage({ from: "system", to: "primary", content: HINT_LEVEL2_PROMPT(pct), timestamp: Date.now() });
+      this._deliverMessage({ from: "system", to: "main", content: HINT_LEVEL2_PROMPT(pct), timestamp: Date.now() });
       this._hintState = "level2_sent";
     } else if (ratio >= level1Ratio && this._hintState === "none") {
-      this._deliverMessage({ from: "system", to: "primary", content: HINT_LEVEL1_PROMPT(pct), timestamp: Date.now() });
+      this._deliverMessage({ from: "system", to: "main", content: HINT_LEVEL1_PROMPT(pct), timestamp: Date.now() });
       this._hintState = "level1_sent";
     }
   }
@@ -4657,7 +4657,7 @@ export class Session {
       entry.exitCode = 1;
       entry.signal = null;
       this._deliverMessage({
-        from: "system", to: "primary", timestamp: Date.now(),
+        from: "system", to: "main", timestamp: Date.now(),
         content: `Background shell '${shellId}' failed to start: ${error}. Use \`bash_output(id="${shellId}")\` to inspect ${logPath}.`,
       });
     });
@@ -4677,7 +4677,7 @@ export class Session {
           ? "completed successfully"
           : `failed (exit ${code ?? 1})`;
       this._deliverMessage({
-        from: "system", to: "primary", timestamp: Date.now(),
+        from: "system", to: "main", timestamp: Date.now(),
         content: `Background shell '${shellId}' ${statusText}. Use \`bash_output(id="${shellId}")\` to inspect logs at ${logPath}.`,
       });
     });
@@ -4796,8 +4796,39 @@ export class Session {
         return new ToolResult({ content: "Error: 'to' and 'content' are required." });
       }
       const team = handle.teamId ? this._teams.get(handle.teamId) : null;
+
+      // send to "main" — deliver to parent session's inbox
+      if (sendTo === "main") {
+        this._deliverMessage({ from: handle.id, to: "main", content: sendContent, timestamp: Date.now() });
+        handle.lastActivityAt = Date.now();
+        handle.session._recordSessionEvent("sent message to main");
+        return new ToolResult({ content: "Message sent to 'main'." });
+      }
+
+      // send to "all" — broadcast to all teammates
+      if (sendTo === "all") {
+        if (!team) {
+          return new ToolResult({ content: "Error: 'all' is only valid for team members." });
+        }
+        let count = 0;
+        for (const memberId of team.members) {
+          if (memberId === handle.id) continue;
+          this._sendMessageToChild(memberId, {
+            from: handle.id,
+            to: memberId,
+            content: sendContent,
+            timestamp: Date.now(),
+          });
+          count++;
+        }
+        handle.lastActivityAt = Date.now();
+        handle.session._recordSessionEvent(`broadcast message to ${count} teammate(s)`);
+        return new ToolResult({ content: `Message broadcast to ${count} teammate(s).` });
+      }
+
+      // send to specific teammate
       if (!team || !team.members.has(sendTo)) {
-        return new ToolResult({ content: `Agent '${sendTo}' is not in your team.` });
+        return new ToolResult({ content: `Agent '${sendTo}' is not in your team. You can send to teammates or "main".` });
       }
       this._sendMessageToChild(sendTo, {
         from: handle.id,
@@ -4900,7 +4931,7 @@ export class Session {
     handle.outputRevision += 1;
     handle.lastActivityAt = Date.now();
     if (text.trim()) {
-      this._deliverMessage({ from: childId, to: "primary", content: text, timestamp: Date.now() });
+      this._deliverMessage({ from: childId, to: "main", content: text, timestamp: Date.now() });
     }
   }
 
@@ -5046,6 +5077,7 @@ export class Session {
     const spec: Record<string, unknown> = { id: idArg.trim(), task: taskArg.trim(), mode: modeArg.trim() };
     if (template) spec["template"] = template;
     if (templatePath) spec["template_path"] = templatePath;
+    if (args["idle"] === true) spec["idle"] = true;
 
     return this._execSpawnFromSpecs([spec], null);
   }
@@ -5142,6 +5174,7 @@ export class Session {
       const templatePath = ((spec["template_path"] as string) ?? "").trim();
       const taskDesc = ((spec["task"] as string) ?? "").trim();
       const modeRaw = ((spec["mode"] as string) ?? "").trim();
+      const startIdle = spec["idle"] === true;
 
       if (!taskId || !taskDesc) {
         errors.push("Skipped entry: missing 'id' or 'task'.");
@@ -5227,7 +5260,9 @@ export class Session {
         );
       }
 
-      this._startChildTurn(handle, taskDesc);
+      if (!startIdle) {
+        this._startChildTurn(handle, taskDesc);
+      }
 
       if (teamName) {
         const team = this._teams.get(teamName)!;
@@ -5349,7 +5384,22 @@ export class Session {
     if (!to || !content) {
       return new ToolResult({ content: "Error: 'to' and 'content' are required." });
     }
-    return this._sendMessageToChild(to, { from: "primary", to, content, timestamp: Date.now() });
+
+    // send to "all" — broadcast to all child sessions
+    if (to === "all") {
+      let count = 0;
+      for (const [childId, handle] of this._childSessions) {
+        if (handle.mode !== "persistent" || handle.lifecycle !== "live") continue;
+        this._sendMessageToChild(childId, { from: "main", to: childId, content, timestamp: Date.now() });
+        count++;
+      }
+      if (count === 0) {
+        return new ToolResult({ content: "No active persistent agents to broadcast to." });
+      }
+      return new ToolResult({ content: `Message broadcast to ${count} agent(s).` });
+    }
+
+    return this._sendMessageToChild(to, { from: "main", to, content, timestamp: Date.now() });
   }
 
   private async _execCheckStatus(_args: Record<string, unknown>): Promise<ToolResult> {
@@ -5380,12 +5430,6 @@ export class Session {
       return new ToolResult({ content: "Error: 'seconds' must be a number." });
     }
     const seconds = Math.max(15, secondsRaw);
-    const agentFilter = typeof args["agent"] === "string" ? (args["agent"] as string).trim() : null;
-    const shellFilter = typeof args["shell"] === "string" ? (args["shell"] as string).trim() : null;
-
-    if (agentFilter && shellFilter) {
-      return new ToolResult({ content: "Error: wait accepts either 'agent' or 'shell', not both." });
-    }
 
     this._agentState = "waiting";
     const abortPromise = this._makeAbortPromise(this._currentTurnSignal);
@@ -5407,41 +5451,7 @@ export class Session {
       return new ToolResult({ content: "No tracked workers and no messages queued." });
     }
 
-    if (agentFilter) {
-      const targetEntry = this._childSessions.get(agentFilter);
-      if (!targetEntry) {
-        this._agentState = "working";
-        this._setSelfPhase("idle");
-        return new ToolResult({
-          content: `Error: agent '${agentFilter}' not found. Use check_status to see current agents.`,
-        });
-      }
-      if (targetEntry.status !== "working") {
-        this._agentState = "working";
-        this._setSelfPhase("idle");
-        const content = this._buildDeliveryContent();
-        return new ToolResult({ content });
-      }
-    }
-
-    if (shellFilter) {
-      const targetShell = this._activeShells.get(shellFilter);
-      if (!targetShell) {
-        this._agentState = "working";
-        this._setSelfPhase("idle");
-        return new ToolResult({
-          content: `Error: shell '${shellFilter}' not found. Use check_status to see current shells.`,
-        });
-      }
-      if (targetShell.status !== "running") {
-        this._agentState = "working";
-        this._setSelfPhase("idle");
-        const content = this._buildDeliveryContent();
-        return new ToolResult({ content });
-      }
-    }
-
-    const working = this._getWorkingChildHandles(agentFilter ?? undefined);
+    const working = this._getWorkingChildHandles();
     const hasRunningShells = this._hasRunningShells();
     if (!working.length && !hasRunningShells) {
       this._agentState = "working";
@@ -5455,109 +5465,26 @@ export class Session {
     });
     this._setSelfPhase("waiting");
 
-    let wakeReason: "timeout" | "message" | "agent" | "shell" = "timeout";
-    const startedAt = performance.now();
-    const timeoutMs = seconds * 1000;
+    let wakeReason: "timeout" | "message" | "event" = "timeout";
 
-    if (agentFilter) {
-      const POLL_INTERVAL = 1000;
+    const timeout = new Promise<"timeout">((resolve) =>
+      setTimeout(() => resolve("timeout"), seconds * 1000),
+    );
+    const racers = this._getWorkingChildRacers();
 
-      while (true) {
-        const currentEntry = this._childSessions.get(agentFilter);
-        if (!currentEntry || currentEntry.status !== "working") {
-          wakeReason = "agent";
-          break;
-        }
-
-        const workMs = (performance.now() - currentEntry.startTime);
-        if (workMs >= timeoutMs) {
-          break;
-        }
-
-        const racers = this._getWorkingChildRacers();
-
-        if (!racers.length) break;
-
-        const poll = new Promise<"poll">((resolve) =>
-          setTimeout(() => resolve("poll"), POLL_INTERVAL),
-        );
-
-        const winner = await Promise.race([
-          ...racers,
-          poll,
-          messageWake,
-          ...(abortPromise ? [abortPromise] : []),
-        ]);
-        if (winner === "aborted") {
-          throwIfTurnAborted();
-        }
-        if (winner === "message") {
-          wakeReason = "message";
-          break;
-        }
-        if (winner !== "poll") {
-          wakeReason = "agent";
-          break;
-        }
-      }
-    } else if (shellFilter) {
-      const POLL_INTERVAL = 1000;
-
-      while (true) {
-        const currentShell = this._activeShells.get(shellFilter);
-        if (!currentShell || currentShell.status !== "running") {
-          wakeReason = "shell";
-          break;
-        }
-
-        if ((performance.now() - startedAt) >= timeoutMs) {
-          break;
-        }
-
-        const poll = new Promise<"poll">((resolve) =>
-          setTimeout(() => resolve("poll"), POLL_INTERVAL),
-        );
-
-        const winner = await Promise.race([
-          ...this._getWorkingChildRacers(),
-          poll,
-          messageWake,
-          ...(abortPromise ? [abortPromise] : []),
-        ]);
-        if (winner === "aborted") {
-          throwIfTurnAborted();
-        }
-        if (winner === "message") {
-          const currentShell = this._activeShells.get(shellFilter);
-          wakeReason = !currentShell || currentShell.status !== "running" ? "shell" : "message";
-          break;
-        }
-        if (winner !== "poll") {
-          wakeReason = "agent";
-          break;
-        }
-      }
-    } else {
-      const timeout = new Promise<"timeout">((resolve) =>
-        setTimeout(() => resolve("timeout"), seconds * 1000),
-      );
-
-      const racers = this._getWorkingChildRacers();
-
-      const winner = await Promise.race([
-        ...racers,
-        timeout,
-        messageWake,
-        ...(abortPromise ? [abortPromise] : []),
-      ]);
-      if (winner === "aborted") {
-        throwIfTurnAborted();
-      }
-      if (winner === "message") {
-        wakeReason = "message";
-      } else if (winner !== "timeout") {
-        wakeReason = "agent";
-      }
+    const winner = await Promise.race([
+      ...racers,
+      timeout,
+      messageWake,
+      ...(abortPromise ? [abortPromise] : []),
+    ]);
+    if (winner === "aborted") {
+      throwIfTurnAborted();
+    }
+    if (winner === "message") {
+      wakeReason = "message";
+    } else if (winner !== "timeout") {
+      wakeReason = "event";
     }
 
     this._waitResolver = null;
@@ -5568,10 +5495,8 @@ export class Session {
     let header: string;
     if (wakeReason === "message") {
       header = `Waited — new message arrived.`;
-    } else if (wakeReason === "agent") {
-      header = `Waited — sub-session state changed.`;
-    } else if (wakeReason === "shell") {
-      header = `Waited — shell exited.`;
+    } else if (wakeReason === "event") {
+      header = `Waited — sub-session or shell state changed.`;
     } else if (hasNewContent) {
       header = `Waited ${seconds}s. New event arrived during wait.`;
     } else {
@@ -5609,15 +5534,14 @@ export class Session {
     return false;
   }
 
-  private _getWorkingChildHandles(filterId?: string): ChildSessionHandle[] {
+  private _getWorkingChildHandles(): ChildSessionHandle[] {
     return [...this._childSessions.values()].filter((handle) => {
-      if (filterId && handle.id !== filterId) return false;
       return handle.lifecycle === "live" && handle.status === "working" && handle.turnPromise !== null;
     });
   }
 
-  private _getWorkingChildRacers(filterId?: string): Array<Promise<{ name: string }>> {
-    return this._getWorkingChildHandles(filterId)
+  private _getWorkingChildRacers(): Array<Promise<{ name: string }>> {
+    return this._getWorkingChildHandles()
       .map((handle) =>
         handle.turnPromise!.then(
           () => ({ name: handle.id }),

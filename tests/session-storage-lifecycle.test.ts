@@ -660,7 +660,7 @@ describe("session storage lifecycle", () => {
       let woke = false;
 
       (session as any)._inbox = [
-        { from: "sub-agent", to: "primary", content: "queued result", timestamp: Date.now() },
+        { from: "sub-agent", to: "main", content: "queued result", timestamp: Date.now() },
       ];
       (session as any)._waitResolver = () => {
         woke = true;
@@ -772,7 +772,7 @@ describe("session storage lifecycle", () => {
 
       (session as any)._compactInProgress = true;
       (session as any)._inbox = [
-        { from: "system", to: "primary", content: "queued", timestamp: Date.now() },
+        { from: "system", to: "main", content: "queued", timestamp: Date.now() },
       ];
 
       const decision = session.requestTurnInterrupt();

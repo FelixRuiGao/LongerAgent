@@ -267,7 +267,28 @@ agents:
       Wait for researcher's findings. Implement the changes based on what you receive.
 ```
 
-Team members can `send` to each other. Their turn output is auto-delivered to you (the primary agent). Communication is async — `send` returns immediately, the recipient is activated automatically.
+Team members can `send` to each other, to `"main"` (you), or to `"all"` (broadcast). Their turn output is also auto-delivered to you. Communication is async — `send` returns immediately, the recipient is activated automatically.
+
+Use `idle: true` to spawn agents that start idle — they won't begin working until they receive their first `send` message. This is useful for standby workers that should wait for task assignment:
+
+```yaml
+team: code-review
+agents:
+  - id: lead
+    template: explorer
+    task: |
+      Analyze PR scope and assign review tasks to the workers.
+  - id: reviewer-api
+    template: explorer
+    idle: true
+    task: |
+      Standby for review assignment.
+  - id: reviewer-tests
+    template: explorer
+    idle: true
+    task: |
+      Standby for review assignment.
+```
 
 To add members to an existing team later, use the same `team:` name in a new call file.
 

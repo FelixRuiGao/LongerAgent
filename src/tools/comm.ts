@@ -38,6 +38,10 @@ export const SPAWN_TOOL: ToolDef = {
         enum: ["oneshot", "persistent"],
         description: "Agent mode: 'oneshot' (single turn) or 'persistent' (stays alive, receives messages via send).",
       },
+      idle: {
+        type: "boolean",
+        description: "If true, agent starts idle and won't work until it receives its first 'send' message.",
+      },
     },
     required: ["id", "task", "mode"],
   },
@@ -196,20 +200,7 @@ export const WAIT_TOOL: ToolDef = {
     properties: {
       seconds: {
         type: "number",
-        description:
-          "How long to wait (minimum 15). " +
-          "Without 'agent': wall-clock timeout. " +
-          "With 'agent': that agent's actual work time.",
-      },
-      agent: {
-        type: "string",
-        description:
-          "Optional agent ID. When set, 'seconds' tracks that agent's work time only.",
-      },
-      shell: {
-        type: "string",
-        description:
-          "Optional shell ID. When set, wait monitors that background shell in addition to normal message delivery.",
+        description: "How long to wait (minimum 15, wall-clock timeout).",
       },
     },
     required: ["seconds"],
@@ -220,7 +211,7 @@ export const WAIT_TOOL: ToolDef = {
 export const SEND_TOOL: ToolDef = {
   name: "send",
   description:
-    "Send a message to a persistent sub-session or team member. " +
+    "Send a message to an agent. " +
     "The message is delivered asynchronously — you get a confirmation, not a reply. " +
     "The target agent auto-activates if idle.",
   parameters: {
@@ -228,7 +219,8 @@ export const SEND_TOOL: ToolDef = {
     properties: {
       to: {
         type: "string",
-        description: "Target agent ID.",
+        description:
+          "Target: agent ID, \"main\" (parent session), or \"all\" (broadcast to all teammates).",
       },
       content: {
         type: "string",
