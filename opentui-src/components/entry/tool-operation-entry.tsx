@@ -23,10 +23,11 @@ interface ToolOperationEntryProps {
   entry: PresentationEntry;
   colors: ConversationPalette;
   contentWidth: number;
+  onEntryClick?: (entry: PresentationEntry) => void;
 }
 
 function ToolOperationEntryInner(
-  { entry, colors, contentWidth }: ToolOperationEntryProps,
+  { entry, colors, contentWidth, onEntryClick }: ToolOperationEntryProps,
 ): React.ReactElement {
   const active = entry.state === "active";
 
@@ -59,6 +60,7 @@ function ToolOperationEntryInner(
         paddingTop={1}
         width="100%"
         hoverStyle={{ backgroundColor: colors.border }}
+        onMouseDown={(e: any) => { e.stopPropagation(); onEntryClick?.(entry); }}
       >
         <text fg={indicatorColor} content={indicator} />
         <text content=" " />

@@ -1,7 +1,6 @@
 import type { RefObject } from "react";
 import type { SyntaxStyle, ScrollBoxRenderable } from "@opentui/core";
 
-import type { ReconciledConversationEntry } from "../transcript/types.js";
 import type { PresentationEntry } from "../presentation/types.js";
 
 export interface ConversationPalette {
@@ -21,16 +20,6 @@ export interface ConversationPalette {
   yellow: string;
 }
 
-export interface ConversationEntryItemProps {
-  item: ReconciledConversationEntry;
-  colors: ConversationPalette;
-  contentWidth: number;
-  markdownMode: "rendered" | "raw";
-  markdownStyle: SyntaxStyle;
-  streaming: boolean;
-  needsSpacing?: boolean;
-}
-
 /** Props for the new presentation-layer entry renderers. */
 export interface PresentationEntryItemProps {
   entry: PresentationEntry;
@@ -38,18 +27,7 @@ export interface PresentationEntryItemProps {
   contentWidth: number;
   markdownMode: "rendered" | "raw";
   markdownStyle: SyntaxStyle;
-}
-
-export interface ConversationPanelProps {
-  items: readonly ReconciledConversationEntry[];
-  colors: ConversationPalette;
-  contentWidth: number;
-  markdownMode: "rendered" | "raw";
-  markdownStyle: SyntaxStyle;
-  processing: boolean;
-  scrollRef: RefObject<ScrollBoxRenderable | null>;
-  selectedChildId: string | null;
-  showLogoInScroll: boolean;
+  onEntryClick?: (entry: PresentationEntry) => void;
 }
 
 export interface PresentationPanelProps {
@@ -62,4 +40,5 @@ export interface PresentationPanelProps {
   scrollRef: RefObject<ScrollBoxRenderable | null>;
   selectedChildId: string | null;
   showLogoInScroll: boolean;
+  onEntryClick?: (entry: PresentationEntry) => void;
 }

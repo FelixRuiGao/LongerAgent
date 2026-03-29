@@ -16,12 +16,13 @@ import type { ConversationPalette } from "../conversation-types.js";
 interface ThinkingEntryProps {
   entry: PresentationEntry;
   colors: ConversationPalette;
+  onEntryClick?: (entry: PresentationEntry) => void;
 }
 
 const thinkingBaseColor = RGBA.fromHex(THINKING_COLOR);
 
 function ThinkingEntryInner(
-  { entry, colors }: ThinkingEntryProps,
+  { entry, colors, onEntryClick }: ThinkingEntryProps,
 ): React.ReactElement {
   const active = entry.state === "active";
   const spinner = useSpinner(THINKING_SPINNER_FRAMES, THINKING_SPINNER_INTERVAL, active);
@@ -46,6 +47,7 @@ function ThinkingEntryInner(
       paddingTop={1}
       width="100%"
       hoverStyle={{ backgroundColor: colors.border }}
+      onMouseDown={(e: any) => { e.stopPropagation(); onEntryClick?.(entry); }}
     >
       <text fg={indicatorColor} content={indicator} />
       <text content=" " />

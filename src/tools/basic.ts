@@ -167,6 +167,11 @@ const EDIT: ToolDef = {
           "Optional optimistic concurrency guard. " +
           "If provided, edit is rejected when the file mtime differs (milliseconds since epoch).",
       },
+      intent: {
+        type: "string",
+        enum: ["spawn"],
+        description: "Display intent — consumed by UI layer to hide intermediate writes.",
+      },
     },
     required: ["path", "old_str", "new_str"],
   },
@@ -193,6 +198,11 @@ const WRITE: ToolDef = {
         description:
           "Optional optimistic concurrency guard for overwrites. " +
           "If provided, write is rejected when the existing file mtime differs (milliseconds since epoch).",
+      },
+      intent: {
+        type: "string",
+        enum: ["spawn"],
+        description: "Display intent — consumed by UI layer to hide intermediate writes.",
       },
     },
     required: ["path", "content"],

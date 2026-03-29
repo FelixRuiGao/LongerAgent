@@ -64,9 +64,9 @@ import {
   isLongerAgentOpenTuiDiagEnabled,
   writeLongerAgentOpenTuiDiag,
 } from "./forked/core/lib/diagnostic.js";
-import { ConversationPanel } from "./components/conversation-panel.js";
 import { PresentationPanel } from "./components/entry/presentation-panel.js";
-import { useTranscriptModel } from "./transcript/use-transcript-model.js";
+import { DetailThinkingTab } from "./components/entry/detail-thinking-tab.js";
+import { DetailToolTab } from "./components/entry/detail-tool-tab.js";
 import { usePresentationEntries } from "./presentation/use-presentation.js";
 import { useTurnTimer } from "./presentation/use-turn-timer.js";
 import { LeftSidebar } from "./sidebar/sidebar.js";
@@ -105,6 +105,7 @@ type ActivityPhase =
   | "generating"
   | "waiting"
   | "closing"
+  | "cancelling"
   | "error";
 
 export interface OpenTuiAppProps {
@@ -156,8 +157,6 @@ const COLORS = {
 
 type OpenTuiPalette = typeof COLORS;
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_INTERVAL_MS = 80;
 // (terminal palette refresh removed — dark-only, fixed bg)
 const CTRL_C_EXIT_WINDOW_MS = 2000;
 const FIXED_CLOSE_DELAY_MS = 1500;
@@ -585,94 +584,6 @@ function PlanPanelView(
   );
 }
 
-function StatusStrip(
-  {
-    modelName,
-    modelColor,
-    phase,
-    contextTokens,
-    contextLimit,
-    hint,
-    showContext,
-    colors,
-    onModelClick,
-  }: {
-    modelName: string;
-    modelColor: string;
-    phase: ActivityPhase;
-    contextTokens: number;
-    contextLimit?: number;
-    hint?: string | null;
-    showContext: boolean;
-    colors: OpenTuiPalette;
-    onModelClick?: () => void;
-  },
-): React.ReactElement {
-  const [frame, setFrame] = useState(0);
-  const [modelHover, setModelHover] = useState(false);
-
-  useEffect(() => {
-    if (phase === "idle" || phase === "error" || phase === "closing") return;
-    const timer = setInterval(() => {
-      setFrame((current) => (current + 1) % SPINNER_FRAMES.length);
-    }, SPINNER_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [phase]);
-
-  const phaseVisual = (() => {
-    switch (phase) {
-      case "idle":
-        return { indicator: "●", color: colors.readyStatus, label: "READY" };
-      case "thinking":
-        return { indicator: SPINNER_FRAMES[frame]!, color: colors.thinkingStatus, label: "THINKING" };
-      case "working":
-        return { indicator: SPINNER_FRAMES[frame]!, color: colors.workingStatus, label: "WORKING" };
-      case "generating":
-        return { indicator: SPINNER_FRAMES[frame]!, color: colors.generatingStatus, label: "GENERATING" };
-      case "waiting":
-        return { indicator: SPINNER_FRAMES[frame]!, color: colors.waitingStatus, label: "WAITING" };
-      case "closing":
-        return { indicator: "●", color: colors.closingStatus, label: "CLOSING" };
-      case "error":
-        return { indicator: "●", color: colors.errorStatus, label: "ERROR" };
-      default:
-        return { indicator: "●", color: colors.readyStatus, label: phase.toUpperCase().slice(0, 5) };
-    }
-  })();
-
-  const pct = formatUsagePercent(contextTokens, contextLimit);
-  const ctxCompact = `${pct} ${formatCompactTokens(contextTokens)}/${formatCompactTokens(contextLimit)}`;
-
-  return (
-    <box paddingLeft={1} paddingRight={1} flexDirection="column" gap={0} width="100%">
-      <box flexDirection="row">
-        <text fg={phaseVisual.color} bold content={`${phaseVisual.indicator} ${phaseVisual.label}`} />
-        <text fg={colors.separator} content=" │ " />
-        {phase === "closing" ? (
-          <text fg={colors.dim} content="shutting down..." />
-        ) : (
-          <>
-            <box
-              backgroundColor={modelHover ? colors.border : "transparent"}
-              onMouseOver={() => setModelHover(true)}
-              onMouseOut={() => setModelHover(false)}
-              onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onModelClick?.(); }}
-            >
-              <text fg={modelColor} content={modelName} />
-            </box>
-            {showContext ? (
-              <>
-                <text fg={colors.separator} content=" │ " />
-                <text fg={colors.dim} content={ctxCompact} />
-              </>
-            ) : null}
-          </>
-        )}
-      </box>
-      {hint ? <text fg={colors.dim} content={hint} /> : null}
-    </box>
-  );
-}
 
 function ContextUsageCard(
   {
@@ -768,24 +679,6 @@ function CodexUsageCard(
   );
 }
 
-function SidebarTitle({ colors }: { colors: OpenTuiPalette }): React.ReactElement {
-  const name = "VIGIL";
-  const indices = [0, 1, 3, 5, 6];
-  return (
-    <box flexDirection="row">
-      {name.split("").map((ch, i) => (
-        <text key={`sidebar-title-${i}`} fg={LOGO_GRADIENT[indices[i]]} bold content={ch} />
-      ))}
-      <text fg={colors.muted} content={` ${APP_VERSION}`} />
-    </box>
-  );
-}
-
-function childLatestSummary(snapshot: ChildSessionSnapshot): string {
-  return snapshot.lastToolCallSummary
-    || snapshot.recentEvents[snapshot.recentEvents.length - 1]
-    || (snapshot.outcome !== "none" ? snapshot.outcome : "no recent activity");
-}
 
 function sameChildSessionList(
   a: ChildSessionSnapshot[],
@@ -816,114 +709,6 @@ function sameChildSessionList(
   return true;
 }
 
-function ChildSessionListCard(
-  { sessions, colors, width, selectedId, onSelect }: {
-    sessions: ChildSessionSnapshot[];
-    colors: OpenTuiPalette;
-    width: number;
-    selectedId: string | null;
-    onSelect: (id: string) => void;
-  },
-): React.ReactElement | null {
-  if (sessions.length === 0) return null;
-  const maxHeadlineLen = Math.max(20, width - 4);
-  const maxDetailLen = Math.max(20, width - 2);
-  return (
-    <box flexDirection="column" width="100%">
-      <text fg={colors.dim} content="SUB-SESSIONS" />
-      {sessions.map((snapshot) => {
-        const headline = truncateToWidth(
-          `${snapshot.id} ${snapshot.lifetimeToolCallCount} tools | ${formatCompactTokens(snapshot.lastTotalTokens)}`,
-          maxHeadlineLen,
-        );
-        const detail = truncateToWidth(`└─ ${childLatestSummary(snapshot)}`, maxDetailLen);
-        const isSelected = selectedId === snapshot.id;
-        return (
-          <box
-            key={snapshot.id}
-            flexDirection="column"
-            backgroundColor={isSelected ? colors.border : "transparent"}
-            onMouseDown={(e: any) => {
-              e.stopPropagation();
-              e.preventDefault();
-              onSelect(snapshot.id);
-            }}
-          >
-            <text fg={isSelected ? colors.accent : colors.text} content={headline} />
-            <text fg={colors.dim} content={detail} />
-          </box>
-        );
-      })}
-    </box>
-  );
-}
-
-function SidebarView(
-  {
-    width,
-    contextTokens,
-    contextLimit,
-    cacheReadTokens,
-    childSessions,
-    selectedChildId,
-    onSelectChild,
-    codexUsage,
-    colors,
-  }: {
-    width: number;
-    contextTokens: number;
-    contextLimit?: number;
-    cacheReadTokens?: number;
-    childSessions: ChildSessionSnapshot[];
-    selectedChildId: string | null;
-    onSelectChild: (id: string) => void;
-    codexUsage: UsageSnapshot | null;
-    colors: OpenTuiPalette;
-  },
-): React.ReactElement {
-  return (
-    <box
-      width={width}
-      minWidth={width}
-      maxWidth={width}
-      flexDirection="column"
-      border={["left"] as any}
-      borderColor={colors.separator}
-      borderStyle="single"
-    >
-      <scrollbox
-        flexGrow={1}
-        viewportOptions={{ paddingRight: 1 }}
-        autoHideScrollbars={1500}
-        verticalScrollbarOptions={{
-          paddingLeft: 1,
-          trackOptions: {
-            backgroundColor: "transparent",
-            foregroundColor: colors.border + "44",
-          },
-        }}
-      >
-        <box flexDirection="column" gap={1} width="100%" paddingLeft={1}>
-          <SidebarTitle colors={colors} />
-          <ContextUsageCard
-            contextTokens={contextTokens}
-            contextLimit={contextLimit}
-            cacheReadTokens={cacheReadTokens}
-            colors={colors}
-          />
-          <CodexUsageCard snapshot={codexUsage} colors={colors} />
-          <ChildSessionListCard
-            sessions={childSessions}
-            colors={colors}
-            width={width - 3}
-            selectedId={selectedChildId}
-            onSelect={onSelectChild}
-          />
-        </box>
-      </scrollbox>
-    </box>
-  );
-}
 
 function truncateToWidth(text: string, maxWidth: number): string {
   const textWidth = Bun.stringWidth(text);
@@ -1502,7 +1287,6 @@ export function OpenTuiApp({
   const codexPollerRef = useRef<UsagePoller | null>(null);
   const [childSessions, setChildSessions] = useState<ChildSessionSnapshot[]>([]);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
-  const entries = useTranscriptModel({ session, selectedChildId, childSessions });
   const presentationEntries = usePresentationEntries({ session, selectedChildId, childSessions, processing });
   const turnElapsed = useTurnTimer(processing);
 
@@ -1560,6 +1344,19 @@ export function OpenTuiApp({
       return next;
     });
   }, [activeTabId]);
+
+  const openDetailTab = useCallback((entry: import("./presentation/types.js").PresentationEntry) => {
+    const tabId = `detail:${entry.id}`;
+    setTabs((prev) => {
+      if (prev.some((t) => t.id === tabId)) return prev;
+      const kind = entry.kind === "thinking" ? "detail-thinking" as const : "detail-tool" as const;
+      const label = entry.kind === "thinking"
+        ? "Thinking"
+        : `${entry.toolDisplayName ?? "Tool"} ${entry.toolText ?? ""}`.trim();
+      return [...prev, { id: tabId, label, icon: "◇", closeable: true, kind }];
+    });
+    setActiveTabId(tabId);
+  }, []);
 
   const [hint, setHint] = useState<string | null>(null);
   const [markdownMode, setMarkdownMode] = useState<"rendered" | "raw">("rendered");
@@ -1862,19 +1659,19 @@ export function OpenTuiApp({
 
   useEffect(() => {
     if (!isLongerAgentOpenTuiDiagEnabled()) return;
-    const assistantEntries = entries.filter((item) => item.entry.kind === "assistant");
-    const lastAssistant = assistantEntries.length > 0 ? assistantEntries[assistantEntries.length - 1] : null;
+    const assistantPEs = presentationEntries.filter((pe) => pe.kind === "assistant");
+    const lastAssistant = assistantPEs.length > 0 ? assistantPEs[assistantPEs.length - 1] : null;
     writeLongerAgentOpenTuiDiag("app.entries", {
-      totalEntries: entries.length,
-      assistantEntries: assistantEntries.length,
-      lastAssistantLength: lastAssistant?.entry.kind === "assistant" ? lastAssistant.entry.text.length : 0,
+      totalEntries: presentationEntries.length,
+      assistantEntries: assistantPEs.length,
+      lastAssistantLength: lastAssistant?.assistantText?.length ?? 0,
       processing,
       markdownMode,
       assistantRenderer: ASSISTANT_RENDERER_MODE,
       markdownPatchDisabled: isLongerAgentMarkdownPatchDisabled(),
       activeAgents: childSessions.length,
     });
-  }, [childSessions.length, entries, markdownMode, processing]);
+  }, [childSessions.length, presentationEntries, markdownMode, processing]);
 
   const handleProgressRef = useRef<(event: ProgressEvent) => void>(() => { });
   handleProgressRef.current = (event) => {
@@ -3322,6 +3119,13 @@ export function OpenTuiApp({
   const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
   // Picker content width: terminal - outer padding(4) - row gap+sidebar border(2) - sidebar - picker border(2) - picker padding(2)
   const pickerContentWidth = terminal.width - 10 - (sidebarVisible ? sidebarWidth : 0);
+  // Detail tab: find the active detail tab and its source entry
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+  const isDetailTab = activeTab?.kind === "detail-thinking" || activeTab?.kind === "detail-tool";
+  const detailEntry = isDetailTab
+    ? presentationEntries.find((pe) => activeTabId === `detail:${pe.id}`)
+    : null;
+
   const showLogoInScroll = terminal.height >= MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER
     && terminal.width >= MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER;
 
@@ -3368,17 +3172,33 @@ export function OpenTuiApp({
         ) : null}
 
         <box flexDirection="column" flexGrow={1} gap={1}>
-          <PresentationPanel
-            items={presentationEntries}
-            processing={processing}
-            contentWidth={conversationContentWidth}
-            markdownMode={markdownMode}
-            colors={colors}
-            markdownStyle={markdownStyle}
-            scrollRef={scrollRef}
-            selectedChildId={selectedChildId}
-            showLogoInScroll={showLogoInScroll}
-          />
+          {detailEntry && activeTab?.kind === "detail-thinking" ? (
+            <DetailThinkingTab
+              entry={detailEntry}
+              colors={colors}
+              scrollRef={scrollRef}
+            />
+          ) : detailEntry && activeTab?.kind === "detail-tool" ? (
+            <DetailToolTab
+              entry={detailEntry}
+              colors={colors}
+              contentWidth={conversationContentWidth}
+              scrollRef={scrollRef}
+            />
+          ) : (
+            <PresentationPanel
+              items={presentationEntries}
+              processing={processing}
+              contentWidth={conversationContentWidth}
+              markdownMode={markdownMode}
+              colors={colors}
+              markdownStyle={markdownStyle}
+              scrollRef={scrollRef}
+              selectedChildId={selectedChildId}
+              showLogoInScroll={showLogoInScroll}
+              onEntryClick={openDetailTab}
+            />
+          )}
 
           {pendingAsk ? (
             <AskPanelView

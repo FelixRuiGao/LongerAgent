@@ -36,6 +36,7 @@ function PresentationPanelInner(
     scrollRef,
     selectedChildId,
     showLogoInScroll,
+    onEntryClick,
   }: PresentationPanelProps,
 ): React.ReactElement {
   return (
@@ -70,6 +71,7 @@ function PresentationPanelInner(
             contentWidth={contentWidth}
             markdownMode={markdownMode}
             markdownStyle={markdownStyle}
+            onEntryClick={onEntryClick}
           />
         ))}
       </box>

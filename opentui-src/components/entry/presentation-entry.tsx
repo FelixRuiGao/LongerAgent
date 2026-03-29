@@ -18,14 +18,14 @@ const ASSISTANT_RENDERER_MODE = getLongerAgentAssistantRenderer();
 function PresentationEntryInner(
   props: PresentationEntryItemProps,
 ): React.ReactElement {
-  const { entry, colors, contentWidth, markdownMode, markdownStyle } = props;
+  const { entry, colors, contentWidth, markdownMode, markdownStyle, onEntryClick } = props;
 
   switch (entry.kind) {
     case "user":
       return <UserEntry entry={entry} colors={colors} />;
 
     case "thinking":
-      return <ThinkingEntry entry={entry} colors={colors} />;
+      return <ThinkingEntry entry={entry} colors={colors} onEntryClick={onEntryClick} />;
 
     case "tool_operation":
       return (
@@ -33,6 +33,7 @@ function PresentationEntryInner(
           entry={entry}
           colors={colors}
           contentWidth={contentWidth}
+          onEntryClick={onEntryClick}
         />
       );
 
