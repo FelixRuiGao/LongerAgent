@@ -82,6 +82,7 @@ export const PresentationPanel = React.memo(
   (previous, next) => (
     previous.items === next.items
     && previous.processing === next.processing
+    && previous.contentWidth === next.contentWidth
     && previous.markdownMode === next.markdownMode
     && previous.colors === next.colors
     && previous.markdownStyle === next.markdownStyle

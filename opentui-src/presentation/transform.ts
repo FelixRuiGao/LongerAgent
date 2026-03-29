@@ -48,8 +48,12 @@ function getToolName(entry: ReconciledConversationEntry): string {
 
 function isToolResultError(entry: ReconciledConversationEntry): boolean {
   const meta = getMeta(entry);
-  if (typeof meta.isError === "boolean") return meta.isError;
-  return entry.entry.text.startsWith("ERROR:");
+  // Only mark as error when explicitly tagged true
+  if (meta.isError === true) return true;
+  if (meta.isError === false) return false;
+  // Fallback: only for very explicit error patterns
+  const text = entry.entry.text;
+  return text.startsWith("ERROR:") || text.startsWith("Error:");
 }
 
 // ------------------------------------------------------------------

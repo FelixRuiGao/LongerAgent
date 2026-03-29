@@ -5,7 +5,6 @@ import React from "react";
 import type { ConversationPalette } from "../components/conversation-types.js";
 import { SidebarTabs, type TabState } from "./sidebar-tabs.js";
 
-const SIDEBAR_EXPANDED_WIDTH = 22;
 const SIDEBAR_COLLAPSED_WIDTH = 4;
 
 const LOGO_GRADIENT = ["#ffb703", "#fb8500", "#f05030", "#e81860", "#d01080", "#a010a0", "#5a0c92"];
@@ -17,6 +16,7 @@ interface SidebarProps {
   onCloseTab: (id: string) => void;
   expanded: boolean;
   onToggleExpanded: () => void;
+  width: number;
   colors: ConversationPalette;
   /** Pre-rendered context usage section (passed from parent to avoid moving formatters) */
   contextSection?: React.ReactNode;
@@ -53,12 +53,13 @@ function LeftSidebarInner(props: SidebarProps): React.ReactElement {
     onCloseTab,
     expanded,
     onToggleExpanded,
+    width: expandedWidth,
     colors,
     contextSection,
     codexSection,
   } = props;
 
-  const width = expanded ? SIDEBAR_EXPANDED_WIDTH : SIDEBAR_COLLAPSED_WIDTH;
+  const width = expanded ? expandedWidth : SIDEBAR_COLLAPSED_WIDTH;
 
   return (
     <box
@@ -109,4 +110,4 @@ function LeftSidebarInner(props: SidebarProps): React.ReactElement {
 }
 
 export const LeftSidebar = React.memo(LeftSidebarInner);
-export { SIDEBAR_EXPANDED_WIDTH, SIDEBAR_COLLAPSED_WIDTH };
+export { SIDEBAR_COLLAPSED_WIDTH };

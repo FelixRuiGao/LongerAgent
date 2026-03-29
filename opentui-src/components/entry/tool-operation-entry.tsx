@@ -49,7 +49,7 @@ function ToolOperationEntryInner(
   const suffix = entry.toolSuffix ?? "";
 
   return (
-    <box flexDirection="column" width="100%">
+    <box flexDirection="column" width="100%" gap={0}>
       <box
         flexDirection="row"
         paddingLeft={2}

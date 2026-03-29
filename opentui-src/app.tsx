@@ -3351,6 +3351,7 @@ export function OpenTuiApp({
             onCloseTab={handleCloseTab}
             expanded={sidebarExpanded}
             onToggleExpanded={() => setSidebarExpanded((v) => !v)}
+            width={sidebarWidth}
             colors={colors}
             contextSection={
               <ContextUsageCard
