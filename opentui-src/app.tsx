@@ -113,7 +113,7 @@ export interface OpenTuiAppProps {
 // Derived from the logo gradient: gold → orange → red → magenta → purple.
 // Background is a near-black warm tone reminiscent of CRT phosphor afterglow.
 
-const BG = "#14121a";
+const BG = "transparent";
 
 const COLORS = {
   background: BG,
