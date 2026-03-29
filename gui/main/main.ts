@@ -17,6 +17,13 @@ import { setupStoreBridge } from "./store-bridge.js";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const IS_DEV = Boolean(process.env.GUI_DEV);
 
+// Enable CDP for screenshot automation when REMOTE_DEBUG_PORT is set
+const debugPort = process.env.REMOTE_DEBUG_PORT;
+if (debugPort) {
+  app.commandLine.appendSwitch("remote-debugging-port", debugPort);
+  app.commandLine.appendSwitch("remote-allow-origins", "*");
+}
+
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): BrowserWindow {

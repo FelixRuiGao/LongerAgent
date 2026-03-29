@@ -65,7 +65,13 @@ import {
   writeLongerAgentOpenTuiDiag,
 } from "./forked/core/lib/diagnostic.js";
 import { ConversationPanel } from "./components/conversation-panel.js";
+import { PresentationPanel } from "./components/entry/presentation-panel.js";
 import { useTranscriptModel } from "./transcript/use-transcript-model.js";
+import { usePresentationEntries } from "./presentation/use-presentation.js";
+import { useTurnTimer } from "./presentation/use-turn-timer.js";
+import { LeftSidebar } from "./sidebar/sidebar.js";
+import type { TabState } from "./sidebar/sidebar-tabs.js";
+import { InputArea } from "./input/input-area.js";
 import { getCurrentModelDescriptor, type ModelDescriptor } from "../src/model-presentation.js";
 import { UsagePoller, formatResetRemaining, type UsageSnapshot } from "../src/provider-usage.js";
 import {
@@ -1497,6 +1503,64 @@ export function OpenTuiApp({
   const [childSessions, setChildSessions] = useState<ChildSessionSnapshot[]>([]);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const entries = useTranscriptModel({ session, selectedChildId, childSessions });
+  const presentationEntries = usePresentationEntries({ session, selectedChildId, childSessions, processing });
+  const turnElapsed = useTurnTimer(processing);
+
+  // Tab state for sidebar
+  const [tabs, setTabs] = useState<TabState[]>([
+    { id: "main", label: "Main Session", icon: "●", closeable: false, kind: "main" },
+  ]);
+  const [activeTabId, setActiveTabId] = useState("main");
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
+
+  // Sync child sessions → tabs
+  useEffect(() => {
+    setTabs((prev) => {
+      const existingChildIds = new Set(prev.filter((t) => t.kind === "child").map((t) => t.id));
+      const currentChildIds = new Set(childSessions.map((s) => s.id));
+
+      // Add new child tabs
+      const newTabs = childSessions
+        .filter((s) => !existingChildIds.has(s.id))
+        .map((s): TabState => ({
+          id: s.id,
+          label: s.id,
+          icon: "◎",
+          closeable: false,
+          kind: "child",
+        }));
+
+      // Remove dead child tabs (keep main + detail tabs)
+      const filtered = prev.filter(
+        (t) => t.kind !== "child" || currentChildIds.has(t.id),
+      );
+
+      return newTabs.length > 0 ? [...filtered, ...newTabs] : filtered;
+    });
+  }, [childSessions]);
+
+  // Derive selectedChildId from active tab
+  useEffect(() => {
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+    if (activeTab?.kind === "child") {
+      setSelectedChildId(activeTab.id);
+    } else {
+      setSelectedChildId(null);
+    }
+  }, [activeTabId, tabs]);
+
+  const handleCloseTab = useCallback((tabId: string) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === tabId);
+      if (idx === -1 || !prev[idx].closeable) return prev;
+      const next = prev.filter((t) => t.id !== tabId);
+      if (activeTabId === tabId) {
+        setActiveTabId(next[Math.max(0, idx - 1)]?.id ?? "main");
+      }
+      return next;
+    });
+  }, [activeTabId]);
+
   const [hint, setHint] = useState<string | null>(null);
   const [markdownMode, setMarkdownMode] = useState<"rendered" | "raw">("rendered");
   const [pendingAsk, setPendingAsk] = useState<PendingAskUi | null>(
@@ -3278,10 +3342,33 @@ export function OpenTuiApp({
         if (checkboxPicker) setCheckboxPicker(null);
       }}
     >
-      <box flexDirection="row" flexGrow={1} gap={1}>
+      <box flexDirection="row" flexGrow={1} gap={0}>
+        {sidebarVisible ? (
+          <LeftSidebar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={setActiveTabId}
+            onCloseTab={handleCloseTab}
+            expanded={sidebarExpanded}
+            onToggleExpanded={() => setSidebarExpanded((v) => !v)}
+            colors={colors}
+            contextSection={
+              <ContextUsageCard
+                contextTokens={contextTokens}
+                contextLimit={session.primaryAgent.modelConfig?.contextLength}
+                cacheReadTokens={cacheReadTokens}
+                colors={colors}
+              />
+            }
+            codexSection={
+              <CodexUsageCard snapshot={codexUsage} colors={colors} />
+            }
+          />
+        ) : null}
+
         <box flexDirection="column" flexGrow={1} gap={1}>
-          <ConversationPanel
-            items={entries}
+          <PresentationPanel
+            items={presentationEntries}
             processing={processing}
             contentWidth={conversationContentWidth}
             markdownMode={markdownMode}
@@ -3351,91 +3438,35 @@ export function OpenTuiApp({
             contentWidth={pickerContentWidth}
           />
         </box>
-
-        {sidebarVisible ? (
-          <SidebarView
-            width={sidebarWidth}
-            contextTokens={contextTokens}
-            contextLimit={session.primaryAgent.modelConfig?.contextLength}
-            cacheReadTokens={cacheReadTokens}
-            childSessions={childSessions}
-            selectedChildId={selectedChildId}
-            onSelectChild={setSelectedChildId}
-            codexUsage={codexUsage}
-            colors={colors}
-          />
-        ) : null}
       </box>
 
-      <box flexDirection="column" gap={0} flexShrink={0}>
-        <box
-          flexDirection="column"
-          height={inputVisibleLines + 2}
-          flexShrink={0}
-        >
-          <text
-            fg={colors.separator}
-            content={"─".repeat(Math.max(8, terminal.width - 5))}
-          />
-          <box flexDirection="row" width="100%">
-            <text fg={colors.accent} bold content="❯ " flexShrink={0} />
-            <textarea
-              ref={(node) => {
-                inputRef.current = node;
-              }}
-              placeholder={
-                pendingAsk
-                  ? "ask pending..."
-                  : selectedChildId
-                    ? "Esc to return to primary session"
-                    : "message or /command"
-              }
-              focused={phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !selectedChildId}
-              textColor={selectedChildId ? colors.muted : colors.text}
-              focusedTextColor={selectedChildId ? colors.muted : colors.text}
-              placeholderColor={colors.muted}
-              cursorStyle={{ style: "block", blinking: false }}
-              cursorColor={colors.accent}
-              paddingRight={1}
-              width="100%"
-              height={inputVisibleLines}
-              maxHeight={INPUT_MAX_VISIBLE_LINES}
-              minHeight={1}
-              syntaxStyle={composerTokenVisuals.syntaxStyle}
-              keyBindings={COMPOSER_KEY_BINDINGS}
-              onSubmit={() => {
-                if (selectedChildId) {
-                  showHint("Return to the primary session to send messages.");
-                  return;
-                }
-                void handleSubmit(getSerializedComposerInput());
-              }}
-              wrapMode="word"
-              scrollMargin={0}
-            />
-          </box>
-          <text
-            fg={colors.separator}
-            content={"─".repeat(Math.max(8, terminal.width - 5))}
-          />
-        </box>
-        <box flexShrink={0} flexDirection="column">
-          <StatusStrip
-            modelName={modelName}
-            modelColor={modelNameColor}
-            phase={phase}
-            contextTokens={contextTokens}
-            contextLimit={session.primaryAgent.modelConfig?.contextLength}
-            hint={hint}
-            showContext={!sidebarVisible}
-            colors={colors}
-            onModelClick={() => void handleSubmit("/model")}
-          />
-          <box paddingLeft={1}>
-            <text fg={colors.muted} content={shortenPath(process.cwd())} wrapMode="truncate" />
-          </box>
-        </box>
-      </box>
+      <InputArea
+        inputRef={inputRef}
+        processing={processing}
+        pendingAsk={Boolean(pendingAsk)}
+        selectedChildId={selectedChildId}
+        phase={phase}
+        modelName={modelName}
+        modelColor={modelNameColor}
+        elapsed={turnElapsed}
+        cwd={shortenPath(process.cwd())}
+        colors={colors}
+        inputVisibleLines={inputVisibleLines}
+        composerTokenVisuals={composerTokenVisuals}
+        keyBindings={COMPOSER_KEY_BINDINGS}
+        onSubmit={() => {
+          if (selectedChildId) {
+            showHint("Return to the primary session to send messages.");
+            return;
+          }
+          void handleSubmit(getSerializedComposerInput());
+        }}
+        onHelpClick={() => void handleSubmit("/help")}
+        commandPicker={Boolean(commandPicker)}
+        checkboxPicker={Boolean(checkboxPicker)}
+        promptSelect={Boolean(promptSelect)}
+        promptSecret={Boolean(promptSecret)}
+      />
 
     </box>
   );

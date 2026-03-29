@@ -116,6 +116,11 @@ function toConversationEntry(
       if (typeof toolName === "string") ce.meta.toolName = toolName;
       if (toolMetadata && typeof toolMetadata === "object") ce.meta.toolMetadata = toolMetadata;
     }
+    const isError = entry.meta["isError"];
+    if (typeof isError === "boolean") {
+      ce.meta ??= {};
+      ce.meta.isError = isError;
+    }
   }
 
   return ce;
