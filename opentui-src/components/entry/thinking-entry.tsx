@@ -43,10 +43,12 @@ function ThinkingEntryInner(
     <box
       flexDirection="row"
       paddingLeft={2}
+      paddingTop={1}
       width="100%"
       hoverStyle={{ backgroundColor: colors.border }}
     >
-      <text fg={indicatorColor} content={`${indicator} `} />
+      <text fg={indicatorColor} content={indicator} />
+      <text content=" " />
       {active ? (
         <text content={shimmer} />
       ) : (

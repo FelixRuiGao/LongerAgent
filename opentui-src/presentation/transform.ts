@@ -48,21 +48,10 @@ function getToolName(entry: ReconciledConversationEntry): string {
 
 function isToolResultError(entry: ReconciledConversationEntry): boolean {
   const meta = getMeta(entry);
-  // Only mark as error when explicitly tagged true
   if (meta.isError === true) return true;
   if (meta.isError === false) return false;
-  // Fallback: only for very explicit error patterns
   const text = entry.entry.text;
   return text.startsWith("ERROR:") || text.startsWith("Error:");
-}
-
-// ------------------------------------------------------------------
-// Intent buffer types
-// ------------------------------------------------------------------
-
-interface IntentBufferEntry {
-  callEntry: ReconciledConversationEntry;
-  resultEntry: ReconciledConversationEntry | null;
 }
 
 // ------------------------------------------------------------------
@@ -129,7 +118,6 @@ function transformSystem(entry: ReconciledConversationEntry): PresentationEntry 
 function buildToolOperation(
   callEntry: ReconciledConversationEntry,
   resultEntry: ReconciledConversationEntry | null,
-  overrides?: { intentMerged?: boolean; displayNameOverride?: string },
 ): PresentationEntry {
   const toolName = getToolName(callEntry);
   const toolArgs = getToolArgs(callEntry);
@@ -137,7 +125,6 @@ function buildToolOperation(
 
   let state: PresentationState;
   if (!resultEntry) {
-    // No result yet — active unless elapsedMs is set (tuiVisible=false result)
     state = callEntry.entry.elapsedMs != null ? "done" : "active";
   } else {
     state = isToolResultError(resultEntry) ? "error" : "done";
@@ -167,7 +154,7 @@ function buildToolOperation(
       : callEntry.contentVersion,
     kind: "tool_operation",
     state,
-    toolDisplayName: overrides?.displayNameOverride ?? profile.displayName,
+    toolDisplayName: profile.displayName,
     toolCategory: profile.category,
     toolText: profile.text(toolArgs),
     toolSuffix: profile.suffix?.(resultMeta) ?? "",
@@ -175,15 +162,8 @@ function buildToolOperation(
     toolElapsedMs: callEntry.entry.elapsedMs,
     toolInlineResult: inlineResult,
     toolResultFullText: resultEntry?.entry.text,
-    toolIntentMerged: overrides?.intentMerged,
     sourceEntries,
   };
-}
-
-function flushIntentBuffer(buffer: IntentBufferEntry): PresentationEntry {
-  const pe = buildToolOperation(buffer.callEntry, buffer.resultEntry);
-  pe.state = "error";
-  return pe;
 }
 
 // ------------------------------------------------------------------
@@ -201,7 +181,6 @@ export function presentationTransform(
     prevById.set(pe.id, pe);
   }
 
-  let intentBuffer: IntentBufferEntry | null = null;
   let i = 0;
 
   while (i < entries.length) {
@@ -213,7 +192,6 @@ export function presentationTransform(
       const toolName = getToolName(entry);
       if (HIDDEN_TOOLS.has(toolName)) {
         i++;
-        // Also skip following tool_result if present
         if (i < entries.length && entries[i].entry.kind === "tool_result") {
           i++;
         }
@@ -221,20 +199,7 @@ export function presentationTransform(
       }
     }
 
-    // 2. Flush intent buffer if next entry doesn't match
-    if (intentBuffer && kind === "tool_call") {
-      const nextToolName = getToolName(entry);
-      if (nextToolName !== "spawn" && nextToolName !== "spawn_file") {
-        result.push(flushIntentBuffer(intentBuffer));
-        intentBuffer = null;
-      }
-    } else if (intentBuffer && kind !== "tool_call" && kind !== "tool_result") {
-      // Non-tool entry after intent buffer — flush as error
-      result.push(flushIntentBuffer(intentBuffer));
-      intentBuffer = null;
-    }
-
-    // 3. Route by kind
+    // 2. Route by kind
     switch (kind) {
       case "user": {
         result.push(transformUser(entry));
@@ -249,7 +214,6 @@ export function presentationTransform(
       }
 
       case "assistant": {
-        // Determine if this is the last assistant entry and streaming
         const isLastAssistant = processing && !entries.slice(i + 1).some(
           (e) => e.entry.kind === "assistant" || e.entry.kind === "tool_call" || e.entry.kind === "reasoning",
         );
@@ -259,51 +223,6 @@ export function presentationTransform(
       }
 
       case "tool_call": {
-        const toolName = getToolName(entry);
-        const toolArgs = getToolArgs(entry);
-
-        // Intent buffering for write_file/edit_file with intent="spawn"
-        if (
-          (toolName === "write_file" || toolName === "edit_file") &&
-          toolArgs.intent === "spawn"
-        ) {
-          const callEntry = entry;
-          i++;
-          let resultEntry: ReconciledConversationEntry | null = null;
-          if (i < entries.length && entries[i].entry.kind === "tool_result") {
-            resultEntry = entries[i];
-            i++;
-          }
-          intentBuffer = { callEntry, resultEntry };
-          break;
-        }
-
-        // Intent fulfillment for spawn/spawn_file
-        if (intentBuffer && (toolName === "spawn" || toolName === "spawn_file")) {
-          const spawnCallEntry = entry;
-          i++;
-          let spawnResultEntry: ReconciledConversationEntry | null = null;
-          if (i < entries.length && entries[i].entry.kind === "tool_result") {
-            spawnResultEntry = entries[i];
-            i++;
-          }
-          // Merge: use spawn's call but combine source entries
-          const pe = buildToolOperation(spawnCallEntry, spawnResultEntry, {
-            intentMerged: true,
-          });
-          if (intentBuffer.callEntry) {
-            pe.sourceEntries = [
-              intentBuffer.callEntry,
-              ...(intentBuffer.resultEntry ? [intentBuffer.resultEntry] : []),
-              ...(pe.sourceEntries ?? []),
-            ];
-          }
-          result.push(pe);
-          intentBuffer = null;
-          break;
-        }
-
-        // Normal: pair tool_call with following tool_result
         const callEntry = entry;
         i++;
         let resultEntry: ReconciledConversationEntry | null = null;
@@ -316,15 +235,12 @@ export function presentationTransform(
       }
 
       case "tool_result": {
-        // Orphan tool_result — render as system
         result.push(transformSystem(entry));
         i++;
         break;
       }
 
       default: {
-        // status, error, compact_mark, interrupted_marker, progress,
-        // sub_agent_rollup, sub_agent_done
         result.push(transformSystem(entry));
         i++;
         break;
@@ -332,14 +248,7 @@ export function presentationTransform(
     }
   }
 
-  // 4. Flush remaining intent buffer as error
-  if (intentBuffer) {
-    result.push(flushIntentBuffer(intentBuffer));
-    intentBuffer = null;
-  }
-
-  // 5. Activity bridging: if processing and last entry is a done tool_operation,
-  //    keep it showing as active so the spinner persists
+  // 3. Activity bridging
   if (processing && result.length > 0) {
     const last = result[result.length - 1];
     if (last.kind === "tool_operation" && last.state === "done") {
@@ -347,7 +256,7 @@ export function presentationTransform(
     }
   }
 
-  // 6. Memo optimization: reuse previous PresentationEntry by id+contentVersion
+  // 4. Memo optimization: reuse previous PresentationEntry by id+contentVersion
   for (let j = 0; j < result.length; j++) {
     const pe = result[j];
     const prev = prevById.get(pe.id);

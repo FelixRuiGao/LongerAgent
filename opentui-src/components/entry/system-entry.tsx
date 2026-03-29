@@ -19,7 +19,7 @@ function SystemEntryInner(
   switch (severity) {
     case "error":
       return (
-        <box paddingLeft={2} width="100%">
+        <box paddingLeft={2} paddingTop={1} width="100%">
           <text fg={colors.red} bold content={`[!] ${text}`} />
         </box>
       );
@@ -33,21 +33,21 @@ function SystemEntryInner(
 
     case "sub_agent":
       return (
-        <box paddingLeft={2} width="100%">
+        <box flexDirection="column" paddingLeft={2} width="100%">
           <text fg={colors.dim} content={text} />
         </box>
       );
 
     case "compact":
       return (
-        <box paddingLeft={2} width="100%">
+        <box paddingLeft={2} paddingTop={1} width="100%">
           <text fg={colors.orange} content={text} />
         </box>
       );
 
     default:
       return (
-        <box paddingLeft={2} width="100%">
+        <box paddingLeft={2} paddingTop={1} width="100%">
           <text fg={colors.orange} content={text} />
         </box>
       );

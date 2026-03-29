@@ -15,6 +15,10 @@ import type { ConversationPalette } from "../conversation-types.js";
 import { padToolName } from "./entry-utils.js";
 import { InlineResult } from "./inline-result.js";
 
+// Unified tool name color — all tool names use this single color
+const TOOL_NAME_COLOR = "#86ded4";
+const TOOL_NAME_RGBA = RGBA.fromHex(TOOL_NAME_COLOR);
+
 interface ToolOperationEntryProps {
   entry: PresentationEntry;
   colors: ConversationPalette;
@@ -25,14 +29,13 @@ function ToolOperationEntryInner(
   { entry, colors, contentWidth }: ToolOperationEntryProps,
 ): React.ReactElement {
   const active = entry.state === "active";
-  const category = entry.toolCategory ?? "internal";
-  const categoryColor = CATEGORY_COLORS[category];
-  const categoryRGBA = RGBA.fromHex(categoryColor);
 
   const spinner = useSpinner(TOOL_SPINNER_FRAMES, TOOL_SPINNER_INTERVAL, active);
   const displayName = entry.toolDisplayName ?? "Tool";
-  const shimmer = useShimmer(padToolName(displayName), categoryRGBA, active);
+  const shimmer = useShimmer(padToolName(displayName), TOOL_NAME_RGBA, active);
 
+  // Use a consistent-width indicator: spinner chars are 1-col,
+  // ✔/✖ are also rendered as 1-col with a trailing space for alignment.
   const indicator = active
     ? spinner
     : entry.state === "error"
@@ -40,7 +43,7 @@ function ToolOperationEntryInner(
       : "✔";
 
   const indicatorColor = active
-    ? categoryColor
+    ? TOOL_NAME_COLOR
     : entry.state === "error"
       ? ERROR_COLOR
       : SUCCESS_COLOR;
@@ -53,17 +56,19 @@ function ToolOperationEntryInner(
       <box
         flexDirection="row"
         paddingLeft={2}
+        paddingTop={1}
         width="100%"
         hoverStyle={{ backgroundColor: colors.border }}
       >
-        <text fg={indicatorColor} content={`${indicator} `} />
+        <text fg={indicatorColor} content={indicator} />
+        <text content=" " />
         {active ? (
           <text content={shimmer} />
         ) : (
-          <text fg={categoryColor} content={padToolName(displayName)} />
+          <text fg={TOOL_NAME_COLOR} content={padToolName(displayName)} />
         )}
-        <text fg={categoryColor} content={" "} />
-        <text fg={colors.text} content={toolText} wrapMode="none" />
+        <text content="  " />
+        <text fg={colors.dim} content={toolText} wrapMode="char" flexGrow={1} flexShrink={1} />
         {suffix ? (
           <text fg={colors.dim} content={`  ${suffix}`} />
         ) : null}

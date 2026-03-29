@@ -48,7 +48,6 @@ export interface PresentationEntry {
   toolElapsedMs?: number;
   toolInlineResult?: InlineResultData | null;
   toolResultFullText?: string;
-  toolIntentMerged?: boolean;
 
   // kind=assistant
   assistantText?: string;

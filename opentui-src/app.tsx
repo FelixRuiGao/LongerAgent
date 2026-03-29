@@ -380,7 +380,7 @@ function clamp(value: number, min: number, max: number): number {
 
 function getSidebarWidth(terminalWidth: number): number {
   return clamp(
-    Math.floor(terminalWidth * 0.35),
+    Math.floor(terminalWidth * 0.26),
     SIDEBAR_MIN_WIDTH,
     SIDEBAR_MAX_WIDTH,
   );
@@ -3451,8 +3451,14 @@ export function OpenTuiApp({
         modelColor={modelNameColor}
         elapsed={turnElapsed}
         cwd={shortenPath(process.cwd())}
+        hint={hint}
+        contextTokens={contextTokens}
+        contextLimit={session.primaryAgent.modelConfig?.contextLength}
+        showContext={!sidebarVisible}
+        terminalWidth={terminal.width}
         colors={colors}
         inputVisibleLines={inputVisibleLines}
+        maxInputLines={INPUT_MAX_VISIBLE_LINES}
         composerTokenVisuals={composerTokenVisuals}
         keyBindings={COMPOSER_KEY_BINDINGS}
         onSubmit={() => {
@@ -3462,7 +3468,7 @@ export function OpenTuiApp({
           }
           void handleSubmit(getSerializedComposerInput());
         }}
-        onHelpClick={() => void handleSubmit("/help")}
+        onModelClick={() => void handleSubmit("/model")}
         commandPicker={Boolean(commandPicker)}
         checkboxPicker={Boolean(checkboxPicker)}
         promptSelect={Boolean(promptSelect)}

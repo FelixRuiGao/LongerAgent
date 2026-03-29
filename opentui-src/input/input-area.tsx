@@ -15,16 +15,28 @@ interface InputAreaProps {
   modelColor: string;
   elapsed: number;
   cwd: string;
+  hint: string | null;
+  contextTokens: number;
+  contextLimit: number | undefined;
+  showContext: boolean;
+  terminalWidth: number;
   colors: ConversationPalette;
   inputVisibleLines: number;
+  maxInputLines: number;
   composerTokenVisuals: { syntaxStyle: any };
   keyBindings: any;
   onSubmit: () => void;
-  onHelpClick: () => void;
+  onModelClick: () => void;
   commandPicker: boolean;
   checkboxPicker: boolean;
   promptSelect: boolean;
   promptSecret: boolean;
+}
+
+function formatCompactTokens(value: number | undefined): string {
+  if (value == null || value === 0) return "0";
+  if (value < 1000) return String(value);
+  return `${(value / 1000).toFixed(1)}k`;
 }
 
 function InputAreaInner(props: InputAreaProps): React.ReactElement {
@@ -38,12 +50,18 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     modelColor,
     elapsed,
     cwd,
+    hint,
+    contextTokens,
+    contextLimit,
+    showContext,
+    terminalWidth,
     colors,
     inputVisibleLines,
+    maxInputLines,
     composerTokenVisuals,
     keyBindings,
     onSubmit,
-    onHelpClick,
+    onModelClick,
     commandPicker,
     checkboxPicker,
     promptSelect,
@@ -54,11 +72,11 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     ? "ask pending..."
     : selectedChildId
       ? "Esc to return to primary session"
-      : processing
-        ? "agent is working..."
-        : "message or /command";
+      : "message or /command";
 
   const focused = phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !selectedChildId;
+
+  const separatorLine = "─".repeat(Math.max(8, terminalWidth - 5));
 
   return (
     <box flexDirection="column" gap={0} flexShrink={0}>
@@ -66,15 +84,10 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
         flexDirection="column"
         height={inputVisibleLines + 2}
         flexShrink={0}
-        borderStyle="rounded"
-        borderColor={colors.muted}
-        paddingLeft={1}
-        paddingRight={1}
       >
+        <text fg={colors.dim} content={separatorLine} />
         <box flexDirection="row" width="100%">
-          {!processing ? (
-            <text fg={colors.accent} bold content="❯ " flexShrink={0} />
-          ) : null}
+          <text fg={colors.accent} bold content="❯ " flexShrink={0} />
           <textarea
             ref={(node: any) => {
               (inputRef as any).current = node;
@@ -89,7 +102,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
             paddingRight={1}
             width="100%"
             height={inputVisibleLines}
-            maxHeight={8}
+            maxHeight={maxInputLines}
             minHeight={1}
             syntaxStyle={composerTokenVisuals.syntaxStyle}
             keyBindings={keyBindings}
@@ -98,27 +111,33 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
             scrollMargin={0}
           />
         </box>
+        <text fg={colors.dim} content={separatorLine} />
       </box>
 
-      <box flexDirection="row" paddingLeft={2} gap={0}>
-        <text fg={modelColor} content={modelName} />
-        {processing && elapsed > 0 ? (
-          <>
-            <text fg={colors.dim} content=" │ " />
-            <text fg={colors.dim} content={formatElapsed(elapsed)} />
-          </>
-        ) : null}
-        <text fg={colors.dim} content=" │ " />
-        <text fg={colors.muted} content={cwd} wrapMode="truncate" flexGrow={1} flexShrink={1} />
-        <box
-          hoverStyle={{ backgroundColor: colors.border }}
-          onMouseDown={(e: any) => {
-            e.stopPropagation();
-            e.preventDefault();
-            onHelpClick();
-          }}
-        >
-          <text fg={colors.dim} content=" ? help" />
+      <box paddingLeft={1} paddingRight={1} flexDirection="column" gap={0} width="100%">
+        <box flexDirection="row">
+          <box
+            hoverStyle={{ backgroundColor: colors.border }}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onModelClick(); }}
+          >
+            <text fg={modelColor} content={modelName} />
+          </box>
+          {processing && elapsed > 0 ? (
+            <>
+              <text fg={colors.dim} content=" │ " />
+              <text fg={colors.dim} content={formatElapsed(elapsed)} />
+            </>
+          ) : null}
+          {showContext ? (
+            <>
+              <text fg={colors.dim} content=" │ " />
+              <text fg={colors.dim} content={`${formatCompactTokens(contextTokens)}/${formatCompactTokens(contextLimit)}`} />
+            </>
+          ) : null}
+        </box>
+        {hint ? <text fg={colors.dim} content={hint} /> : null}
+        <box flexDirection="row">
+          <text fg={colors.muted} content={cwd} wrapMode="truncate" flexGrow={1} flexShrink={1} />
         </box>
       </box>
     </box>
