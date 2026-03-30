@@ -207,6 +207,7 @@ export class Agent {
     onToolCall?: OnToolCallCallback,
     onTextChunk?: (roundIndex: number, chunk: string) => boolean | void,
     onReasoningChunk?: (roundIndex: number, chunk: string) => boolean | void,
+    onReasoningDone?: (roundIndex: number) => void,
     signal?: AbortSignal,
     contextIdAllocator?: (roundIndex: number) => string,
     compactCheck?: (
@@ -239,6 +240,7 @@ export class Agent {
       onToolCall,
       onTextChunk,
       onReasoningChunk,
+      onReasoningDone,
       builtinExecutor: executeTool,
       signal,
       contextIdAllocator,

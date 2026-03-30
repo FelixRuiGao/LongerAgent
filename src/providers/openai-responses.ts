@@ -13,6 +13,7 @@ import {
   ProviderResponse,
   ToolCall,
   Usage,
+  recoverPartialArgs,
   type Message,
   type SendMessageOptions,
   type ToolDef,
@@ -326,7 +327,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
         try {
           args = typeof argsStr === "string" ? JSON.parse(argsStr) : argsStr;
         } catch {
-          args = {};
+          args = recoverPartialArgs(argsStr);
         }
         toolCalls.push({ id: callId, name, arguments: args });
       }
@@ -583,12 +584,14 @@ export class OpenAIResponsesProvider extends BaseProvider {
     // Fallback: build from accumulated stream data
     const toolCalls: ToolCall[] = [];
     for (const [callId, acc] of toolAcc) {
+      // Skip reasoning function_calls (no name — output_item.added was skipped due to empty call_id)
+      if (!acc.name) continue;
       const argsStr = acc.argChunks.join("");
       let args: Record<string, unknown>;
       try {
         args = argsStr ? JSON.parse(argsStr) : {};
       } catch {
-        args = {};
+        args = recoverPartialArgs(argsStr);
       }
       toolCalls.push({ id: callId, name: acc.name, arguments: args });
     }

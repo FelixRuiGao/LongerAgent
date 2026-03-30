@@ -255,6 +255,8 @@ export interface ToolLoopOptions {
   toolsMap?: Record<string, ToolDef>;
   onTextChunk?: (roundIndex: number, chunk: string) => boolean | void;
   onReasoningChunk?: (roundIndex: number, chunk: string) => boolean | void;
+  /** Called after all reasoning content for a round has been received. */
+  onReasoningDone?: (roundIndex: number) => void;
   /** Fallback executor for tools not found in toolExecutors. */
   builtinExecutor?: (name: string, args: Record<string, unknown>) => Promise<ToolResult | string>;
   /** Abort signal for cancellation. */
@@ -317,6 +319,7 @@ export async function asyncRunToolLoop(
     onToolCall,
     onTextChunk,
     onReasoningChunk,
+    onReasoningDone,
     builtinExecutor,
     signal,
     contextIdAllocator,
@@ -453,6 +456,11 @@ export async function asyncRunToolLoop(
         onReasoningChunk(roundIndex, resp.reasoningContent) === true || reasoningHandledViaCallback;
     }
 
+    // Signal reasoning complete (whether streamed or returned in final response)
+    if ((resp.reasoningContent || providerStreamedReasoning) && onReasoningDone) {
+      onReasoningDone(roundIndex);
+    }
+
     if (resp.text) {
       hadStreamedText = true;
     }
@@ -546,8 +554,9 @@ export async function asyncRunToolLoop(
       }
     }
 
-    // Tool call entries
+    // Tool call entries (skip unnamed tool calls — e.g. reasoning function_calls from interrupted streams)
     for (const tc of resp.toolCalls) {
+      if (!tc.name) continue;
       const summary = toolSummaries.get(tc.id) ?? "";
       const display = generateToolCallDisplay(tc.name, tc.arguments);
       appendEntry(createToolCall(

@@ -163,6 +163,50 @@ export class ToolResult {
 }
 
 // ------------------------------------------------------------------
+// Partial JSON recovery for interrupted streaming
+// ------------------------------------------------------------------
+
+/**
+ * Recover complete key-value pairs from a truncated JSON object string.
+ * Used when streaming is interrupted mid-arguments.
+ *
+ * Strategy:
+ * 1. Try normal JSON.parse (works if JSON is actually complete)
+ * 2. Try appending common closers ("}", ""}", etc.) to close truncated values
+ * 3. Truncate at the last top-level comma and close with "}"
+ * 4. Fall back to {}
+ */
+export function recoverPartialArgs(partial: string): Record<string, unknown> {
+  if (!partial) return {};
+
+  // 1. Try normal parse
+  try {
+    const r = JSON.parse(partial);
+    if (r && typeof r === "object" && !Array.isArray(r)) return r;
+  } catch {}
+
+  // 2. Try appending common closers
+  for (const closer of ['"}', "}", '"]}'  , "null}"]) {
+    try {
+      const r = JSON.parse(partial + closer);
+      if (r && typeof r === "object" && !Array.isArray(r)) return r;
+    } catch {}
+  }
+
+  // 3. Truncate at last comma and close
+  for (let i = partial.length - 1; i >= 0; i--) {
+    if (partial[i] === ",") {
+      try {
+        const r = JSON.parse(partial.slice(0, i) + "}");
+        if (r && typeof r === "object" && !Array.isArray(r)) return r;
+      } catch {}
+    }
+  }
+
+  return {};
+}
+
+// ------------------------------------------------------------------
 // Abstract base provider
 // ------------------------------------------------------------------
 

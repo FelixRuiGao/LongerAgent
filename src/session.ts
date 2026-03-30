@@ -1828,7 +1828,7 @@ export class Session {
 
     const originalTurnCount = this._turnCount;
     this._turnCount = interruptedTurnIndex;
-    this._completeMissingToolResultsFromLog(turnStartIndex, interruptedMarker);
+    this._completeMissingToolResultsFromLog(turnStartIndex, "[Interrupted] Tool was not executed.");
     const lastRole = this._getLastSendableRole();
     if (this._isUserSideProtocolRole(lastRole) && !hasAssistantInTurn) {
       const ctxId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
@@ -3215,7 +3215,11 @@ export class Session {
     }
 
     // Complete all materialized tool calls that have no results yet.
-    this._completeMissingToolResultsFromLog(logLenBefore, interruptedMarker);
+    // These tool calls were never executed (abort happened before tool execution).
+    this._completeMissingToolResultsFromLog(
+      logLenBefore,
+      "[Interrupted] Tool was not executed.",
+    );
 
     // If protocol-side currently ends at user-side, add a synthetic assistant marker.
     const lastRole = this._getLastSendableRole();
@@ -3439,6 +3443,15 @@ export class Session {
       };
     }
 
+    // Mark reasoning entry as complete when the provider finishes streaming reasoning
+    const onReasoningDone = (roundIndex: number) => {
+      const entry = streamedReasoningEntries.get(roundIndex);
+      if (entry) {
+        (entry.meta as Record<string, unknown>).reasoningComplete = true;
+        this._touchLog();
+      }
+    };
+
     let onToolCall: ((name: string, tool: string, args: Record<string, unknown>, summary: string) => void) | undefined;
     if (this._progress) {
       const step = this._turnCount;
@@ -3574,6 +3587,7 @@ export class Session {
       onToolCall,
       onTextChunk,
       onReasoningChunk,
+      onReasoningDone,
       signal,
       (roundIndex) => getRoundContextId(roundIndex),
       this._buildCompactCheck(),

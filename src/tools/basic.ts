@@ -848,15 +848,24 @@ async function toolWriteFile(
 
       const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
       const verb = append ? "Appended" : "Wrote";
+      const tuiPreview: Record<string, unknown> = {
+        kind: "diff",
+        text: diffPreview.text,
+        truncated: diffPreview.truncated,
+      };
+      // For Create/Overwrite (non-append), attach the full new content
+      // so the TUI can render a complete code preview instead of a partial diff.
+      if (!append) {
+        tuiPreview.newContent = finalContent;
+      }
       return new ToolResult({
         content: `OK: ${verb} ${content.length} characters to ${filePath} [mtime_ms=${newMtimeMs}]`,
         metadata: {
           path: filePath,
-          tui_preview: {
-            kind: "diff",
-            text: diffPreview.text,
-            truncated: diffPreview.truncated,
-          },
+          isNewFile: !initialVersion.exists,
+          isAppend: append,
+          lineCount: afterLines.length,
+          tui_preview: tuiPreview,
         },
       });
     } catch (e) {
