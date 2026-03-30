@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 
-import React from "react";
+import React, { useState } from "react";
 
 import { RGBA } from "../../forked/core/lib/RGBA.js";
 import type { PresentationEntry } from "../../presentation/types.js";
@@ -40,21 +40,24 @@ function ThinkingEntryInner(
       ? ERROR_COLOR
       : SUCCESS_COLOR;
 
+  const [hovered, setHovered] = useState(false);
+
   return (
     <box
       flexDirection="row"
       paddingLeft={2}
       paddingTop={1}
       width="100%"
-      hoverStyle={{ backgroundColor: colors.border }}
+      backgroundColor={hovered ? colors.border : undefined}
+      onMouseOver={() => setHovered(true)}
+      onMouseOut={() => setHovered(false)}
       onMouseDown={(e: any) => { e.stopPropagation(); onEntryClick?.(entry); }}
     >
-      <text fg={indicatorColor} content={indicator} />
-      <text content=" " />
+      <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
       {active ? (
-        <text content={shimmer} />
+        <text content={shimmer} flexShrink={0} />
       ) : (
-        <text fg={THINKING_COLOR} content="Thinking" />
+        <text fg={THINKING_COLOR} content="Thinking" flexShrink={0} />
       )}
     </box>
   );

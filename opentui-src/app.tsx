@@ -3126,8 +3126,7 @@ export function OpenTuiApp({
     ? presentationEntries.find((pe) => activeTabId === `detail:${pe.id}`)
     : null;
 
-  const showLogoInScroll = terminal.height >= MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER
-    && terminal.width >= MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER;
+  const showLogoInScroll = terminal.width >= MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER;
 
   return (
     <box

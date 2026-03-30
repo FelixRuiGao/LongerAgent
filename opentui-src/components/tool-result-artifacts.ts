@@ -271,6 +271,8 @@ interface ToolResultArtifactOptions {
   toolMetadata?: ToolMetadata;
   wrapWidth?: number;
   colors: ConversationPalette;
+  /** When true, extract only the new file content from diff text and render as syntax-highlighted code. */
+  codePreviewOnly?: boolean;
 }
 
 export interface ToolResultLineArtifact {
@@ -560,12 +562,7 @@ function buildDiffLineArtifact(
   }
 
   if (raw.startsWith("+++ ") || raw.startsWith("--- ")) {
-    const chunks: TextChunk[] = [];
-    if (prefix) {
-      chunks.push(createChunk(prefix, { fg: dimFg }));
-    }
-    chunks.push(createChunk(raw, { fg: dimFg }));
-    return wrapStandaloneChunks(chunks, wrapWidth);
+    return [];
   }
 
   const marker = raw[0] ?? "";
@@ -624,6 +621,58 @@ function buildDiffLineArtifact(
   return wrapStandaloneChunks(chunks, wrapWidth);
 }
 
+/**
+ * Extract new file content from diff text: keep addition (+) and context ( )
+ * lines, skip deletions (-), headers, hunks, and fold markers.
+ */
+function extractNewContentLines(text: string): string[] {
+  const codeLines: string[] = [];
+  for (const line of text.split("\n")) {
+    const { raw } = parsePreviewLine(line);
+    if (raw.startsWith("+++ ") || raw.startsWith("--- ")) continue;
+    if (raw.startsWith("@@")) continue;
+    if (raw.startsWith("...")) continue;
+    if (raw.startsWith("-")) continue;
+    if (raw.startsWith("+")) { codeLines.push(raw.slice(1)); continue; }
+    if (raw.startsWith(" ")) { codeLines.push(raw.slice(1)); continue; }
+  }
+  return codeLines;
+}
+
+function buildCodePreviewArtifacts(
+  { text, colors, toolMetadata, wrapWidth }: Pick<ToolResultArtifactOptions, "text" | "colors" | "toolMetadata" | "wrapWidth">,
+): ToolResultLineArtifact[] {
+  const language = inferDiffLanguage(toolMetadata);
+  const textFg = RGBA.fromHex(colors.text);
+
+  // Prefer full new content from backend; fall back to extracting from diff text
+  const preview = toolMetadata?.["tui_preview"];
+  const newContent = preview && typeof preview === "object"
+    ? (preview as Record<string, unknown>)["newContent"]
+    : undefined;
+  const codeLines = typeof newContent === "string"
+    ? newContent.split("\n")
+    : extractNewContentLines(text);
+
+  if (codeLines.length === 0) {
+    return buildPlainToolResultArtifacts({ text, colors, wrapWidth });
+  }
+
+  return codeLines.flatMap((codeLine) => {
+    const highlighted = language ? highlightToChunks(codeLine, language) : null;
+    if (highlighted && highlighted.length > 0) {
+      return wrapStandaloneChunks(
+        cloneChunksWithBaseStyle(highlighted, { fallbackFg: textFg }),
+        wrapWidth,
+      );
+    }
+    return wrapStandaloneChunks(
+      [createChunk(codeLine || " ", { fg: textFg })],
+      wrapWidth,
+    );
+  });
+}
+
 function buildDiffToolResultArtifacts(
   { text, colors, toolMetadata, wrapWidth }: Pick<ToolResultArtifactOptions, "text" | "colors" | "toolMetadata" | "wrapWidth">,
 ): ToolResultLineArtifact[] {
@@ -639,6 +688,10 @@ export function buildToolResultArtifacts(
 ): ToolResultLineArtifact[] {
   if (options.dim) {
     return buildPlainToolResultArtifacts(options);
+  }
+
+  if (options.codePreviewOnly) {
+    return buildCodePreviewArtifacts(options);
   }
 
   const previewKind = parseDiffPreviewKind(options.toolMetadata);

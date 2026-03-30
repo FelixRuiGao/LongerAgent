@@ -4,6 +4,7 @@ import React from "react";
 
 import type { ConversationPalette } from "../components/conversation-types.js";
 import { formatElapsed } from "../presentation/use-turn-timer.js";
+import { useSpinner, TOOL_SPINNER_FRAMES, TOOL_SPINNER_INTERVAL } from "../presentation/use-spinner.js";
 
 interface InputAreaProps {
   inputRef: React.RefObject<any>;
@@ -77,9 +78,15 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
   const focused = phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !selectedChildId;
 
   const separatorLine = "─".repeat(Math.max(8, terminalWidth - 5));
+  const activeSpinner = useSpinner(TOOL_SPINNER_FRAMES, TOOL_SPINNER_INTERVAL, processing);
 
   return (
     <box flexDirection="column" gap={0} flexShrink={0}>
+      {processing ? (
+        <box paddingLeft={2}>
+          <text fg={colors.dim} content={`${activeSpinner} Working`} />
+        </box>
+      ) : null}
       <box
         flexDirection="column"
         height={inputVisibleLines + 2}
@@ -117,7 +124,6 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
       <box paddingLeft={1} paddingRight={1} flexDirection="column" gap={0} width="100%">
         <box flexDirection="row">
           <box
-            hoverStyle={{ backgroundColor: colors.border }}
             onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onModelClick(); }}
           >
             <text fg={modelColor} content={modelName} />

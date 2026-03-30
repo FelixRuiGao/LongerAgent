@@ -74,7 +74,6 @@ function LeftSidebarInner(props: SidebarProps): React.ReactElement {
       <box
         flexDirection="row"
         paddingLeft={1}
-        hoverStyle={{ backgroundColor: colors.border }}
         onMouseDown={(e: any) => {
           e.stopPropagation();
           e.preventDefault();

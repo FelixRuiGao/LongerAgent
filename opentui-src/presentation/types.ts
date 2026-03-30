@@ -23,6 +23,8 @@ export interface InlineResultData {
   dim: boolean;
   maxLines: number;
   toolMetadata?: Record<string, unknown>;
+  /** When true, diff lines are rendered without red/green background (for Create/Overwrite). */
+  noDiffBackground?: boolean;
 }
 
 export interface PresentationEntry {

@@ -12,7 +12,6 @@ import {
 } from "../../presentation/use-spinner.js";
 import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
-import { padToolName } from "./entry-utils.js";
 import { InlineResult } from "./inline-result.js";
 
 // Unified tool name color — all tool names use this single color
@@ -33,7 +32,7 @@ function ToolOperationEntryInner(
 
   const spinner = useSpinner(TOOL_SPINNER_FRAMES, TOOL_SPINNER_INTERVAL, active);
   const displayName = entry.toolDisplayName ?? "Tool";
-  const shimmer = useShimmer(padToolName(displayName), TOOL_NAME_RGBA, active);
+  const shimmer = useShimmer(displayName, TOOL_NAME_RGBA, active);
 
   // Use a consistent-width indicator: spinner chars are 1-col,
   // ✔/✖ are also rendered as 1-col with a trailing space for alignment.
@@ -59,27 +58,25 @@ function ToolOperationEntryInner(
         paddingLeft={2}
         paddingTop={1}
         width="100%"
-        hoverStyle={{ backgroundColor: colors.border }}
-        onMouseDown={(e: any) => { e.stopPropagation(); onEntryClick?.(entry); }}
       >
-        <text fg={indicatorColor} content={indicator} />
-        <text content=" " />
+        <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
         {active ? (
-          <text content={shimmer} />
+          <text content={shimmer} flexShrink={0} />
         ) : (
-          <text fg={TOOL_NAME_COLOR} content={padToolName(displayName)} />
+          <text fg={TOOL_NAME_COLOR} content={displayName} flexShrink={0} />
         )}
-        <text content="  " />
-        <text fg={colors.dim} content={toolText} wrapMode="char" flexGrow={1} flexShrink={1} />
         {suffix ? (
-          <text fg={colors.dim} content={`  ${suffix}`} />
+          <text fg={colors.dim} content={` ${suffix}`} flexShrink={0} />
         ) : null}
+        <text content="  " flexShrink={0} />
+        <text fg={colors.dim} content={toolText} wrapMode="char" flexGrow={1} flexShrink={1} />
       </box>
       {entry.toolInlineResult && entry.state !== "active" ? (
         <InlineResult
           data={entry.toolInlineResult}
           colors={colors}
           contentWidth={contentWidth}
+          onOpenDetail={onEntryClick ? () => onEntryClick(entry) : undefined}
         />
       ) : null}
     </box>

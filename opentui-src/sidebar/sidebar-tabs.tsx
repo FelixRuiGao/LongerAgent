@@ -34,7 +34,6 @@ function SidebarTabsInner(
             flexDirection="row"
             width="100%"
             backgroundColor={isActive ? colors.border : "transparent"}
-            hoverStyle={{ backgroundColor: colors.border }}
             onMouseDown={(e: any) => {
               e.stopPropagation();
               e.preventDefault();

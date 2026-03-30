@@ -22,6 +22,7 @@ function DetailToolTabInner(
   const title = toolText ? `${displayName} ${toolText}` : displayName;
 
   const toolMetadata = entry.toolInlineResult?.toolMetadata;
+  const codePreviewOnly = entry.toolInlineResult?.noDiffBackground;
 
   const artifacts = useMemo(() => {
     if (toolMetadata) {
@@ -30,10 +31,11 @@ function DetailToolTabInner(
         toolMetadata,
         wrapWidth: Math.max(8, contentWidth - 6),
         colors,
+        codePreviewOnly,
       });
     }
     return null;
-  }, [text, toolMetadata, contentWidth, colors]);
+  }, [text, toolMetadata, contentWidth, colors, codePreviewOnly]);
 
   return (
     <box flexDirection="column" flexGrow={1} width="100%">

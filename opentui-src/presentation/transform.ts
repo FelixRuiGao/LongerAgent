@@ -54,6 +54,10 @@ function isToolResultError(entry: ReconciledConversationEntry): boolean {
   return text.startsWith("ERROR:") || text.startsWith("Error:");
 }
 
+function isToolResultInterrupted(entry: ReconciledConversationEntry): boolean {
+  return entry.entry.text.startsWith("[Interrupted]");
+}
+
 // ------------------------------------------------------------------
 // Transform functions
 // ------------------------------------------------------------------
@@ -73,12 +77,12 @@ function transformUser(entry: ReconciledConversationEntry): PresentationEntry {
   };
 }
 
-function transformThinking(entry: ReconciledConversationEntry): PresentationEntry {
+function transformThinking(entry: ReconciledConversationEntry, active: boolean): PresentationEntry {
   return {
     id: entry.id,
     contentVersion: entry.contentVersion,
     kind: "thinking",
-    state: "done",
+    state: active ? "active" : "done",
     thinkingFullText: entry.entry.text,
   };
 }
@@ -126,13 +130,32 @@ function buildToolOperation(
   let state: PresentationState;
   if (!resultEntry) {
     state = callEntry.entry.elapsedMs != null ? "done" : "active";
+  } else if (isToolResultError(resultEntry)) {
+    state = "error";
+  } else if (isToolResultInterrupted(resultEntry)) {
+    state = "error";
   } else {
-    state = isToolResultError(resultEntry) ? "error" : "done";
+    state = "done";
   }
 
   const resultMeta = resultEntry
     ? ((resultEntry.entry.meta as Record<string, unknown>)?.toolMetadata as Record<string, unknown>) ?? undefined
     : undefined;
+
+  // Resolve dynamic display name for write_file variants
+  let displayName = profile.displayName;
+  let noDiffBackground = false;
+  if (toolName === "write_file" && resultMeta) {
+    if (resultMeta.isAppend === true) {
+      displayName = "Append";
+    } else if (resultMeta.isNewFile === true) {
+      displayName = "Create";
+      noDiffBackground = true;
+    } else if (resultMeta.isNewFile === false) {
+      displayName = "Overwrite";
+      noDiffBackground = true;
+    }
+  }
 
   let inlineResult: InlineResultData | null = null;
   if (resultEntry && profile.inlineResult !== false && state !== "active") {
@@ -141,6 +164,7 @@ function buildToolOperation(
       dim: resultEntry.entry.dim ?? false,
       maxLines: profile.inlineResult.maxLines,
       toolMetadata: resultMeta,
+      noDiffBackground: noDiffBackground || undefined,
     };
   }
 
@@ -154,7 +178,7 @@ function buildToolOperation(
       : callEntry.contentVersion,
     kind: "tool_operation",
     state,
-    toolDisplayName: profile.displayName,
+    toolDisplayName: displayName,
     toolCategory: profile.category,
     toolText: profile.text(toolArgs),
     toolSuffix: profile.suffix?.(resultMeta) ?? "",
@@ -208,7 +232,9 @@ export function presentationTransform(
       }
 
       case "reasoning": {
-        result.push(transformThinking(entry));
+        const reasoningComplete = getMeta(entry).reasoningComplete === true;
+        const active = processing && !reasoningComplete;
+        result.push(transformThinking(entry, active));
         i++;
         break;
       }
@@ -248,13 +274,7 @@ export function presentationTransform(
     }
   }
 
-  // 3. Activity bridging
-  if (processing && result.length > 0) {
-    const last = result[result.length - 1];
-    if (last.kind === "tool_operation" && last.state === "done") {
-      result[result.length - 1] = { ...last, state: "active" };
-    }
-  }
+  // 3. Activity bridging — removed. Replaced by system active indicator in input area.
 
   // 4. Memo optimization: reuse previous PresentationEntry by id+contentVersion
   for (let j = 0; j < result.length; j++) {

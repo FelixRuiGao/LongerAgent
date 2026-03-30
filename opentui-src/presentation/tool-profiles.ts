@@ -68,7 +68,7 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
       const lines = meta?.lineCount;
       return typeof lines === "number" ? `(${lines} lines)` : "";
     },
-    inlineResult: { maxLines: 12 },
+    inlineResult: { maxLines: 20 },
   },
   bash: {
     category: "execute",
