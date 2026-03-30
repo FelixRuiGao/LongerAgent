@@ -2,16 +2,20 @@
 
 import React from "react";
 
+import type { KeyBinding, TextareaRenderable } from "@opentui/core";
 import type { ConversationPalette } from "../components/conversation-types.js";
+import type { ComposerTokenVisuals } from "../composer-tokens.js";
+import type { ActivityPhase } from "../display/types.js";
+import { formatCompactTokensShort } from "../display/utils/format.js";
 import { formatElapsed } from "../presentation/use-turn-timer.js";
 import { useSpinner, TOOL_SPINNER_FRAMES, TOOL_SPINNER_INTERVAL } from "../presentation/use-spinner.js";
 
 interface InputAreaProps {
-  inputRef: React.RefObject<any>;
+  inputRef: React.RefObject<TextareaRenderable | null>;
   processing: boolean;
   pendingAsk: boolean;
   selectedChildId: string | null;
-  phase: string;
+  phase: ActivityPhase;
   modelName: string;
   modelColor: string;
   elapsed: number;
@@ -24,20 +28,14 @@ interface InputAreaProps {
   colors: ConversationPalette;
   inputVisibleLines: number;
   maxInputLines: number;
-  composerTokenVisuals: { syntaxStyle: any };
-  keyBindings: any;
+  composerTokenVisuals: ComposerTokenVisuals;
+  keyBindings: readonly KeyBinding[];
   onSubmit: () => void;
   onModelClick: () => void;
   commandPicker: boolean;
   checkboxPicker: boolean;
   promptSelect: boolean;
   promptSecret: boolean;
-}
-
-function formatCompactTokens(value: number | undefined): string {
-  if (value == null || value === 0) return "0";
-  if (value < 1000) return String(value);
-  return `${(value / 1000).toFixed(1)}k`;
 }
 
 function InputAreaInner(props: InputAreaProps): React.ReactElement {
@@ -137,7 +135,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
           {showContext ? (
             <>
               <text fg={colors.dim} content=" │ " />
-              <text fg={colors.dim} content={`${formatCompactTokens(contextTokens)}/${formatCompactTokens(contextLimit)}`} />
+              <text fg={colors.dim} content={`${formatCompactTokensShort(contextTokens)}/${formatCompactTokensShort(contextLimit)}`} />
             </>
           ) : null}
         </box>

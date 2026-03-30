@@ -3,6 +3,7 @@
 import React from "react";
 
 import type { ConversationPalette } from "../components/conversation-types.js";
+import { SelectableRow } from "../display/primitives/selectable-row.js";
 
 export interface TabState {
   id: string;
@@ -29,34 +30,35 @@ function SidebarTabsInner(
       {tabs.map((tab) => {
         const isActive = tab.id === activeTabId;
         return (
-          <box
+          <SelectableRow
             key={tab.id}
-            flexDirection="row"
             width="100%"
-            backgroundColor={isActive ? colors.border : "transparent"}
-            onMouseDown={(e: any) => {
-              e.stopPropagation();
-              e.preventDefault();
-              onSelect(tab.id);
-            }}
+            hoverBackgroundColor={colors.border}
+            onPress={() => onSelect(tab.id)}
           >
-            <text
-              fg={isActive ? colors.accent : colors.dim}
-              content={expanded ? ` ${tab.icon} ${tab.label}` : ` ${tab.icon}`}
-            />
-            {expanded && tab.closeable ? (
-              <box
-                flexGrow={1}
-                onMouseDown={(e: any) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  onClose(tab.id);
-                }}
-              >
-                <text fg={colors.dim} content=" ×" />
-              </box>
-            ) : null}
-          </box>
+            <box
+              flexDirection="row"
+              width="100%"
+              backgroundColor={isActive ? colors.border : "transparent"}
+            >
+              <text
+                fg={isActive ? colors.accent : colors.dim}
+                content={expanded ? ` ${tab.icon} ${tab.label}` : ` ${tab.icon}`}
+              />
+              {expanded && tab.closeable ? (
+                <box
+                  flexGrow={1}
+                  onMouseDown={(e: any) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    onClose(tab.id);
+                  }}
+                >
+                  <text fg={colors.dim} content=" ×" />
+                </box>
+              ) : null}
+            </box>
+          </SelectableRow>
         );
       })}
     </box>

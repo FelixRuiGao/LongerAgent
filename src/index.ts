@@ -150,7 +150,7 @@ export type {
   ConversationEntry,
   ConversationEntryKind,
   LaunchOptions,
-} from "./tui/types.js";
+} from "./ui/contracts.js";
 
 // -- Version --------------------------------------------------------------
 export { VERSION } from "./version.js";

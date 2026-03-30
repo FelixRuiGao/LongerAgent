@@ -6,7 +6,7 @@
  */
 
 import type { LogEntry, TuiDisplayKind } from "./log-entry.js";
-import type { ConversationEntry, ConversationEntryKind } from "./tui/types.js";
+import type { ConversationEntry, ConversationEntryKind } from "./ui/contracts.js";
 import { mergeConsecutiveSameRole } from "./context-rendering.js";
 import { truncateDistillContent } from "./summarize-context.js";
 

@@ -13,6 +13,7 @@ import {
   isLongerAgentMarkdownPatchDisabled,
   writeLongerAgentOpenTuiDiag,
 } from "./core/lib/diagnostic.js";
+import { DEFAULT_DISPLAY_THEME } from "../display/theme/index.js";
 
 const PATCH_FLAG = Symbol.for("longeragent.opentui.markdown.patch.v4");
 const INNER_TEXT = Symbol.for("longeragent.codeblock.text");
@@ -20,57 +21,16 @@ const LABEL_REF = Symbol.for("longeragent.codeblock.label");
 const COPY_REF = Symbol.for("longeragent.codeblock.copy");
 const CODE_CONTENT = Symbol.for("longeragent.codeblock.rawcontent");
 
-// Colors from the fixed dark palette
-const CODE_BORDER = "#2a2630";
-const CODE_BORDER_HOVER = "#504860";
-const CODE_LABEL_FG = "#636a76";
-const CODE_COPY_FG = "#454a54";
-const CODE_COPY_FLASH = "#ffb703";
-const CODE_FG = RGBA.fromHex("#a0a8b4");
+const CODE_BORDER = DEFAULT_DISPLAY_THEME.markdown.codeBorder;
+const CODE_BORDER_HOVER = DEFAULT_DISPLAY_THEME.markdown.codeBorderHover;
+const CODE_LABEL_FG = DEFAULT_DISPLAY_THEME.markdown.codeLabelForeground;
+const CODE_COPY_FG = DEFAULT_DISPLAY_THEME.markdown.codeCopyForeground;
+const CODE_COPY_FLASH = DEFAULT_DISPLAY_THEME.markdown.codeCopyFlash;
+const CODE_FG = RGBA.fromHex(DEFAULT_DISPLAY_THEME.markdown.codeForeground);
 
-// highlight.js class → RGBA mapping (logo-gradient-derived)
-const HLJS: Record<string, RGBA> = {
-  "hljs-keyword":          RGBA.fromHex("#e0a050"),
-  "hljs-built_in":         RGBA.fromHex("#6aa8a0"),
-  "hljs-type":             RGBA.fromHex("#e8c468"),
-  "hljs-literal":          RGBA.fromHex("#6aa8a0"),
-  "hljs-number":           RGBA.fromHex("#d08770"),
-  "hljs-string":           RGBA.fromHex("#8aad6a"),
-  "hljs-subst":            RGBA.fromHex("#b0b8c4"),
-  "hljs-symbol":           RGBA.fromHex("#d08770"),
-  "hljs-class":            RGBA.fromHex("#e8c468"),
-  "hljs-function":         RGBA.fromHex("#d0a0d0"),
-  "hljs-title":            RGBA.fromHex("#d0a0d0"),
-  "hljs-title.function_":  RGBA.fromHex("#d0a0d0"),
-  "hljs-title.class_":     RGBA.fromHex("#e8c468"),
-  "hljs-params":           RGBA.fromHex("#b0b8c4"),
-  "hljs-comment":          RGBA.fromHex("#5a5565"),
-  "hljs-doctag":           RGBA.fromHex("#636a76"),
-  "hljs-meta":             RGBA.fromHex("#636a76"),
-  "hljs-meta-keyword":     RGBA.fromHex("#e0a050"),
-  "hljs-meta-string":      RGBA.fromHex("#8aad6a"),
-  "hljs-section":          RGBA.fromHex("#ffb703"),
-  "hljs-tag":              RGBA.fromHex("#e0a050"),
-  "hljs-name":             RGBA.fromHex("#e81860"),
-  "hljs-attr":             RGBA.fromHex("#e8c468"),
-  "hljs-attribute":        RGBA.fromHex("#e8c468"),
-  "hljs-variable":         RGBA.fromHex("#b0b8c4"),
-  "hljs-bullet":           RGBA.fromHex("#d08770"),
-  "hljs-code":             RGBA.fromHex("#a0a8b4"),
-  "hljs-formula":          RGBA.fromHex("#d08770"),
-  "hljs-link":             RGBA.fromHex("#6aa8a0"),
-  "hljs-quote":            RGBA.fromHex("#5a5565"),
-  "hljs-selector-tag":     RGBA.fromHex("#e81860"),
-  "hljs-selector-id":      RGBA.fromHex("#e8c468"),
-  "hljs-selector-class":   RGBA.fromHex("#d0a0d0"),
-  "hljs-selector-attr":    RGBA.fromHex("#e8c468"),
-  "hljs-selector-pseudo":  RGBA.fromHex("#d0a0d0"),
-  "hljs-template-tag":     RGBA.fromHex("#e0a050"),
-  "hljs-template-variable":RGBA.fromHex("#e81860"),
-  "hljs-addition":         RGBA.fromHex("#8aad6a"),
-  "hljs-deletion":         RGBA.fromHex("#f05030"),
-  "hljs-regexp":           RGBA.fromHex("#d08770"),
-};
+const HLJS: Record<string, RGBA> = Object.fromEntries(
+  Object.entries(DEFAULT_DISPLAY_THEME.markdown.hljs).map(([key, value]) => [key, RGBA.fromHex(value)]),
+) as Record<string, RGBA>;
 
 // ── highlight.js integration ────────────────────────────────────────────────
 

@@ -35,7 +35,7 @@ import {
 import type { PersistedModelSelection } from "./model-selection.js";
 import { applyPersistedModelSelectionToSession } from "./model-restore.js";
 import { hasAnyManagedCredential, isManagedProvider } from "./managed-provider-credentials.js";
-import type { Session as TuiSession } from "./tui/types.js";
+import type { Session as TuiSession } from "./ui/contracts.js";
 import { setAccent } from "./tui/theme.js";
 
 // ------------------------------------------------------------------

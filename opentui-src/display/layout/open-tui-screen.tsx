@@ -1,0 +1,326 @@
+/** @jsxImportSource @opentui/react */
+
+import React from "react";
+
+import type { InputRenderable, KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
+import type { PendingAskUi } from "../../../src/ask.js";
+import type { AgentQuestionItem } from "../../../src/ask.js";
+import type { UsageSnapshot } from "../../../src/provider-usage.js";
+import type { CommandPickerState } from "../../../src/ui/command-picker.js";
+import type { CheckboxPickerState } from "../../../src/ui/checkbox-picker.js";
+import type { PresentationEntry } from "../../presentation/types.js";
+import type { ComposerTokenVisuals } from "../../composer-tokens.js";
+import { PresentationPanel } from "../../components/entry/presentation-panel.js";
+import { DetailThinkingTab } from "../../components/entry/detail-thinking-tab.js";
+import { DetailToolTab } from "../../components/entry/detail-tool-tab.js";
+import { LeftSidebar } from "../../sidebar/sidebar.js";
+import { InputArea } from "../../input/input-area.js";
+import type { TabState } from "../../sidebar/sidebar-tabs.js";
+import type { DisplayTheme } from "../theme/index.js";
+import type {
+  ActivityPhase,
+  CommandOverlayState,
+  OAuthOverlayState,
+  PromptSecretState,
+  PromptSelectState,
+  QuestionAnswerState,
+} from "../types.js";
+import { AskPanelView } from "../panels/ask-panel.js";
+import { ContextUsageCard, CodexUsageCard } from "../panels/usage-cards.js";
+import {
+  CheckboxPickerView,
+  CommandOverlayView,
+  CommandPickerView,
+  OAuthOverlayView,
+  PromptSecretView,
+  PromptSelectView,
+} from "../overlays/views.js";
+import { computePickerMaxVisible, getSidebarWidth } from "./metrics.js";
+import { shortenPath, shouldShowSidebar } from "../utils/format.js";
+
+export interface OpenTuiScreenProps {
+  theme: DisplayTheme;
+  terminal: { width: number; height: number };
+  tabs: TabState[];
+  activeTabId: string;
+  onSelectTab: (id: string) => void;
+  onCloseTab: (id: string) => void;
+  sidebarExpanded: boolean;
+  onToggleSidebar: () => void;
+  contextTokens: number;
+  contextLimit?: number;
+  cacheReadTokens?: number;
+  codexUsage: UsageSnapshot | null;
+  presentationEntries: readonly PresentationEntry[];
+  processing: boolean;
+  markdownMode: "rendered" | "raw";
+  scrollRef: React.RefObject<ScrollBoxRenderable | null>;
+  selectedChildId: string | null;
+  onEntryClick: (entry: PresentationEntry) => void;
+  pendingAsk: PendingAskUi | null;
+  askError: string | null;
+  askSelectionIndex: number;
+  currentQuestionIndex: number;
+  questionAnswers: Map<number, QuestionAnswerState>;
+  customInputMode: boolean;
+  noteInputMode: boolean;
+  reviewMode: boolean;
+  askInputValue: string;
+  optionNotes: Map<string, string>;
+  askInputRef: React.RefObject<InputRenderable | null>;
+  onAskInput: (value: string) => void;
+  onAskSubmit: (value: string) => void;
+  getAskQuestions: () => AgentQuestionItem[];
+  commandOverlay: CommandOverlayState;
+  commandPicker: CommandPickerState | null;
+  checkboxPicker: CheckboxPickerState | null;
+  promptSelect: PromptSelectState | null;
+  promptSecret: PromptSecretState | null;
+  promptSecretInputRef: React.RefObject<InputRenderable | null>;
+  oauthOverlay: OAuthOverlayState | null;
+  onOverlayItemClick: (index: number) => void;
+  onCommandPickerItemClick: (index: number) => void;
+  onCheckboxPickerItemClick: (index: number) => void;
+  onPromptSelectItemClick: (index: number) => void;
+  onPromptSecretSubmit: (value: string) => void;
+  inputRef: React.RefObject<TextareaRenderable | null>;
+  phase: ActivityPhase;
+  modelName: string;
+  modelColor: string;
+  turnElapsed: number;
+  hint: string | null;
+  inputVisibleLines: number;
+  composerTokenVisuals: ComposerTokenVisuals;
+  keyBindings: readonly KeyBinding[];
+  onSubmit: () => void;
+  onModelClick: () => void;
+  onBackgroundMouseDown: () => void;
+}
+
+export function OpenTuiScreen({
+  theme,
+  terminal,
+  tabs,
+  activeTabId,
+  onSelectTab,
+  onCloseTab,
+  sidebarExpanded,
+  onToggleSidebar,
+  contextTokens,
+  contextLimit,
+  cacheReadTokens,
+  codexUsage,
+  presentationEntries,
+  processing,
+  markdownMode,
+  scrollRef,
+  selectedChildId,
+  onEntryClick,
+  pendingAsk,
+  askError,
+  askSelectionIndex,
+  currentQuestionIndex,
+  questionAnswers,
+  customInputMode,
+  noteInputMode,
+  reviewMode,
+  askInputValue,
+  optionNotes,
+  askInputRef,
+  onAskInput,
+  onAskSubmit,
+  getAskQuestions,
+  commandOverlay,
+  commandPicker,
+  checkboxPicker,
+  promptSelect,
+  promptSecret,
+  promptSecretInputRef,
+  oauthOverlay,
+  onOverlayItemClick,
+  onCommandPickerItemClick,
+  onCheckboxPickerItemClick,
+  onPromptSelectItemClick,
+  onPromptSecretSubmit,
+  inputRef,
+  phase,
+  modelName,
+  modelColor,
+  turnElapsed,
+  hint,
+  inputVisibleLines,
+  composerTokenVisuals,
+  keyBindings,
+  onSubmit,
+  onModelClick,
+  onBackgroundMouseDown,
+}: OpenTuiScreenProps): React.ReactElement {
+  const sidebarVisible = shouldShowSidebar(terminal.width, theme.layout);
+  const sidebarWidth = sidebarVisible ? getSidebarWidth(terminal.width, theme.layout) : 0;
+  const conversationColumnWidth = terminal.width - (theme.spacing.screenPaddingX * 2) - (sidebarVisible ? sidebarWidth + 1 : 0);
+  const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
+  const pickerContentWidth = terminal.width - 10 - (sidebarVisible ? sidebarWidth : 0);
+  const pickerMaxVisible = computePickerMaxVisible(terminal.height, theme.layout);
+  const activeTab = tabs.find((tab) => tab.id === activeTabId);
+  const isDetailTab = activeTab?.kind === "detail-thinking" || activeTab?.kind === "detail-tool";
+  const detailEntry = isDetailTab
+    ? presentationEntries.find((entry) => activeTabId === `detail:${entry.id}`)
+    : null;
+  const showLogoInScroll = terminal.width >= theme.layout.minTerminalWidthForLogoHeader
+    && terminal.height >= theme.layout.minTerminalHeightForLogoHeader;
+
+  return (
+    <box
+      flexDirection="column"
+      width="100%"
+      height="100%"
+      backgroundColor={theme.colors.background}
+      paddingTop={theme.spacing.screenPaddingY}
+      paddingBottom={theme.spacing.screenPaddingY}
+      paddingLeft={theme.spacing.screenPaddingX}
+      paddingRight={theme.spacing.screenPaddingX}
+      gap={theme.spacing.screenGap}
+      onMouseDown={onBackgroundMouseDown}
+    >
+      <box flexDirection="row" flexGrow={1} gap={0}>
+        {sidebarVisible ? (
+          <LeftSidebar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={onSelectTab}
+            onCloseTab={onCloseTab}
+            expanded={sidebarExpanded}
+            onToggleExpanded={onToggleSidebar}
+            width={sidebarWidth}
+            collapsedWidth={theme.layout.sidebarCollapsedWidth}
+            colors={theme.colors}
+            branding={theme.branding}
+            contextSection={(
+              <ContextUsageCard
+                contextTokens={contextTokens}
+                contextLimit={contextLimit}
+                cacheReadTokens={cacheReadTokens}
+                theme={theme}
+              />
+            )}
+            codexSection={<CodexUsageCard snapshot={codexUsage} theme={theme} />}
+          />
+        ) : null}
+
+        <box flexDirection="column" flexGrow={1} gap={theme.spacing.sectionGap}>
+          {detailEntry && activeTab?.kind === "detail-thinking" ? (
+            <DetailThinkingTab entry={detailEntry} colors={theme.colors} scrollRef={scrollRef} />
+          ) : detailEntry && activeTab?.kind === "detail-tool" ? (
+            <DetailToolTab
+              entry={detailEntry}
+              colors={theme.colors}
+              contentWidth={conversationContentWidth}
+              scrollRef={scrollRef}
+            />
+          ) : (
+            <PresentationPanel
+              items={presentationEntries}
+              processing={processing}
+              contentWidth={conversationContentWidth}
+              markdownMode={markdownMode}
+              colors={theme.colors}
+              markdownStyle={theme.markdownStyle}
+              scrollRef={scrollRef}
+              selectedChildId={selectedChildId}
+              showLogoInScroll={showLogoInScroll}
+              branding={theme.branding}
+              onEntryClick={onEntryClick}
+            />
+          )}
+
+          {pendingAsk ? (
+            <AskPanelView
+              ask={pendingAsk}
+              error={askError}
+              selectedIndex={askSelectionIndex}
+              currentQuestionIndex={currentQuestionIndex}
+              totalQuestions={pendingAsk.kind === "agent_question" ? getAskQuestions().length : 1}
+              questionAnswers={questionAnswers}
+              customInputMode={customInputMode}
+              noteInputMode={noteInputMode}
+              reviewMode={reviewMode}
+              inlineValue={askInputValue}
+              optionNotes={optionNotes}
+              inputRef={askInputRef}
+              onInput={onAskInput}
+              onSubmit={onAskSubmit}
+              theme={theme}
+            />
+          ) : null}
+          <CommandOverlayView
+            overlay={commandOverlay}
+            theme={theme}
+            contentWidth={pickerContentWidth}
+            maxVisible={pickerMaxVisible}
+            onItemClick={onOverlayItemClick}
+          />
+          <CommandPickerView
+            picker={commandPicker}
+            theme={theme}
+            contentWidth={pickerContentWidth}
+            maxVisible={pickerMaxVisible}
+            onItemClick={onCommandPickerItemClick}
+          />
+          <CheckboxPickerView
+            picker={checkboxPicker}
+            theme={theme}
+            contentWidth={pickerContentWidth}
+            onItemClick={onCheckboxPickerItemClick}
+          />
+          <PromptSelectView
+            prompt={promptSelect}
+            theme={theme}
+            contentWidth={pickerContentWidth}
+            maxVisible={pickerMaxVisible}
+            onItemClick={onPromptSelectItemClick}
+          />
+          <PromptSecretView
+            prompt={promptSecret}
+            inputRef={promptSecretInputRef}
+            focused={Boolean(promptSecret)}
+            onSubmit={onPromptSecretSubmit}
+            theme={theme}
+          />
+          <OAuthOverlayView
+            state={oauthOverlay}
+            theme={theme}
+            contentWidth={pickerContentWidth}
+          />
+        </box>
+      </box>
+
+      <InputArea
+        inputRef={inputRef}
+        processing={processing}
+        pendingAsk={Boolean(pendingAsk)}
+        selectedChildId={selectedChildId}
+        phase={phase}
+        modelName={modelName}
+        modelColor={modelColor}
+        elapsed={turnElapsed}
+        cwd={shortenPath(process.cwd())}
+        hint={hint}
+        contextTokens={contextTokens}
+        contextLimit={contextLimit}
+        showContext={!sidebarVisible}
+        terminalWidth={terminal.width}
+        colors={theme.colors}
+        inputVisibleLines={inputVisibleLines}
+        maxInputLines={theme.layout.inputMaxVisibleLines}
+        composerTokenVisuals={composerTokenVisuals}
+        keyBindings={keyBindings}
+        onSubmit={onSubmit}
+        onModelClick={onModelClick}
+        commandPicker={Boolean(commandPicker)}
+        checkboxPicker={Boolean(checkboxPicker)}
+        promptSelect={Boolean(promptSelect)}
+        promptSecret={Boolean(promptSecret)}
+      />
+    </box>
+  );
+}

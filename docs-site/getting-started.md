@@ -1,6 +1,6 @@
 # Getting Started
 
-LongerAgent is a TUI demo exploring how a coding agent can proactively manage its own context and workflow. It's a working prototype — usable for real tasks, but built to demonstrate design ideas rather than serve as a production tool.
+LongerAgent is an OpenTUI-based terminal UI demo exploring how a coding agent can proactively manage its own context and workflow. It's a working prototype — usable for real tasks, but built to demonstrate design ideas rather than serve as a production tool.
 
 **Platform:** macOS.
 

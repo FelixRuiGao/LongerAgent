@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChildSessionSnapshot } from "../../src/session-tree-types.js";
-import type { Session as TuiSession } from "../../src/tui/types.js";
+import type { Session as TuiSession } from "../../src/ui/contracts.js";
 
 import {
   getActiveTranscriptSource,

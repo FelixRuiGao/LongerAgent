@@ -1,27 +1,23 @@
 /** @jsxImportSource @opentui/react */
 
-import React, { useState, useMemo } from "react";
+import React, { useMemo } from "react";
 
 import type { InlineResultData } from "../../presentation/types.js";
 import type { ConversationPalette } from "../conversation-types.js";
 import { buildToolResultArtifacts, type ToolResultLineArtifact } from "../tool-result-artifacts.js";
+import { SelectableRow } from "../../display/primitives/selectable-row.js";
 
 /** Clickable fold indicator with hover highlight. */
 function FoldIndicator(
   { text, colors, onClick }: { text: string; colors: ConversationPalette; onClick?: () => void },
 ): React.ReactElement {
-  const [hovered, setHovered] = useState(false);
   return (
-    <box
-      flexDirection="row"
-      width="100%"
-      backgroundColor={hovered && onClick ? colors.border : undefined}
-      onMouseOver={onClick ? () => setHovered(true) : undefined}
-      onMouseOut={onClick ? () => setHovered(false) : undefined}
-      onMouseDown={onClick ? (e: any) => { e.stopPropagation(); onClick(); } : undefined}
+    <SelectableRow
+      hoverBackgroundColor={colors.border}
+      onPress={onClick}
     >
       <text fg={colors.dim} content={text} />
-    </box>
+    </SelectableRow>
   );
 }
 

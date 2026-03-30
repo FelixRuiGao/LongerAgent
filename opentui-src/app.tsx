@@ -7,14 +7,14 @@ import type {
   CommandRegistry,
   CommandContext,
   Session as TuiSession,
-} from "../src/tui/types.js";
+} from "../src/ui/contracts.js";
 import type { SessionStore } from "../src/persistence.js";
 import type { ChildSessionSnapshot } from "../src/session-tree-types.js";
 import { saveLog } from "../src/persistence.js";
 import { isCommandExitSignal } from "../src/commands.js";
 import { ProgressReporter, type ProgressEvent } from "../src/progress.js";
 import { scanCandidates } from "../src/file-attach.js";
-import { classifyPastedText, TurnPasteCounter } from "../src/tui/input/paste.js";
+import { classifyPastedText, TurnPasteCounter } from "../src/ui/input/paste.js";
 import type {
   PendingAskUi,
   AgentQuestionAnswer,
@@ -22,7 +22,6 @@ import type {
   AgentQuestionItem,
 } from "../src/ask.js";
 import type {
-  PromptChoice,
   PromptSecretRequest,
   PromptSelectRequest,
 } from "../src/provider-credential-flow.js";
@@ -30,27 +29,21 @@ import {
   acceptCommandPickerSelection,
   createCommandPicker,
   exitCommandPickerLevel,
-  getCommandPickerLevel,
-  getCommandPickerPath,
-  getCommandPickerVisibleRange,
   isCommandPickerActive,
   moveCommandPickerSelection,
   setCommandPickerSelection,
   type CommandPickerState,
-} from "../src/tui/command-picker.js";
+} from "../src/ui/command-picker.js";
 import {
   createCheckboxPicker,
-  getCheckboxPickerVisibleRange,
   isCheckboxPickerActive,
   moveCheckboxSelection,
   setCheckboxPickerSelection,
   submitCheckboxPicker,
   toggleCheckboxItem,
   type CheckboxPickerState,
-} from "../src/tui/checkbox-picker.js";
+} from "../src/ui/checkbox-picker.js";
 import {
-  RGBA,
-  SyntaxStyle,
   type InputRenderable,
   type KeyBinding,
   type ScrollBoxRenderable,
@@ -64,21 +57,15 @@ import {
   isLongerAgentOpenTuiDiagEnabled,
   writeLongerAgentOpenTuiDiag,
 } from "./forked/core/lib/diagnostic.js";
-import { PresentationPanel } from "./components/entry/presentation-panel.js";
-import { DetailThinkingTab } from "./components/entry/detail-thinking-tab.js";
-import { DetailToolTab } from "./components/entry/detail-tool-tab.js";
 import { usePresentationEntries } from "./presentation/use-presentation.js";
 import { useTurnTimer } from "./presentation/use-turn-timer.js";
-import { LeftSidebar } from "./sidebar/sidebar.js";
 import type { TabState } from "./sidebar/sidebar-tabs.js";
-import { InputArea } from "./input/input-area.js";
-import { getCurrentModelDescriptor, type ModelDescriptor } from "../src/model-presentation.js";
-import { UsagePoller, formatResetRemaining, type UsageSnapshot } from "../src/provider-usage.js";
+import { getCurrentModelDescriptor } from "../src/model-presentation.js";
+import { UsagePoller, type UsageSnapshot } from "../src/provider-usage.js";
 import {
   readOAuthAccessToken,
   hasOAuthTokens,
   isTokenExpiring,
-  getTokenExpiry,
   saveOAuthTokens,
   browserLoginHeadless,
   deviceCodeLoginHeadless,
@@ -88,7 +75,6 @@ import {
 import {
   buildFileReferenceLabel,
   createComposerTokenVisuals,
-  displayWidthWithNewlines,
   ensureComposerTokenType,
   findFileReferenceQuery,
   getTextDiffRange,
@@ -97,16 +83,19 @@ import {
   serializeComposerText,
   type ComposerTokenVisuals,
 } from "./composer-tokens.js";
-
-type ActivityPhase =
-  | "idle"
-  | "working"
-  | "thinking"
-  | "generating"
-  | "waiting"
-  | "closing"
-  | "cancelling"
-  | "error";
+import { DEFAULT_DISPLAY_THEME, type DisplayTheme } from "./display/theme/index.js";
+import {
+  type ActivityPhase,
+  type CommandOverlayState,
+  type OAuthOverlayState,
+  type PromptSecretState,
+  type PromptSelectState,
+  type QuestionAnswerState,
+  EMPTY_COMMAND_OVERLAY,
+} from "./display/types.js";
+import { clamp, computePickerMaxVisible } from "./display/layout/metrics.js";
+import { OpenTuiScreen } from "./display/layout/open-tui-screen.js";
+import { resolveModelNameColor } from "./display/utils/model.js";
 
 export interface OpenTuiAppProps {
   session: TuiSession;
@@ -114,63 +103,10 @@ export interface OpenTuiAppProps {
   store: SessionStore | null;
   verbose?: boolean;
   onExit: (farewell?: string) => Promise<void> | void;
+  theme?: DisplayTheme;
 }
 
-// -- Fixed dark-only palette --------------------------------------------------
-// Derived from the logo gradient: gold → orange → red → magenta → purple.
-// Background is a near-black warm tone reminiscent of CRT phosphor afterglow.
-
-const BG = "transparent";
-
-const COLORS = {
-  background: BG,
-  panel: BG,
-  userBg: "#322e3e",       // lifted background for user messages
-  // Structural
-  border: "#2a2630",
-  separator: "#2a2630",
-  // Text hierarchy — cool-shifted to balance the warm background
-  text: "#d0d6e0",
-  dim: "#636a76",
-  muted: "#454a54",
-  // Logo-derived accents (sampled from the gradient)
-  accent: "#ffb703",       // logo line 1 — gold
-  orange: "#fb8500",       // logo line 2
-  red: "#f85656",          // logo line 3
-  magenta: "#e81860",      // logo line 4
-  purple: "#a010a0",       // logo line 6
-  // Semantic colors not in the gradient
-  yellow: "#e8c468",
-  green: "#8cc252",
-  cyan: "#86ded4",
-  thinking: "#5c626e",
-  toolTime: "#8a8078",     // tool call elapsed time
-  // Phase indicators — each maps to a logo gradient stop
-  readyStatus: "#fb8500",
-  thinkingStatus: "#6e4890",
-  workingStatus: "#e81860",
-  generatingStatus: "#ffb703",
-  waitingStatus: "#e8c468",
-  closingStatus: "#4d4843",
-  errorStatus: "#f05030",
-} as const;
-
-type OpenTuiPalette = typeof COLORS;
-
-// (terminal palette refresh removed — dark-only, fixed bg)
 const CTRL_C_EXIT_WINDOW_MS = 2000;
-const FIXED_CLOSE_DELAY_MS = 1500;
-const INPUT_MAX_VISIBLE_LINES = 10;
-function computePickerMaxVisible(terminalHeight: number): number {
-  return Math.max(5, Math.floor(terminalHeight * 0.4 - 4));
-}
-const SIDEBAR_MIN_WIDTH = 30;
-const SIDEBAR_MAX_WIDTH = 50;
-const MIN_TERMINAL_WIDTH_FOR_SIDEBAR = 120;
-const MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER = 72;
-const MIN_TERMINAL_HEIGHT_FOR_LOGO_HEADER = 28;
-const APP_VERSION = "v0.1.3";
-// (removed CONTEXT_PRIMARY_NEUTRAL / CONTEXT_SECONDARY_NEUTRAL — unused)
 const CUSTOM_EMPTY_HINT =
   'Custom answer is empty. Please enter an answer first, or choose "Discuss further" instead.';
 const GOODBYE_MESSAGES = [
@@ -187,7 +123,6 @@ const GOODBYE_MESSAGES = [
   "Later, gator!",
 ] as const;
 
-const LOGO_GRADIENT = ["#ffb703", "#fb8500", "#f05030", "#e81860", "#d01080", "#a010a0", "#5a0c92"];
 const ASSISTANT_RENDERER_MODE = getLongerAgentAssistantRenderer();
 
 const DISABLED_TEXTAREA_ACTION = "__disabled__" as unknown as KeyBinding["action"];
@@ -204,207 +139,6 @@ const COMPOSER_KEY_BINDINGS: KeyBinding[] = [
   { name: "backspace", super: true, action: DISABLED_TEXTAREA_ACTION },
   { name: "u", ctrl: true, action: DISABLED_TEXTAREA_ACTION },
 ];
-
-interface CommandOverlayState {
-  mode: "command" | "file";
-  visible: boolean;
-  items: string[];
-  values: string[];
-  selected: number;
-}
-
-interface OpenTuiTheme {
-  colors: OpenTuiPalette;
-  markdownStyle: SyntaxStyle;
-}
-
-const PROVIDER_MODEL_COLORS: Record<string, string> = {
-  openai: "#10a37f",
-  "openai-codex": "#10a37f",
-  kimi: "#38bdf8",
-  "kimi-cn": "#38bdf8",
-  "kimi-code": "#38bdf8",
-  minimax: "#f472b6",
-  "minimax-cn": "#f472b6",
-  glm: "#818cf8",
-  "glm-intl": "#818cf8",
-  "glm-code": "#818cf8",
-  "glm-intl-code": "#818cf8",
-  openrouter: "#c084fc",
-  lmstudio: "#9ca3af",
-  omlx: "#9ca3af",
-  ollama: "#9ca3af",
-  anthropic: "#e6c3a5",
-};
-
-function resolveModelNameColor(
-  descriptor: ModelDescriptor | null,
-  colors: OpenTuiPalette,
-): string {
-  if (!descriptor) return colors.accent;
-  return PROVIDER_MODEL_COLORS[descriptor.providerId]
-    ?? PROVIDER_MODEL_COLORS[descriptor.brandKey]
-    ?? colors.accent;
-}
-
-function buildMarkdownStyle(colors: OpenTuiPalette): SyntaxStyle {
-  // Code syntax colors — logo-gradient-derived
-  const kw    = RGBA.fromHex("#e0a050");  // keywords: warm amber
-  const str   = RGBA.fromHex("#8aad6a");  // strings: forest green
-  const fn    = RGBA.fromHex("#d0a0d0");  // functions: soft lavender
-  const typ   = RGBA.fromHex("#e8c468");  // types: golden
-  const num   = RGBA.fromHex("#d08770");  // numbers: burnt orange
-  const cmt   = RGBA.fromHex("#5a5565");  // comments: muted purple-gray
-  const op    = RGBA.fromHex("#9098a8");  // operators/punctuation: cool gray
-  const lit   = RGBA.fromHex("#6aa8a0");  // constants/builtins: teal
-
-  return SyntaxStyle.fromStyles({
-    default: { fg: RGBA.fromHex(colors.text) },
-    conceal: { fg: RGBA.fromHex(colors.dim) },
-    // Markdown
-    "markup.heading": { fg: RGBA.fromHex("#f09418"), bold: true },
-    "markup.heading.1": { fg: RGBA.fromHex("#f09418"), bold: true },
-    "markup.heading.2": { fg: RGBA.fromHex("#eca903"), bold: true },
-    "markup.heading.3": { fg: RGBA.fromHex(colors.text), bold: true },
-    "markup.heading.4": { fg: RGBA.fromHex(colors.text), bold: true },
-    "markup.heading.5": { fg: RGBA.fromHex(colors.text), bold: true },
-    "markup.heading.6": { fg: RGBA.fromHex(colors.text), bold: true },
-    "markup.heading.table": { fg: RGBA.fromHex(colors.cyan), bold: true },
-    "markup.strong": { fg: RGBA.fromHex(colors.text), bold: true },
-    "markup.italic": { fg: RGBA.fromHex(colors.text), italic: true },
-    "markup.raw": { fg: RGBA.fromHex("#b4a0ec") },
-    "markup.raw.block": { fg: RGBA.fromHex("#b4a0ec") },
-    "markup.link": { fg: RGBA.fromHex(colors.cyan) },
-    "markup.link.label": { fg: RGBA.fromHex(colors.cyan), underline: true },
-    "markup.link.url": { fg: RGBA.fromHex(colors.cyan), underline: true },
-    "markup.quote": { fg: RGBA.fromHex(colors.dim), italic: true },
-    "markup.list": { fg: RGBA.fromHex(colors.text) },
-    // Code syntax — tree-sitter capture names
-    "keyword": { fg: kw, bold: true },
-    "keyword.return": { fg: kw, bold: true },
-    "keyword.function": { fg: kw, bold: true },
-    "keyword.import": { fg: kw, bold: true },
-    "keyword.operator": { fg: op },
-    "keyword.conditional": { fg: kw, bold: true },
-    "keyword.repeat": { fg: kw, bold: true },
-    "keyword.exception": { fg: kw, bold: true },
-    "string": { fg: str },
-    "string.special": { fg: str },
-    "string.escape": { fg: num },
-    "comment": { fg: cmt, italic: true },
-    "comment.line": { fg: cmt, italic: true },
-    "comment.block": { fg: cmt, italic: true },
-    "function": { fg: fn },
-    "function.call": { fg: fn },
-    "function.method": { fg: fn },
-    "function.builtin": { fg: fn },
-    "method": { fg: fn },
-    "variable": { fg: RGBA.fromHex("#b0b8c4") },
-    "variable.builtin": { fg: lit },
-    "variable.parameter": { fg: RGBA.fromHex("#b0b8c4") },
-    "type": { fg: typ },
-    "type.builtin": { fg: typ },
-    "constructor": { fg: typ },
-    "number": { fg: num },
-    "number.float": { fg: num },
-    "constant": { fg: lit },
-    "constant.builtin": { fg: lit },
-    "boolean": { fg: lit },
-    "operator": { fg: op },
-    "punctuation": { fg: op },
-    "punctuation.bracket": { fg: op },
-    "punctuation.delimiter": { fg: op },
-    "punctuation.special": { fg: op },
-    "property": { fg: RGBA.fromHex("#b0b8c4") },
-    "attribute": { fg: typ },
-    "tag": { fg: kw },
-    "label": { fg: RGBA.fromHex(colors.accent) },
-  });
-}
-
-const THEME: OpenTuiTheme = {
-  colors: COLORS,
-  markdownStyle: buildMarkdownStyle(COLORS),
-};
-
-interface PromptSelectState {
-  message: string;
-  options: PromptChoice[];
-  selected: number;
-}
-
-interface PromptSecretState {
-  message: string;
-  allowEmpty: boolean;
-}
-
-type OAuthOverlayPhase =
-  | { step: "choose" }
-  | { step: "browser_waiting"; url: string }
-  | { step: "device_code"; url: string; userCode: string }
-  | { step: "polling" }
-  | { step: "exchanging" }
-  | { step: "done" }
-  | { step: "error"; message: string };
-
-interface OAuthOverlayState {
-  phase: OAuthOverlayPhase;
-  selected: number; // 0 = browser, 1 = device code (only for "choose" step)
-  resolve: (tokens: import("../src/auth/openai-oauth.js").OAuthTokens | null) => void;
-}
-
-interface PlanCheckpointUi {
-  text: string;
-  checked: boolean;
-}
-
-interface QuestionAnswerState {
-  optionIndex: number;
-  customText?: string;
-}
-
-const EMPTY_COMMAND_OVERLAY: CommandOverlayState = {
-  mode: "command",
-  visible: false,
-  items: [],
-  values: [],
-  selected: 0,
-};
-
-function clamp(value: number, min: number, max: number): number {
-  if (value < min) return min;
-  if (value > max) return max;
-  return value;
-}
-
-function getSidebarWidth(terminalWidth: number): number {
-  return clamp(
-    Math.floor(terminalWidth * 0.26),
-    SIDEBAR_MIN_WIDTH,
-    SIDEBAR_MAX_WIDTH,
-  );
-}
-
-function getVisibleWindow(count: number, selected: number, maxVisible: number): { start: number; end: number } {
-  if (count <= 0) return { start: 0, end: 0 };
-  if (count <= maxVisible) return { start: 0, end: count };
-  const safeSelected = clamp(selected, 0, count - 1);
-  const safeMaxVisible = Math.max(1, maxVisible);
-  let start = clamp(safeSelected - Math.floor(safeMaxVisible / 2), 0, Math.max(0, count - safeMaxVisible));
-  if (safeSelected >= start + safeMaxVisible) {
-    start = safeSelected - safeMaxVisible + 1;
-  }
-  return { start, end: Math.min(count, start + safeMaxVisible) };
-}
-
-function countWrappedDisplayLines(text: string, contentWidth: number): number {
-  const safeWidth = Math.max(1, contentWidth);
-  const lines = text.split("\n");
-  return lines.reduce((sum, line) => {
-    const width = Math.max(1, displayWidthWithNewlines(line || " "));
-    return sum + Math.max(1, Math.ceil(width / safeWidth));
-  }, 0);
-}
 
 function isDeleteToVisualLineStartShortcut(
   event: {
@@ -430,97 +164,6 @@ function isFileOverlayEligible(value: string, cursorOffset: number): boolean {
   return findFileReferenceQuery(value, cursorOffset) !== null;
 }
 
-function formatTokens(value: number | undefined): string {
-  return (value ?? 0).toLocaleString("en-US");
-}
-
-function shortenPath(fullPath: string): string {
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-  return home && fullPath.startsWith(home) ? "~" + fullPath.slice(home.length) : fullPath;
-}
-
-function formatContext(contextTokens: number, contextLimit?: number, cacheReadTokens?: number): string {
-  if (contextLimit && contextLimit > 0) {
-    const pct = ((contextTokens / contextLimit) * 100).toFixed(1);
-    const cache = cacheReadTokens ? ` (${formatTokens(cacheReadTokens)} cached)` : "";
-    return `${pct}%  ${formatTokens(contextTokens)} / ${formatTokens(contextLimit)}${cache}`;
-  }
-  return formatTokens(contextTokens);
-}
-
-function formatContextParts(
-  contextTokens: number,
-  contextLimit?: number,
-  cacheReadTokens?: number,
-): {
-  primary: string;
-  secondary: string;
-} {
-  if (contextLimit && contextLimit > 0) {
-    const primary = `${((contextTokens / contextLimit) * 100).toFixed(1)}%  ${formatTokens(contextTokens)}`;
-    const cache = cacheReadTokens ? ` (${formatTokens(cacheReadTokens)} cached)` : "";
-    return {
-      primary,
-      secondary: ` / ${formatTokens(contextLimit)}${cache}`,
-    };
-  }
-
-  return {
-    primary: formatTokens(contextTokens),
-    secondary: "",
-  };
-}
-
-function formatCompactTokens(value: number | undefined): string {
-  const safeValue = value ?? 0;
-  if (safeValue >= 1_000_000) {
-    const compact = safeValue / 1_000_000;
-    return `${compact >= 100 ? compact.toFixed(0) : compact.toFixed(1)}M`;
-  }
-  if (safeValue >= 100_000) {
-    return `${(safeValue / 1_000).toFixed(0)}k`;
-  }
-  if (safeValue >= 1_000) {
-    return `${(safeValue / 1_000).toFixed(1)}k`;
-  }
-  return `${safeValue}`;
-}
-
-function formatUsagePercent(contextTokens: number, contextLimit?: number): string {
-  if (!contextLimit || contextLimit <= 0) return "0.0%";
-  return `${((contextTokens / contextLimit) * 100).toFixed(1)}%`;
-}
-
-function getUsageBlockSize(contextLimit?: number): number {
-  if (!contextLimit || contextLimit <= 0) return 5_000;
-  return contextLimit >= 400_000 ? 20_000 : 5_000;
-}
-
-function getUsageBarRows(
-  contextTokens: number,
-  contextLimit?: number,
-  blocksPerRow = 20,
-): Array<{ filled: string; empty: string }> {
-  const safeBlocksPerRow = Math.max(1, blocksPerRow);
-  const blockSize = getUsageBlockSize(contextLimit);
-  const totalBlocks = contextLimit && contextLimit > 0
-    ? Math.max(1, Math.ceil(contextLimit / blockSize))
-    : safeBlocksPerRow;
-  const filledBlocks = Math.max(0, Math.min(totalBlocks, Math.round((contextTokens ?? 0) / blockSize)));
-  const rowCount = Math.max(1, Math.ceil(totalBlocks / safeBlocksPerRow));
-
-  return Array.from({ length: rowCount }, (_, rowIndex) => {
-    const rowStart = rowIndex * safeBlocksPerRow;
-    const rowTotal = Math.min(safeBlocksPerRow, totalBlocks - rowStart);
-    const rowFilled = Math.max(0, Math.min(rowTotal, filledBlocks - rowStart));
-    const emptyCount = Math.max(0, rowTotal - rowFilled);
-    return {
-      filled: Array.from({ length: rowFilled }, () => "▆").join(" "),
-      empty: Array.from({ length: emptyCount }, () => "▆").join(" "),
-    };
-  });
-}
-
 function copyToClipboard(text: string, rendererCopy: (text: string) => boolean): boolean {
   try {
     execSync("pbcopy", { input: text, timeout: 2000 });
@@ -529,156 +172,6 @@ function copyToClipboard(text: string, rendererCopy: (text: string) => boolean):
     return rendererCopy(text);
   }
 }
-
-function PlanPanelView(
-  { checkpoints, active, colors }: { checkpoints: PlanCheckpointUi[]; active: boolean; colors: OpenTuiPalette },
-): React.ReactElement | null {
-  if (checkpoints.length === 0) return null;
-
-  const done = checkpoints.filter((checkpoint) => checkpoint.checked).length;
-  const firstUncheckedIndex = checkpoints.findIndex((checkpoint) => !checkpoint.checked);
-  const [pulse, setPulse] = useState(false);
-
-  useEffect(() => {
-    if (!active || firstUncheckedIndex < 0) {
-      setPulse(false);
-      return;
-    }
-    const timer = setInterval(() => {
-      setPulse((current) => !current);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [active, firstUncheckedIndex]);
-
-  return (
-    <box
-      border
-      borderColor={colors.cyan}
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      width="100%"
-    >
-      <text fg={colors.cyan} content={`Plan (${done}/${checkpoints.length})`} />
-      {checkpoints.map((checkpoint, index) => (
-        <box key={`plan-${index}`} flexDirection="row" width="100%">
-          <text
-            fg={checkpoint.checked ? colors.dim : index === firstUncheckedIndex ? colors.cyan : colors.text}
-            content={`  ${checkpoint.checked
-              ? "✓"
-              : index === firstUncheckedIndex && pulse
-                ? "●"
-                : "○"
-              } `}
-          />
-          <text
-            fg={checkpoint.checked ? colors.dim : colors.text}
-            content={checkpoint.text}
-            wrapMode="word"
-            flexGrow={1}
-            flexShrink={1}
-          />
-        </box>
-      ))}
-    </box>
-  );
-}
-
-
-function ContextUsageCard(
-  {
-    contextTokens,
-    contextLimit,
-    cacheReadTokens,
-    colors,
-  }: {
-    contextTokens: number;
-    contextLimit?: number;
-    cacheReadTokens?: number;
-    colors: OpenTuiPalette;
-  },
-): React.ReactElement {
-  const percentText = formatUsagePercent(contextTokens, contextLimit);
-  const barWidth = 20;
-  const limit = contextLimit && contextLimit > 0 ? contextLimit : 1;
-  const ratio = contextTokens / limit;
-  const filledBlocks = Math.max(0, Math.min(barWidth, Math.round(ratio * barWidth)));
-  const emptyBlocks = Math.max(0, barWidth - filledBlocks);
-
-  // Bar color follows the logo gradient as usage climbs
-  const barColor = ratio > 0.8 ? colors.red : ratio > 0.5 ? colors.orange : colors.accent;
-
-  return (
-    <box flexDirection="column" width="100%" gap={0}>
-      <text fg={colors.dim} bold content="CONTEXT" />
-      <box flexDirection="row">
-        {filledBlocks > 0 ? <text fg={barColor} content={"━".repeat(filledBlocks)} /> : null}
-        {emptyBlocks > 0 ? <text fg={colors.border} content={"─".repeat(emptyBlocks)} /> : null}
-        <text fg={colors.text} content={` ${percentText}`} />
-      </box>
-      <box flexDirection="row">
-        <text fg={colors.text} content={formatCompactTokens(contextTokens)} />
-        <text fg={colors.muted} content={`/${contextLimit ? formatCompactTokens(contextLimit) : "?"}`} />
-        {(cacheReadTokens ?? 0) > 0 ? (
-          <text fg={colors.muted} content={` (${formatCompactTokens(cacheReadTokens)} hit)`} />
-        ) : null}
-      </box>
-    </box>
-  );
-}
-
-function formatExpiryRemaining(expiresAt: Date): string {
-  const ms = expiresAt.getTime() - Date.now();
-  if (ms <= 0) return "expired";
-  const totalMinutes = Math.floor(ms / 60_000);
-  if (totalMinutes < 60) return `${totalMinutes}m`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours < 48) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  const remainHours = hours % 24;
-  return remainHours > 0 ? `${days}d ${remainHours}h` : `${days}d`;
-}
-
-function CodexUsageCard(
-  {
-    snapshot,
-    colors,
-  }: {
-    snapshot: UsageSnapshot | null;
-    colors: OpenTuiPalette;
-  },
-): React.ReactElement | null {
-  if (!snapshot || snapshot.windows.length === 0) return null;
-  if (snapshot.error) return null;
-
-  const now = Date.now();
-  const token = readOAuthAccessToken();
-  const expiry = token ? getTokenExpiry(token) : null;
-
-  return (
-    <box flexDirection="column" width="100%" gap={0}>
-      <text fg={colors.dim} bold content="CODEX USAGE" />
-      {snapshot.windows.map((w, i) => {
-        const pct = w.remainPercent.toFixed(0);
-        const pctStr = pct.padStart(3);
-        const reset = formatResetRemaining(w.resetAt, now);
-        const resetSuffix = reset ? `  in ${reset}` : "";
-        return (
-          <text
-            key={`codex-window-${i}`}
-            fg={colors.muted}
-            content={`${w.label.padEnd(3)} ${pctStr}% left${resetSuffix}`}
-          />
-        );
-      })}
-      {expiry ? (
-        <text fg={colors.muted} content={`Expires in ${formatExpiryRemaining(expiry)}`} />
-      ) : null}
-    </box>
-  );
-}
-
 
 function sameChildSessionList(
   a: ChildSessionSnapshot[],
@@ -709,571 +202,18 @@ function sameChildSessionList(
   return true;
 }
 
-
-function truncateToWidth(text: string, maxWidth: number): string {
-  const textWidth = Bun.stringWidth(text);
-  if (textWidth <= maxWidth) return text;
-  // Need to truncate — reserve 3 chars for "..."
-  const target = maxWidth - 3;
-  if (target <= 0) return "...".slice(0, maxWidth);
-  let w = 0;
-  let i = 0;
-  for (const ch of text) {
-    const cw = Bun.stringWidth(ch) || 1;
-    if (w + cw > target) return text.slice(0, i) + "...";
-    w += cw;
-    i += ch.length;
-  }
-  return text;
-}
-
-function CommandOverlayView(
-  {
-    overlay,
-    colors,
-    contentWidth,
-    maxVisible,
-    onItemClick,
-  }: {
-    overlay: CommandOverlayState;
-    colors: OpenTuiPalette;
-    contentWidth: number;
-    maxVisible: number;
-    onItemClick: (index: number) => void;
-  },
-): React.ReactElement | null {
-  if (!overlay.visible || overlay.items.length === 0) return null;
-  const [hovered, setHovered] = useState(-1);
-  const { start, end } = getVisibleWindow(overlay.items.length, overlay.selected, maxVisible);
-  const visibleItems = overlay.items.slice(start, end);
-  const overlayHeight = visibleItems.length + 2;
-
-  return (
-    <box
-      border
-      borderColor={colors.border}
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      width="100%"
-      height={overlayHeight}
-      flexShrink={0}
-      selectable={false}
-      onMouseOut={() => setHovered(-1)}
-    >
-      {visibleItems.map((item, index) => {
-        const actualIndex = start + index;
-        const selected = actualIndex === overlay.selected;
-        const isHovered = actualIndex === hovered;
-        const prefix = selected ? "> " : "  ";
-        return (
-          <box
-            key={`overlay-${actualIndex}`}
-            width="100%"
-            backgroundColor={isHovered ? colors.border : "transparent"}
-            onMouseOver={() => setHovered(actualIndex)}
-            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onItemClick(actualIndex); }}
-          >
-            <text
-              fg={selected ? colors.accent : colors.dim}
-              content={truncateToWidth(`${prefix}${item}`, contentWidth)}
-            />
-          </box>
-        );
-      })}
-    </box>
-  );
-}
-
-function CommandPickerView(
-  {
-    picker: pickerProp,
-    colors,
-    contentWidth,
-    maxVisible,
-    onItemClick,
-  }: {
-    picker: CommandPickerState | null;
-    colors: OpenTuiPalette;
-    contentWidth: number;
-    maxVisible: number;
-    onItemClick: (index: number) => void;
-  },
-): React.ReactElement | null {
-  if (!isCommandPickerActive(pickerProp)) return null;
-  const [hovered, setHovered] = useState(-1);
-
-  // Override maxVisible at render time so terminal resize is reflected
-  const picker = { ...pickerProp, maxVisible };
-  const level = getCommandPickerLevel(picker);
-  const path = getCommandPickerPath(picker);
-  const { start, end } = getCommandPickerVisibleRange(picker);
-  const visibleOptions = level.options.slice(start, end);
-  const pickerHeight = 1 + visibleOptions.length + 2;
-
-  return (
-    <box
-      border
-      borderColor={colors.border}
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      width="100%"
-      height={pickerHeight}
-      flexShrink={0}
-      selectable={false}
-      onMouseOut={() => setHovered(-1)}
-    >
-      {path.length > 0 ? (
-        <text fg={colors.accent} content={truncateToWidth(`${picker.commandName} › ${path.join(" › ")}`, contentWidth)} />
-      ) : (
-        <text fg={colors.accent} content={truncateToWidth(picker.commandName, contentWidth)} />
-      )}
-      {visibleOptions.map((item, index) => {
-        const actualIndex = start + index;
-        const selected = actualIndex === level.selected;
-        const isHovered = actualIndex === hovered;
-        const prefix = selected ? "> " : "  ";
-        return (
-          <box
-            key={`picker-d${picker.stack.length}-${actualIndex}`}
-            width="100%"
-            backgroundColor={isHovered ? colors.border : "transparent"}
-            onMouseOver={() => setHovered(actualIndex)}
-            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onItemClick(actualIndex); }}
-          >
-            <text fg={selected ? colors.accent : colors.dim} content={truncateToWidth(`${prefix}${item.label}`, contentWidth)} />
-          </box>
-        );
-      })}
-    </box>
-  );
-}
-
-function CheckboxPickerView(
-  {
-    picker,
-    colors,
-    contentWidth,
-    onItemClick,
-    onScroll,
-  }: {
-    picker: CheckboxPickerState | null;
-    colors: OpenTuiPalette;
-    contentWidth: number;
-    onItemClick: (index: number) => void;
-  },
-): React.ReactElement | null {
-  if (!isCheckboxPickerActive(picker)) return null;
-  const [hovered, setHovered] = useState(-1);
-
-  const { start, end } = getCheckboxPickerVisibleRange(picker);
-  const visibleItems = picker.items.slice(start, end);
-  const pickerHeight = 1 + visibleItems.length + 1 + 2;
-
-  return (
-    <box
-      border
-      borderColor={colors.border}
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      width="100%"
-      height={pickerHeight}
-      flexShrink={0}
-      selectable={false}
-      onMouseOut={() => setHovered(-1)}
-    >
-      <text fg={colors.accent} content={truncateToWidth(picker.title, contentWidth)} />
-      {visibleItems.map((item, index) => {
-        const actualIndex = start + index;
-        const selected = actualIndex === picker.selected;
-        const isHovered = actualIndex === hovered;
-        const checkbox = item.checked ? "[x]" : "[ ]";
-        const prefix = selected ? "> " : "  ";
-        return (
-          <box
-            key={`checkbox-${actualIndex}`}
-            width="100%"
-            backgroundColor={isHovered ? colors.border : "transparent"}
-            onMouseOver={() => setHovered(actualIndex)}
-            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onItemClick(actualIndex); }}
-          >
-            <text
-              fg={selected ? colors.accent : colors.dim}
-              content={truncateToWidth(`${prefix}${checkbox} ${item.label}`, contentWidth)}
-            />
-          </box>
-        );
-      })}
-      <text fg={colors.dim} content={truncateToWidth("Space toggle · Enter confirm · Esc cancel", contentWidth)} />
-    </box>
-  );
-}
-
-function PromptSelectView(
-  {
-    prompt,
-    colors,
-    contentWidth,
-    maxVisible,
-    onItemClick,
-    onScroll,
-  }: {
-    prompt: PromptSelectState | null;
-    colors: OpenTuiPalette;
-    contentWidth: number;
-    maxVisible: number;
-    onItemClick: (index: number) => void;
-  },
-): React.ReactElement | null {
-  if (!prompt || prompt.options.length === 0) return null;
-  const [hovered, setHovered] = useState(-1);
-
-  const { start, end } = getVisibleWindow(prompt.options.length, prompt.selected, maxVisible);
-  const visibleOptions = prompt.options.slice(start, end);
-  const selectedOption = prompt.options[clamp(prompt.selected, 0, prompt.options.length - 1)];
-  const description = selectedOption?.description?.trim();
-  const promptHeight = 1 + visibleOptions.length + (description ? 1 : 0) + 2;
-
-  return (
-    <box
-      border
-      borderColor={colors.border}
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      width="100%"
-      height={promptHeight}
-      flexShrink={0}
-      selectable={false}
-      onMouseOut={() => setHovered(-1)}
-    >
-      <text fg={colors.yellow} content={truncateToWidth(prompt.message, contentWidth)} />
-      {visibleOptions.map((option, index) => {
-        const actualIndex = start + index;
-        const selected = actualIndex === prompt.selected;
-        const isHovered = actualIndex === hovered;
-        const prefix = selected ? "> " : "  ";
-        return (
-          <box
-            key={`prompt-select-${actualIndex}`}
-            width="100%"
-            backgroundColor={isHovered ? colors.border : "transparent"}
-            onMouseOver={() => setHovered(actualIndex)}
-            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onItemClick(actualIndex); }}
-          >
-            <text fg={selected ? colors.accent : colors.dim} content={truncateToWidth(`${prefix}${option.label}`, contentWidth)} />
-          </box>
-        );
-      })}
-      {description ? <text fg={colors.dim} content={truncateToWidth(description, contentWidth)} /> : null}
-    </box>
-  );
-}
-
-function PromptSecretView(
-  {
-    prompt,
-    inputRef,
-    focused,
-    onSubmit,
-    colors,
-  }: {
-    prompt: PromptSecretState | null;
-    inputRef: React.RefObject<InputRenderable | null>;
-    focused: boolean;
-    onSubmit: (value: string) => void;
-    colors: OpenTuiPalette;
-  },
-): React.ReactElement | null {
-  if (!prompt) return null;
-
-  const promptHeight = Math.max(5, prompt.message.split("\n").length + 4);
-  return (
-    <box
-      border
-      borderColor={colors.border}
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      height={promptHeight}
-    >
-      <text fg={colors.yellow} content={prompt.message} />
-      <input
-        ref={(node) => {
-          inputRef.current = node;
-        }}
-        placeholder={prompt.allowEmpty ? "Press Enter to confirm, Esc to cancel" : "Enter a value"}
-        focused={focused}
-        textColor={colors.text}
-        focusedTextColor={colors.text}
-        placeholderColor={colors.dim}
-        onSubmit={onSubmit}
-      />
-      <text fg={colors.dim} content="Enter confirm · Esc cancel" />
-    </box>
-  );
-}
-
-function OAuthOverlayView(
-  {
-    state,
-    colors,
-    contentWidth,
-  }: {
-    state: OAuthOverlayState | null;
-    colors: OpenTuiPalette;
-    contentWidth: number;
-  },
-): React.ReactElement | null {
-  if (!state) return null;
-
-  const { phase } = state;
-
-  if (phase.step === "choose") {
-    const options = [
-      "Browser login (recommended)",
-      "Device code (SSH / headless)",
-    ];
-    return (
-      <box
-        border
-        borderColor={colors.border}
-        paddingLeft={1}
-        paddingRight={1}
-        flexDirection="column"
-        width="100%"
-        height={options.length + 4}
-        flexShrink={0}
-      >
-        <text fg={colors.yellow} content="OpenAI ChatGPT Login" />
-        {options.map((label, index) => {
-          const selected = index === state.selected;
-          const prefix = selected ? "> " : "  ";
-          return (
-            <text
-              key={`oauth-opt-${index}`}
-              fg={selected ? colors.accent : colors.dim}
-              content={truncateToWidth(`${prefix}${label}`, contentWidth)}
-            />
-          );
-        })}
-        <text fg={colors.dim} content="Enter select · Esc cancel" />
-      </box>
-    );
-  }
-
-  // Status display for in-progress flows
-  const lines: string[] = [];
-  if (phase.step === "browser_waiting") {
-    lines.push("Waiting for browser authorization...");
-    lines.push("");
-    lines.push(`URL: ${phase.url.length > contentWidth - 5 ? phase.url.slice(0, contentWidth - 8) + "..." : phase.url}`);
-  } else if (phase.step === "device_code") {
-    lines.push(`Open:  ${phase.url}`);
-    lines.push(`Code:  ${phase.userCode}`);
-    lines.push("");
-    lines.push("Waiting for sign-in...");
-  } else if (phase.step === "polling") {
-    lines.push("Waiting for sign-in...");
-  } else if (phase.step === "exchanging") {
-    lines.push("Exchanging authorization code...");
-  } else if (phase.step === "done") {
-    lines.push("Login successful!");
-  } else if (phase.step === "error") {
-    lines.push(`Error: ${phase.message}`);
-  }
-
-  return (
-    <box
-      border
-      borderColor={colors.border}
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      width="100%"
-      height={lines.length + 4}
-      flexShrink={0}
-    >
-      <text fg={colors.yellow} content="OpenAI ChatGPT Login" />
-      {lines.map((line, i) => (
-        <text key={`oauth-line-${i}`} fg={colors.text} content={truncateToWidth(line, contentWidth)} />
-      ))}
-      <text fg={colors.dim} content="Esc cancel" />
-    </box>
-  );
-}
-
-function AskPanelView(
-  {
-    ask,
-    error,
-    selectedIndex,
-    currentQuestionIndex,
-    totalQuestions,
-    questionAnswers,
-    customInputMode,
-    noteInputMode,
-    reviewMode,
-    inlineValue,
-    optionNotes,
-    inputRef,
-    onInput,
-    onSubmit,
-    colors,
-  }: {
-    ask: PendingAskUi;
-    error?: string | null;
-    selectedIndex: number;
-    currentQuestionIndex: number;
-    totalQuestions: number;
-    questionAnswers: Map<number, QuestionAnswerState>;
-    customInputMode: boolean;
-    noteInputMode: boolean;
-    reviewMode: boolean;
-    inlineValue: string;
-    optionNotes: Map<string, string>;
-    inputRef: React.RefObject<InputRenderable | null>;
-    onInput: (value: string) => void;
-    onSubmit: (value: string) => void;
-    colors: OpenTuiPalette;
-  },
-): React.ReactElement {
-  if (ask.kind !== "agent_question") {
-    return (
-      <box border borderColor={colors.border} paddingLeft={1} paddingRight={1} flexDirection="column">
-        <text fg={colors.red} content={`Unsupported ask kind: ${ask.kind}`} />
-        <text content={ask.summary} />
-        {error ? <text fg={colors.red} content={error} /> : null}
-      </box>
-    );
-  }
-
-  const questions = (ask.payload["questions"] as AgentQuestionItem[]) ?? [];
-
-  if (reviewMode) {
-    const reviewContentLines =
-      1 +
-      questions.reduce((total, question, index) => {
-        const answer = questionAnswers.get(index);
-        const noteKey = answer ? `${index}-${answer.optionIndex}` : "";
-        const note = noteKey ? optionNotes.get(noteKey) : undefined;
-        return total + 2 + (note ? 1 : 0);
-      }, 0) +
-      1 +
-      (error ? 1 : 0);
-    const panelHeight = reviewContentLines + 2;
-    return (
-      <box border borderColor={colors.border} paddingLeft={1} paddingRight={1} flexDirection="column" height={panelHeight}>
-        <text fg={colors.green} content="Review your answers" />
-        {questions.map((question, index) => {
-          const answer = questionAnswers.get(index);
-          const selected = answer ? question.options[answer.optionIndex] : undefined;
-          const answerDisplay = !answer
-            ? "(unanswered)"
-            : selected?.kind === "custom_input"
-              ? `✎ ${answer.customText ?? ""}`
-              : selected?.label ?? "(unknown)";
-          const noteKey = answer ? `${index}-${answer.optionIndex}` : "";
-          const note = noteKey ? optionNotes.get(noteKey) : undefined;
-          return (
-            <box key={`ask-review-${index}`} flexDirection="column">
-              <text content={`${index + 1}. ${question.question}`} />
-              <text fg={!answer ? colors.yellow : selected?.kind === "discuss_further" ? colors.yellow : colors.green} content={`   → ${answerDisplay}`} />
-              {note ? <text fg={colors.yellow} content={`     Note: ${note}`} /> : null}
-            </box>
-          );
-        })}
-        <text fg={colors.dim} content="Enter to submit. Esc to go back." />
-        {error ? <text fg={colors.red} content={error} /> : null}
-      </box>
-    );
-  }
-
-  const question = questions[currentQuestionIndex];
-  if (!question) {
-    return (
-      <box border borderColor={colors.border} paddingLeft={1} paddingRight={1} flexDirection="column">
-        <text fg={colors.red} content="Question index out of range." />
-      </box>
-    );
-  }
-
-  const existingAnswer = questionAnswers.get(currentQuestionIndex);
-  const agentOptionCount = question.options.filter((option) => !option.systemAdded).length;
-  const optionContentLines = question.options.reduce((total, option, index) => {
-    const note = !option.systemAdded ? optionNotes.get(`${currentQuestionIndex}-${index}`) : undefined;
-    return total + 1 + (option.description ? 1 : 0) + (note ? 1 : 0);
-  }, 0);
-  const inlineLines = customInputMode || noteInputMode ? 3 : 0;
-  const panelContentLines = 1 + optionContentLines + inlineLines + 1 + (error ? 1 : 0);
-  const panelHeight = panelContentLines + 2;
-
-  return (
-    <box border borderColor={colors.border} paddingLeft={1} paddingRight={1} flexDirection="column" height={panelHeight}>
-      <text fg={colors.yellow} content={`Question ${currentQuestionIndex + 1}/${totalQuestions}: ${question.question}`} />
-      {question.options.map((option, index) => {
-        const isSelected = index === selectedIndex;
-        const isAnswered = existingAnswer?.optionIndex === index;
-        const note = !option.systemAdded ? optionNotes.get(`${currentQuestionIndex}-${index}`) : undefined;
-        return (
-          <box key={`ask-option-${index}`} flexDirection="column">
-            <text
-              fg={isSelected ? colors.accent : isAnswered ? colors.green : colors.text}
-              content={`${isSelected ? "> " : isAnswered ? "✓ " : "  "}${option.label}`}
-            />
-            {option.description ? <text fg={colors.dim} content={`   ${option.description}`} /> : null}
-            {note ? <text fg={colors.yellow} content={`   Note: ${note}${isSelected ? " (Tab to edit)" : ""}`} /> : null}
-          </box>
-        );
-      })}
-      {customInputMode || noteInputMode ? (
-        <box flexDirection="column">
-          <text
-            fg={customInputMode ? colors.accent : colors.yellow}
-            content={customInputMode ? "Your answer:" : "Note:"}
-          />
-          <input
-            ref={(node) => {
-              inputRef.current = node;
-            }}
-            value={inlineValue}
-            focused={customInputMode || noteInputMode}
-            placeholder={customInputMode ? "Type a custom answer" : "Add a note"}
-            textColor={colors.text}
-            focusedTextColor={colors.text}
-            placeholderColor={colors.dim}
-            onInput={onInput}
-            onChange={onInput}
-            onSubmit={onSubmit}
-          />
-          <text
-            fg={colors.dim}
-            content={customInputMode ? "Enter to confirm. Esc to cancel." : "Enter to save note. Esc to cancel."}
-          />
-        </box>
-      ) : null}
-      <text
-        fg={colors.dim}
-        content={`Use ↑/↓ to select, ←/→ to navigate questions, Enter to confirm.${agentOptionCount > 0 && selectedIndex < agentOptionCount ? " Tab to add note." : ""
-          }`}
-      />
-      {error ? <text fg={colors.red} content={error} /> : null}
-    </box>
-  );
-}
-
 export function OpenTuiApp({
   session,
   commandRegistry,
   store,
   verbose = false,
   onExit,
+  theme: themeProp,
 }: OpenTuiAppProps): React.ReactElement {
   const renderer = useRenderer();
   const terminal = useTerminalDimensions();
-  const theme = THEME;
+  const theme = themeProp ?? DEFAULT_DISPLAY_THEME;
+  const inputMaxVisibleLines = theme.layout.inputMaxVisibleLines;
   const [processing, _setProcessing] = useState(false);
   const processingRef = useRef(false);
   const setProcessing = useCallback((v: boolean) => {
@@ -1399,8 +339,10 @@ export function OpenTuiApp({
   const promptSelectResolverRef = useRef<((value: string | undefined) => void) | null>(null);
   const promptSecretResolverRef = useRef<((value: string | undefined) => void) | null>(null);
   const colors = theme.colors;
+  const composerTokenColorsRef = useRef(colors);
   const markdownStyle = theme.markdownStyle;
-  if (!composerTokenVisualsRef.current) {
+  if (!composerTokenVisualsRef.current || composerTokenColorsRef.current !== colors) {
+    composerTokenColorsRef.current = colors;
     composerTokenVisualsRef.current = createComposerTokenVisuals(colors);
   }
   const composerTokenVisuals = composerTokenVisualsRef.current;
@@ -1736,7 +678,7 @@ export function OpenTuiApp({
     const visibleValue = composer.plainText;
     const cursorOffset = composer.cursorOffset;
     const computedWidth = Math.max(1, composer.getLayoutNode().getComputedWidth());
-    const measured = composer.editorView.measureForDimensions(computedWidth, INPUT_MAX_VISIBLE_LINES);
+    const measured = composer.editorView.measureForDimensions(computedWidth, inputMaxVisibleLines);
     const measuredLines = Math.max(
       composer.lineCount || 1,
       composer.virtualLineCount || 1,
@@ -1744,9 +686,9 @@ export function OpenTuiApp({
     );
     lastInputValueRef.current = visibleValue;
     setDraftValue(visibleValue);
-    setInputVisibleLines(Math.max(1, Math.min(INPUT_MAX_VISIBLE_LINES, measuredLines)));
+    setInputVisibleLines(Math.max(1, Math.min(inputMaxVisibleLines, measuredLines)));
     updateInputOverlayRef.current(visibleValue, cursorOffset);
-  }, []);
+  }, [inputMaxVisibleLines]);
 
   const setComposerText = useCallback((value: string, cursorToEnd = true) => {
     const composer = inputRef.current;
@@ -1931,7 +873,7 @@ export function OpenTuiApp({
     });
   }, [commandRegistry, session, store]);
 
-  const pickerMaxVisible = computePickerMaxVisible(terminal.height);
+  const pickerMaxVisible = computePickerMaxVisible(terminal.height, theme.layout);
 
   const startCommandPicker = useCallback((cmdName: string): boolean => {
     const command = commandRegistry.lookup(cmdName);
@@ -3112,188 +2054,76 @@ export function OpenTuiApp({
 
   const modelDescriptor = getCurrentModelDescriptor(session);
   const modelName = modelDescriptor?.compactScopedLabel ?? "unknown";
-  const modelNameColor = resolveModelNameColor(modelDescriptor, colors);
-  const sidebarVisible = terminal.width >= MIN_TERMINAL_WIDTH_FOR_SIDEBAR;
-  const sidebarWidth = sidebarVisible ? getSidebarWidth(terminal.width) : 0;
-  const conversationColumnWidth = terminal.width - 4 - (sidebarVisible ? sidebarWidth + 1 : 0);
-  const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
-  // Picker content width: terminal - outer padding(4) - row gap+sidebar border(2) - sidebar - picker border(2) - picker padding(2)
-  const pickerContentWidth = terminal.width - 10 - (sidebarVisible ? sidebarWidth : 0);
-  // Detail tab: find the active detail tab and its source entry
-  const activeTab = tabs.find((t) => t.id === activeTabId);
-  const isDetailTab = activeTab?.kind === "detail-thinking" || activeTab?.kind === "detail-tool";
-  const detailEntry = isDetailTab
-    ? presentationEntries.find((pe) => activeTabId === `detail:${pe.id}`)
-    : null;
-
-  const showLogoInScroll = terminal.width >= MIN_TERMINAL_WIDTH_FOR_LOGO_HEADER;
+  const modelNameColor = resolveModelNameColor(modelDescriptor, theme);
 
   return (
-    <box
-      flexDirection="column"
-      width="100%"
-      height="100%"
-      backgroundColor={colors.background}
-      paddingTop={1}
-      paddingBottom={1}
-      paddingLeft={2}
-      paddingRight={2}
-      gap={1}
-      onMouseDown={() => {
+    <OpenTuiScreen
+      theme={theme}
+      terminal={terminal}
+      tabs={tabs}
+      activeTabId={activeTabId}
+      onSelectTab={setActiveTabId}
+      onCloseTab={handleCloseTab}
+      sidebarExpanded={sidebarExpanded}
+      onToggleSidebar={() => setSidebarExpanded((value) => !value)}
+      contextTokens={contextTokens}
+      contextLimit={session.primaryAgent.modelConfig?.contextLength}
+      cacheReadTokens={cacheReadTokens}
+      codexUsage={codexUsage}
+      presentationEntries={presentationEntries}
+      processing={processing}
+      markdownMode={markdownMode}
+      scrollRef={scrollRef}
+      selectedChildId={selectedChildId}
+      onEntryClick={openDetailTab}
+      pendingAsk={pendingAsk}
+      askError={askError}
+      askSelectionIndex={askSelectionIndex}
+      currentQuestionIndex={currentQuestionIndex}
+      questionAnswers={questionAnswers}
+      customInputMode={customInputMode}
+      noteInputMode={noteInputMode}
+      reviewMode={reviewMode}
+      askInputValue={askInputValue}
+      optionNotes={optionNotes}
+      askInputRef={askInputRef}
+      onAskInput={setAskInputValue}
+      onAskSubmit={submitAskInlineInput}
+      getAskQuestions={getAskQuestions}
+      commandOverlay={commandOverlay}
+      commandPicker={commandPicker}
+      checkboxPicker={checkboxPicker}
+      promptSelect={promptSelect}
+      promptSecret={promptSecret}
+      promptSecretInputRef={promptSecretInputRef}
+      oauthOverlay={oauthOverlay}
+      onOverlayItemClick={clickOverlayItem}
+      onCommandPickerItemClick={clickCommandPickerItem}
+      onCheckboxPickerItemClick={clickCheckboxPickerItem}
+      onPromptSelectItemClick={clickPromptSelectItem}
+      onPromptSecretSubmit={submitPromptSecret}
+      inputRef={inputRef}
+      phase={phase}
+      modelName={modelName}
+      modelColor={modelNameColor}
+      turnElapsed={turnElapsed}
+      hint={hint}
+      inputVisibleLines={inputVisibleLines}
+      composerTokenVisuals={composerTokenVisuals}
+      keyBindings={COMPOSER_KEY_BINDINGS}
+      onSubmit={() => {
+        if (selectedChildId) {
+          showHint("Return to the primary session to send messages.");
+          return;
+        }
+        void handleSubmit(getSerializedComposerInput());
+      }}
+      onModelClick={() => void handleSubmit("/model")}
+      onBackgroundMouseDown={() => {
         if (commandOverlay.visible) setCommandOverlay(EMPTY_COMMAND_OVERLAY);
         if (commandPicker) setCommandPicker(null);
         if (checkboxPicker) setCheckboxPicker(null);
       }}
-    >
-      <box flexDirection="row" flexGrow={1} gap={0}>
-        {sidebarVisible ? (
-          <LeftSidebar
-            tabs={tabs}
-            activeTabId={activeTabId}
-            onSelectTab={setActiveTabId}
-            onCloseTab={handleCloseTab}
-            expanded={sidebarExpanded}
-            onToggleExpanded={() => setSidebarExpanded((v) => !v)}
-            width={sidebarWidth}
-            colors={colors}
-            contextSection={
-              <ContextUsageCard
-                contextTokens={contextTokens}
-                contextLimit={session.primaryAgent.modelConfig?.contextLength}
-                cacheReadTokens={cacheReadTokens}
-                colors={colors}
-              />
-            }
-            codexSection={
-              <CodexUsageCard snapshot={codexUsage} colors={colors} />
-            }
-          />
-        ) : null}
-
-        <box flexDirection="column" flexGrow={1} gap={1}>
-          {detailEntry && activeTab?.kind === "detail-thinking" ? (
-            <DetailThinkingTab
-              entry={detailEntry}
-              colors={colors}
-              scrollRef={scrollRef}
-            />
-          ) : detailEntry && activeTab?.kind === "detail-tool" ? (
-            <DetailToolTab
-              entry={detailEntry}
-              colors={colors}
-              contentWidth={conversationContentWidth}
-              scrollRef={scrollRef}
-            />
-          ) : (
-            <PresentationPanel
-              items={presentationEntries}
-              processing={processing}
-              contentWidth={conversationContentWidth}
-              markdownMode={markdownMode}
-              colors={colors}
-              markdownStyle={markdownStyle}
-              scrollRef={scrollRef}
-              selectedChildId={selectedChildId}
-              showLogoInScroll={showLogoInScroll}
-              onEntryClick={openDetailTab}
-            />
-          )}
-
-          {pendingAsk ? (
-            <AskPanelView
-              ask={pendingAsk}
-              error={askError}
-              selectedIndex={askSelectionIndex}
-              currentQuestionIndex={currentQuestionIndex}
-              totalQuestions={pendingAsk.kind === "agent_question" ? getAskQuestions().length : 1}
-              questionAnswers={questionAnswers}
-              customInputMode={customInputMode}
-              noteInputMode={noteInputMode}
-              reviewMode={reviewMode}
-              inlineValue={askInputValue}
-              optionNotes={optionNotes}
-              inputRef={askInputRef}
-              onInput={setAskInputValue}
-              onSubmit={submitAskInlineInput}
-              colors={colors}
-            />
-          ) : null}
-          <CommandOverlayView
-            overlay={commandOverlay}
-            colors={colors}
-            contentWidth={pickerContentWidth}
-            maxVisible={pickerMaxVisible}
-            onItemClick={clickOverlayItem}
-          />
-          <CommandPickerView
-            picker={commandPicker}
-            colors={colors}
-            contentWidth={pickerContentWidth}
-            maxVisible={pickerMaxVisible}
-            onItemClick={clickCommandPickerItem}
-          />
-          <CheckboxPickerView
-            picker={checkboxPicker}
-            colors={colors}
-            contentWidth={pickerContentWidth}
-            onItemClick={clickCheckboxPickerItem}
-          />
-          <PromptSelectView
-            prompt={promptSelect}
-            colors={colors}
-            contentWidth={pickerContentWidth}
-            maxVisible={pickerMaxVisible}
-            onItemClick={clickPromptSelectItem}
-          />
-          <PromptSecretView
-            prompt={promptSecret}
-            inputRef={promptSecretInputRef}
-            focused={Boolean(promptSecret)}
-            onSubmit={submitPromptSecret}
-            colors={colors}
-          />
-          <OAuthOverlayView
-            state={oauthOverlay}
-            colors={colors}
-            contentWidth={pickerContentWidth}
-          />
-        </box>
-      </box>
-
-      <InputArea
-        inputRef={inputRef}
-        processing={processing}
-        pendingAsk={Boolean(pendingAsk)}
-        selectedChildId={selectedChildId}
-        phase={phase}
-        modelName={modelName}
-        modelColor={modelNameColor}
-        elapsed={turnElapsed}
-        cwd={shortenPath(process.cwd())}
-        hint={hint}
-        contextTokens={contextTokens}
-        contextLimit={session.primaryAgent.modelConfig?.contextLength}
-        showContext={!sidebarVisible}
-        terminalWidth={terminal.width}
-        colors={colors}
-        inputVisibleLines={inputVisibleLines}
-        maxInputLines={INPUT_MAX_VISIBLE_LINES}
-        composerTokenVisuals={composerTokenVisuals}
-        keyBindings={COMPOSER_KEY_BINDINGS}
-        onSubmit={() => {
-          if (selectedChildId) {
-            showHint("Return to the primary session to send messages.");
-            return;
-          }
-          void handleSubmit(getSerializedComposerInput());
-        }}
-        onModelClick={() => void handleSubmit("/model")}
-        commandPicker={Boolean(commandPicker)}
-        checkboxPicker={Boolean(checkboxPicker)}
-        promptSelect={Boolean(promptSelect)}
-        promptSecret={Boolean(promptSecret)}
-      />
-
-    </box>
+    />
   );
 }

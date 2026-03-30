@@ -5,7 +5,7 @@ import type { TextChunk } from "../forked/core/text-buffer.js";
 import { highlightToChunks } from "../forked/patch-opentui-markdown.js";
 import { displayWidthWithNewlines } from "../composer-token-logic.js";
 
-import type { ConversationEntry } from "../../src/tui/types.js";
+import type { ConversationEntry } from "../../src/ui/contracts.js";
 import type { ConversationPalette } from "./conversation-types.js";
 
 // Extension → highlight.js language name.

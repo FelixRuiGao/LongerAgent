@@ -2,23 +2,12 @@ import type { RefObject } from "react";
 import type { SyntaxStyle, ScrollBoxRenderable } from "@opentui/core";
 
 import type { PresentationEntry } from "../presentation/types.js";
+import type {
+  DisplayThemeBrandingTokens,
+  DisplayThemeColorTokens,
+} from "../display/theme/index.js";
 
-export interface ConversationPalette {
-  accent: string;
-  border: string;
-  cyan: string;
-  dim: string;
-  green: string;
-  muted: string;
-  orange: string;
-  red: string;
-  text: string;
-  thinking?: string;
-  thinkingStatus?: string;
-  toolTime: string;
-  userBg: string;
-  yellow: string;
-}
+export type ConversationPalette = DisplayThemeColorTokens;
 
 /** Props for the new presentation-layer entry renderers. */
 export interface PresentationEntryItemProps {
@@ -40,5 +29,6 @@ export interface PresentationPanelProps {
   scrollRef: RefObject<ScrollBoxRenderable | null>;
   selectedChildId: string | null;
   showLogoInScroll: boolean;
+  branding: DisplayThemeBrandingTokens;
   onEntryClick?: (entry: PresentationEntry) => void;
 }

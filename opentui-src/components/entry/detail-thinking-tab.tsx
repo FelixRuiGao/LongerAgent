@@ -4,6 +4,8 @@ import React from "react";
 
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../conversation-types.js";
+import { ScrollViewport } from "../../display/primitives/scroll-viewport.js";
+import { SectionHeader } from "../../display/primitives/section-header.js";
 
 interface DetailThinkingTabProps {
   entry: PresentationEntry;
@@ -18,27 +20,12 @@ function DetailThinkingTabInner(
 
   return (
     <box flexDirection="column" flexGrow={1} width="100%">
-      <box paddingLeft={2} paddingBottom={1}>
-        <text fg={colors.dim} bold content="Thinking" />
-      </box>
-      <scrollbox
-        ref={scrollRef}
-        flexGrow={1}
-        flexShrink={1}
-        stickyScroll={false}
-        viewportOptions={{ paddingRight: 1 }}
-        verticalScrollbarOptions={{
-          paddingLeft: 1,
-          trackOptions: {
-            backgroundColor: "transparent",
-            foregroundColor: colors.border + "44",
-          },
-        }}
-      >
+      <SectionHeader label="Thinking" color={colors.dim} paddingLeft={2} paddingBottom={1} />
+      <ScrollViewport colors={colors} scrollRef={scrollRef}>
         <box paddingLeft={2} paddingRight={2}>
           <text fg={colors.dim} content={text} />
         </box>
-      </scrollbox>
+      </ScrollViewport>
     </box>
   );
 }

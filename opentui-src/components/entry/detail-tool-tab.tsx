@@ -5,6 +5,8 @@ import React, { useMemo } from "react";
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../conversation-types.js";
 import { buildToolResultArtifacts } from "../tool-result-artifacts.js";
+import { ScrollViewport } from "../../display/primitives/scroll-viewport.js";
+import { SectionHeader } from "../../display/primitives/section-header.js";
 
 interface DetailToolTabProps {
   entry: PresentationEntry;
@@ -39,23 +41,8 @@ function DetailToolTabInner(
 
   return (
     <box flexDirection="column" flexGrow={1} width="100%">
-      <box paddingLeft={2} paddingBottom={1}>
-        <text fg={colors.dim} bold content={title} />
-      </box>
-      <scrollbox
-        ref={scrollRef}
-        flexGrow={1}
-        flexShrink={1}
-        stickyScroll={false}
-        viewportOptions={{ paddingRight: 1 }}
-        verticalScrollbarOptions={{
-          paddingLeft: 1,
-          trackOptions: {
-            backgroundColor: "transparent",
-            foregroundColor: colors.border + "44",
-          },
-        }}
-      >
+      <SectionHeader label={title} color={colors.dim} paddingLeft={2} paddingBottom={1} />
+      <ScrollViewport colors={colors} scrollRef={scrollRef}>
         {artifacts ? (
           <box flexDirection="column" paddingLeft={2} paddingRight={2}>
             {artifacts.map((artifact, idx) => (
@@ -73,7 +60,7 @@ function DetailToolTabInner(
             <text fg={colors.text} content={text} />
           </box>
         )}
-      </scrollbox>
+      </ScrollViewport>
     </box>
   );
 }

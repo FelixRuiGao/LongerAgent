@@ -13,7 +13,7 @@
   <img alt="Author" src="https://img.shields.io/badge/author-Felix%20Rui%20Gao-4b4bf0?style=flat-square" />
 </p>
 
-LongerAgent is a TUI demo exploring a design philosophy: what if the system just provided the tools and safety net, and let the agent proactively manage its own context and workflow?
+LongerAgent is an OpenTUI-based TUI demo exploring a design philosophy: what if the system just provided the tools and safety net, and let the agent proactively manage its own context and workflow?
 
 Parallel sub-agents investigating a codebase, an async message mid-task, and context summarization — all in one session:
 
@@ -162,7 +162,7 @@ LongerAgent is built around a **Session → Agent → Provider** pipeline:
 
 ```bash
 pnpm install        # Install dependencies
-pnpm dev            # Development mode (auto-reload)
+pnpm dev            # Run the active OpenTUI development UI
 pnpm build          # Build
 pnpm test           # Run tests (vitest)
 pnpm typecheck      # Type check

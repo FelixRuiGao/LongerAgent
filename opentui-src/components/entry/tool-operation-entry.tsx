@@ -4,7 +4,6 @@ import React from "react";
 
 import { RGBA } from "../../forked/core/lib/RGBA.js";
 import type { PresentationEntry } from "../../presentation/types.js";
-import { CATEGORY_COLORS, SUCCESS_COLOR, ERROR_COLOR } from "../../presentation/colors.js";
 import {
   useSpinner,
   TOOL_SPINNER_FRAMES,
@@ -13,9 +12,11 @@ import {
 import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
 import { InlineResult } from "./inline-result.js";
+import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
+import { getActivityIndicatorColor } from "../../display/entries/entry-variants.js";
 
 // Unified tool name color — all tool names use this single color
-const TOOL_NAME_COLOR = "#86ded4";
+const TOOL_NAME_COLOR = DEFAULT_DISPLAY_THEME.presentation.toolNameColor;
 const TOOL_NAME_RGBA = RGBA.fromHex(TOOL_NAME_COLOR);
 
 interface ToolOperationEntryProps {
@@ -42,11 +43,14 @@ function ToolOperationEntryInner(
       ? "✖"
       : "✔";
 
-  const indicatorColor = active
-    ? TOOL_NAME_COLOR
-    : entry.state === "error"
-      ? ERROR_COLOR
-      : SUCCESS_COLOR;
+  const indicatorColor = getActivityIndicatorColor(
+    {
+      active,
+      error: entry.state === "error",
+    },
+    DEFAULT_DISPLAY_THEME,
+    "tool",
+  );
 
   const toolText = entry.toolText ?? "";
   const suffix = entry.toolSuffix ?? "";

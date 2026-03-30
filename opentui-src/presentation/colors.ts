@@ -1,14 +1,8 @@
 import type { ToolCategory } from "./types.js";
+import { DEFAULT_DISPLAY_THEME } from "../display/theme/index.js";
 
-export const CATEGORY_COLORS: Record<ToolCategory, string> = {
-  "file-read": "#86ded4",
-  "file-modify": "#e8c468",
-  "execute": "#fb8500",
-  "web": "#b4a0ec",
-  "orchestration": "#e81860",
-  "internal": "#636a76",
-};
+export const CATEGORY_COLORS: Record<ToolCategory, string> = DEFAULT_DISPLAY_THEME.presentation.categoryColors;
 
-export const THINKING_COLOR = "#6e4890";
-export const SUCCESS_COLOR = "#8cc252";
-export const ERROR_COLOR = "#f85656";
+export const THINKING_COLOR = DEFAULT_DISPLAY_THEME.presentation.thinkingColor;
+export const SUCCESS_COLOR = DEFAULT_DISPLAY_THEME.presentation.successColor;
+export const ERROR_COLOR = DEFAULT_DISPLAY_THEME.presentation.errorColor;

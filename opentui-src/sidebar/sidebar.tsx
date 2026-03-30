@@ -4,10 +4,7 @@ import React from "react";
 
 import type { ConversationPalette } from "../components/conversation-types.js";
 import { SidebarTabs, type TabState } from "./sidebar-tabs.js";
-
-const SIDEBAR_COLLAPSED_WIDTH = 4;
-
-const LOGO_GRADIENT = ["#ffb703", "#fb8500", "#f05030", "#e81860", "#d01080", "#a010a0", "#5a0c92"];
+import type { DisplayThemeBrandingTokens } from "../display/theme/index.js";
 
 interface SidebarProps {
   tabs: TabState[];
@@ -17,7 +14,9 @@ interface SidebarProps {
   expanded: boolean;
   onToggleExpanded: () => void;
   width: number;
+  collapsedWidth: number;
   colors: ConversationPalette;
+  branding: DisplayThemeBrandingTokens;
   /** Pre-rendered context usage section (passed from parent to avoid moving formatters) */
   contextSection?: React.ReactNode;
   /** Pre-rendered codex usage section */
@@ -25,21 +24,30 @@ interface SidebarProps {
 }
 
 function SidebarTitle(
-  { expanded, colors }: { expanded: boolean; colors: ConversationPalette },
+  {
+    expanded,
+    branding,
+  }: {
+    expanded: boolean;
+    branding: DisplayThemeBrandingTokens;
+  },
 ): React.ReactElement {
-  const name = "VIGIL";
-  const indices = [0, 1, 3, 5, 6];
   if (!expanded) {
     return (
       <box flexDirection="row">
-        <text fg={LOGO_GRADIENT[0]} bold content="V" />
+        <text fg={branding.logoGradient[0]} bold content={branding.sidebarWordmark[0] ?? "V"} />
       </box>
     );
   }
   return (
     <box flexDirection="row">
-      {name.split("").map((ch, i) => (
-        <text key={`sidebar-title-${i}`} fg={LOGO_GRADIENT[indices[i]]} bold content={ch} />
+      {branding.sidebarWordmark.split("").map((ch, i) => (
+        <text
+          key={`sidebar-title-${i}`}
+          fg={branding.logoGradient[branding.sidebarGradientIndices[i] ?? 0]}
+          bold
+          content={ch}
+        />
       ))}
     </box>
   );
@@ -54,12 +62,14 @@ function LeftSidebarInner(props: SidebarProps): React.ReactElement {
     expanded,
     onToggleExpanded,
     width: expandedWidth,
+    collapsedWidth,
     colors,
+    branding,
     contextSection,
     codexSection,
   } = props;
 
-  const width = expanded ? expandedWidth : SIDEBAR_COLLAPSED_WIDTH;
+  const width = expanded ? expandedWidth : collapsedWidth;
 
   return (
     <box
@@ -81,7 +91,7 @@ function LeftSidebarInner(props: SidebarProps): React.ReactElement {
         }}
       >
         <text fg={colors.dim} content={expanded ? "▾ " : "▸ "} />
-        <SidebarTitle expanded={expanded} colors={colors} />
+        <SidebarTitle expanded={expanded} branding={branding} />
       </box>
 
       <box height={1} />
@@ -109,4 +119,3 @@ function LeftSidebarInner(props: SidebarProps): React.ReactElement {
 }
 
 export const LeftSidebar = React.memo(LeftSidebarInner);
-export { SIDEBAR_COLLAPSED_WIDTH };

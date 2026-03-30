@@ -13,7 +13,7 @@
   <img alt="Author" src="https://img.shields.io/badge/author-Felix%20Rui%20Gao-4b4bf0?style=flat-square" />
 </p>
 
-LongerAgent 是一个 TUI Demo，探索一种设计哲学：如果系统只提供工具和安全兜底，让 Agent 主动管理自己的上下文和工作流，会怎样？
+LongerAgent 是一个基于 OpenTUI 的 TUI Demo，探索一种设计哲学：如果系统只提供工具和安全兜底，让 Agent 主动管理自己的上下文和工作流，会怎样？
 
 并行子 Agent 调查代码架构、运行中发送异步消息、上下文压缩——一个会话内完成：
 
@@ -162,7 +162,7 @@ LongerAgent 围绕 **Session → Agent → Provider** 流水线构建：
 
 ```bash
 pnpm install        # 安装依赖
-pnpm dev            # 开发模式（自动重载）
+pnpm dev            # 运行当前使用的 OpenTUI 开发界面
 pnpm build          # 构建
 pnpm test           # 运行测试（vitest）
 pnpm typecheck      # 类型检查

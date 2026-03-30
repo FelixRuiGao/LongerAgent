@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ConversationEntry } from "../../src/tui/types.js";
+import type { ConversationEntry } from "../../src/ui/contracts.js";
 
 import { reconcileEntries } from "./reconcile.js";
 

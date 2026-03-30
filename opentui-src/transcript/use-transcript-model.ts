@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { projectToTuiEntries } from "../../src/log-projection.js";
 import type { LogEntry } from "../../src/log-entry.js";
 import type { ChildSessionSnapshot } from "../../src/session-tree-types.js";
-import type { Session as TuiSession } from "../../src/tui/types.js";
+import type { Session as TuiSession } from "../../src/ui/contracts.js";
 
 import { reconcileEntries } from "./reconcile.js";
 import type { ReconciledConversationEntry } from "./types.js";
