@@ -289,7 +289,7 @@ export function OpenTuiScreen({
         hint={hint}
         contextTokens={contextTokens}
         contextLimit={contextLimit}
-        terminalWidth={terminal.width}
+        contentWidth={conversationColumnWidth}
         colors={theme.colors}
         inputVisibleLines={inputVisibleLines}
         maxInputLines={theme.layout.inputMaxVisibleLines}

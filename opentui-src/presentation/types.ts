@@ -27,6 +27,13 @@ export interface InlineResultData {
   noDiffBackground?: boolean;
 }
 
+export interface ToolStreamSectionData {
+  key: string;
+  label: string;
+  text: string;
+  complete: boolean;
+}
+
 export interface PresentationEntry {
   id: string;
   contentVersion: number;
@@ -50,6 +57,10 @@ export interface PresentationEntry {
   toolElapsedMs?: number;
   toolInlineResult?: InlineResultData | null;
   toolResultFullText?: string;
+  toolStreamSections?: ToolStreamSectionData[];
+  toolRepairedFromPartial?: boolean;
+  toolExecState?: string;
+  toolStreamState?: string;
 
   // kind=assistant
   assistantText?: string;

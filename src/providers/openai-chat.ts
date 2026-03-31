@@ -355,7 +355,7 @@ export class OpenAIChatProvider extends BaseProvider {
     }
 
     if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallStart) {
-      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal, options?.onToolCallStart, options?.onToolCallArgDelta);
+      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal, options?.onToolCallStart, options?.onToolCallArgDelta, options?.onToolCallClosed);
     }
 
     const resp = await this._client.chat.completions.create(
@@ -376,6 +376,7 @@ export class OpenAIChatProvider extends BaseProvider {
     signal?: AbortSignal,
     onToolCallStart?: (callId: string, name: string) => void,
     onToolCallArgDelta?: (callId: string, argDelta: string) => void,
+    onToolCallClosed?: (callId: string, argsBuffer: string) => void,
   ): Promise<ProviderResponse> {
     kwargs["stream"] = true;
     kwargs["stream_options"] = { include_usage: true };
@@ -383,8 +384,9 @@ export class OpenAIChatProvider extends BaseProvider {
     const textParts: string[] = [];
     const toolAcc: Map<
       number,
-      { id: string; name: string; argsSoFar: string; lastChunk: string }
+      { id: string; name: string; argsSoFar: string; lastChunk: string; closed: boolean }
     > = new Map();
+    let activeToolIndex: number | null = null;
     let usage = new Usage();
     const reasoningParts: string[] = [];
     const citations: Citation[] = [];
@@ -479,6 +481,17 @@ export class OpenAIChatProvider extends BaseProvider {
       return afterThink.replace(/^\r?\n+/, "");
     }
 
+    function closeToolIndex(idx: number | null): void {
+      if (idx === null) return;
+      const acc = toolAcc.get(idx);
+      if (!acc || acc.closed) return;
+      acc.closed = true;
+      activeToolIndex = null;
+      if (onToolCallClosed && acc.id) {
+        onToolCallClosed(acc.id, acc.argsSoFar);
+      }
+    }
+
     const response = await this._client.chat.completions.create(
       kwargs as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
       signal ? { signal } : undefined,
@@ -523,6 +536,7 @@ export class OpenAIChatProvider extends BaseProvider {
         "reasoning"
       ]) as string | undefined;
       if (reasoning) {
+        closeToolIndex(activeToolIndex);
         reasoningSoFar = appendMaybeCumulative(
           reasoning,
           reasoningSoFar,
@@ -537,6 +551,7 @@ export class OpenAIChatProvider extends BaseProvider {
       ];
       const normalizedReasoning = normalizeReasoningDetails(reasoningDetails);
       if (normalizedReasoning) {
+        closeToolIndex(activeToolIndex);
         hasVendorReasoningSplit = true;
         latestReasoningState = normalizedReasoning.state;
         if (normalizedReasoning.text) {
@@ -551,6 +566,7 @@ export class OpenAIChatProvider extends BaseProvider {
 
       // Text content
       if (delta.content) {
+        closeToolIndex(activeToolIndex);
         if (hasVendorReasoningSplit) {
           rawTextSoFar = reconcileMaybeCumulative(delta.content, rawTextSoFar);
 
@@ -612,6 +628,9 @@ export class OpenAIChatProvider extends BaseProvider {
       if (delta.tool_calls) {
         for (const tcDelta of delta.tool_calls) {
           const idx = tcDelta.index;
+          if (activeToolIndex !== null && activeToolIndex !== idx) {
+            closeToolIndex(activeToolIndex);
+          }
           if (!toolAcc.has(idx)) {
             const name = tcDelta.function?.name || "";
             const id = tcDelta.id || "";
@@ -620,6 +639,7 @@ export class OpenAIChatProvider extends BaseProvider {
               name,
               argsSoFar: "",
               lastChunk: "",
+              closed: false,
             });
             // Emit tool call start when name is known on first delta
             if (name && id && onToolCallStart) {
@@ -630,6 +650,7 @@ export class OpenAIChatProvider extends BaseProvider {
             const hadName = !!acc.name;
             if (tcDelta.id) acc.id = tcDelta.id;
             if (tcDelta.function?.name) acc.name = tcDelta.function.name;
+            acc.closed = false;
             // Emit start if name arrived on a subsequent delta
             if (!hadName && acc.name && acc.id && onToolCallStart) {
               onToolCallStart(acc.id, acc.name);
@@ -643,9 +664,10 @@ export class OpenAIChatProvider extends BaseProvider {
               tcDelta.function.arguments,
             );
             if (onToolCallArgDelta && acc.id) {
-              onToolCallArgDelta(acc.id, tcDelta.function.arguments);
+              onToolCallArgDelta(acc.id, acc.argsSoFar);
             }
           }
+          activeToolIndex = idx;
         }
       }
 
@@ -664,6 +686,7 @@ export class OpenAIChatProvider extends BaseProvider {
     }
 
     // Build tool calls from accumulated deltas
+    closeToolIndex(activeToolIndex);
     const toolCalls: ToolCall[] = [];
     const sortedIndices = [...toolAcc.keys()].sort((a, b) => a - b);
     for (const idx of sortedIndices) {

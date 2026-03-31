@@ -286,22 +286,19 @@ describe("Provider malformed tool_call handling", () => {
 
       expect(mockCreate).toHaveBeenCalled();
       const callArgs = mockCreate.mock.calls[0][0];
-      const messages = callArgs.messages as Record<string, unknown>[];
-      const assistantMsg = messages.find(
-        (m) => m["role"] === "assistant",
+      const input = callArgs.input as Record<string, unknown>[];
+      const functionCall = input.find(
+        (item) => item["type"] === "function_call",
       ) as Record<string, unknown> | undefined;
 
-      if (assistantMsg && assistantMsg["tool_calls"]) {
-        const toolCall = (assistantMsg["tool_calls"] as Record<string, unknown>[])[0];
-        // OpenAI Responses API uses JSON stringified arguments like Chat API
-        const argumentsStr = toolCall["function"]["arguments"] as string;
+      expect(functionCall).toBeDefined();
+      const argumentsStr = functionCall?.["arguments"] as string;
 
-        expect(typeof argumentsStr).toBe("string");
-        const parsed = JSON.parse(argumentsStr);
-        expect(parsed._incompleteArguments).toBe(
-          "This field should not be here",
-        );
-      }
+      expect(typeof argumentsStr).toBe("string");
+      const parsed = JSON.parse(argumentsStr);
+      expect(parsed._incompleteArguments).toBe(
+        "This field should not be here",
+      );
     });
   });
 

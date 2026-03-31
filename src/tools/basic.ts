@@ -151,7 +151,8 @@ const LIST: ToolDef = {
 const EDIT: ToolDef = {
   name: "edit_file",
   description:
-    "Apply a minimal patch to an existing file by replacing a unique string with a new string. The old_str must appear exactly once in the file.",
+    "Apply a minimal patch to an existing file by replacing a unique string with a new string. The old_str must appear exactly once in the file. " +
+    "Alternatively, use append_str (without old_str/new_str) to append content to the end of the file.",
   parameters: {
     type: "object",
     properties: {
@@ -161,6 +162,10 @@ const EDIT: ToolDef = {
         description: "Exact string to find (must be unique in the file)",
       },
       new_str: { type: "string", description: "Replacement string" },
+      append_str: {
+        type: "string",
+        description: "Content to append to the end of the file. Mutually exclusive with old_str/new_str.",
+      },
       expected_mtime_ms: {
         type: "integer",
         description:
@@ -173,7 +178,7 @@ const EDIT: ToolDef = {
         description: "Display intent — consumed by UI layer to hide intermediate writes.",
       },
     },
-    required: ["path", "old_str", "new_str"],
+    required: ["path"],
   },
   summaryTemplate: "{agent} is editing {path}",
 };
@@ -181,18 +186,12 @@ const EDIT: ToolDef = {
 const WRITE: ToolDef = {
   name: "write_file",
   description:
-    "Create or overwrite a file with the given content. Parent directories are created automatically. " +
-    "Set append=true to append content to the end of an existing file instead of overwriting.",
+    "Create or overwrite a file with the given content. Parent directories are created automatically.",
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path to write" },
-      content: { type: "string", description: "Full file content (or content to append)" },
-      append: {
-        type: "boolean",
-        description: "If true, append content to the end of the file instead of overwriting.",
-        default: false,
-      },
+      content: { type: "string", description: "Full file content" },
       expected_mtime_ms: {
         type: "integer",
         description:
@@ -810,6 +809,62 @@ async function toolEditFile(
   });
 }
 
+async function toolEditFileAppend(
+  filePath: string,
+  appendStr: string,
+  expectedMtimeMs?: number,
+): Promise<string | ToolResult> {
+  return withFileWriteLock(filePath, async () => {
+    if (!existsSync(filePath)) {
+      return `ERROR: File not found: ${filePath}`;
+    }
+
+    let initialVersion: FileVersionSnapshot;
+    try {
+      initialVersion = getFileVersionSnapshot(filePath);
+      validateExpectedMtime(filePath, expectedMtimeMs, initialVersion);
+    } catch (e) {
+      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    let before: string;
+    try {
+      before = readFileSync(filePath, { encoding: "utf-8" });
+    } catch (e) {
+      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    const finalContent = before + appendStr;
+
+    const beforeLines = before.length > 0 ? before.split("\n") : [];
+    const afterLines = finalContent.length > 0 ? finalContent.split("\n") : [];
+    const diffPreview = buildUnifiedDiffPreview(
+      simpleUnifiedDiff(beforeLines, afterLines, filePath, filePath),
+    );
+
+    try {
+      await atomicWriteTextFile(filePath, finalContent, initialVersion.mode, initialVersion);
+    } catch (e) {
+      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
+    return new ToolResult({
+      content: `OK: Appended ${appendStr.length} characters to ${filePath} [mtime_ms=${newMtimeMs}]`,
+      metadata: {
+        path: filePath,
+        isAppend: true,
+        lineCount: afterLines.length,
+        tui_preview: {
+          kind: "diff",
+          text: diffPreview.text,
+          truncated: diffPreview.truncated,
+        },
+      },
+    });
+  });
+}
+
 // ------------------------------------------------------------------
 // write_file
 // ------------------------------------------------------------------
@@ -818,7 +873,6 @@ async function toolWriteFile(
   filePath: string,
   content: string,
   expectedMtimeMs?: number,
-  append = false,
 ): Promise<string | ToolResult> {
   return withFileWriteLock(filePath, async () => {
     try {
@@ -831,10 +885,8 @@ async function toolWriteFile(
         ? readFileSync(filePath, { encoding: "utf-8" })
         : "";
 
-      const finalContent = append ? before + content : content;
-
       const beforeLines = before.length > 0 ? before.split("\n") : [];
-      const afterLines = finalContent.length > 0 ? finalContent.split("\n") : [];
+      const afterLines = content.length > 0 ? content.split("\n") : [];
       const diffPreview = buildUnifiedDiffPreview(
         simpleUnifiedDiff(
           beforeLines,
@@ -844,26 +896,20 @@ async function toolWriteFile(
         ),
       );
 
-      await atomicWriteTextFile(filePath, finalContent, mode, initialVersion);
+      await atomicWriteTextFile(filePath, content, mode, initialVersion);
 
       const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
-      const verb = append ? "Appended" : "Wrote";
       const tuiPreview: Record<string, unknown> = {
         kind: "diff",
         text: diffPreview.text,
         truncated: diffPreview.truncated,
+        newContent: content,
       };
-      // For Create/Overwrite (non-append), attach the full new content
-      // so the TUI can render a complete code preview instead of a partial diff.
-      if (!append) {
-        tuiPreview.newContent = finalContent;
-      }
       return new ToolResult({
-        content: `OK: ${verb} ${content.length} characters to ${filePath} [mtime_ms=${newMtimeMs}]`,
+        content: `OK: Wrote ${content.length} characters to ${filePath} [mtime_ms=${newMtimeMs}]`,
         metadata: {
           path: filePath,
           isNewFile: !initialVersion.exists,
-          isAppend: append,
           lineCount: afterLines.length,
           tui_preview: tuiPreview,
         },
@@ -1869,21 +1915,25 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
       try {
         const a = expectArgsObject("edit_file", args);
         const requestedPath = requiredStringArg("edit_file", a, "path", { nonEmpty: true });
-        const oldStr = requiredStringArg("edit_file", a, "old_str", { nonEmpty: true });
-        const newStr = requiredStringArg("edit_file", a, "new_str");
         const expectedMtimeMs = optionalIntegerArg("edit_file", a, "expected_mtime_ms");
+        const appendStr = optionalStringArg("edit_file", a, "append_str", "");
+        // Validate mode-specific args before resolving path
+        if (!appendStr) {
+          requiredStringArg("edit_file", a, "old_str", { nonEmpty: true });
+          requiredStringArg("edit_file", a, "new_str");
+        }
         const filePath = scopedPath(
           requestedPath,
           "write",
           ctx,
           { mustExist: true, expectFile: true },
         );
-        return toolEditFile(
-          filePath,
-          oldStr,
-          newStr,
-          expectedMtimeMs,
-        );
+        if (appendStr) {
+          return toolEditFileAppend(filePath, appendStr, expectedMtimeMs);
+        }
+        const oldStr = a.old_str as string;
+        const newStr = a.new_str as string;
+        return toolEditFile(filePath, oldStr, newStr, expectedMtimeMs);
       } catch (e) {
         return formatToolError("edit_file", e);
       }
@@ -1900,8 +1950,7 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
           ctx,
           { allowCreate: true, expectFile: true },
         );
-        const appendMode = a.append === true;
-        return toolWriteFile(filePath, content, expectedMtimeMs, appendMode);
+        return toolWriteFile(filePath, content, expectedMtimeMs);
       } catch (e) {
         return formatToolError("write_file", e);
       }

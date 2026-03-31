@@ -186,3 +186,81 @@ describe("OpenAIResponsesProvider openai-codex request shaping", () => {
     });
   });
 });
+
+describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
+  it("emits tool-call close on output_item.done before final response parsing", async () => {
+    const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
+    const events: string[] = [];
+
+    const finalResponse = {
+      output: [
+        {
+          type: "function_call",
+          call_id: "call_1",
+          name: "write_file",
+          arguments: "{\"path\":\"a.txt\",\"content\":\"hello\"}",
+        },
+      ],
+      usage: {
+        input_tokens: 3,
+        output_tokens: 2,
+        input_tokens_details: { cached_tokens: 0 },
+      },
+    };
+
+    (provider as any)._client = {
+      responses: {
+        create: vi.fn(async () =>
+          streamOf([
+            {
+              type: "response.output_item.added",
+              item: {
+                type: "function_call",
+                call_id: "call_1",
+                name: "write_file",
+              },
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              call_id: "call_1",
+              delta: "{\"path\":\"a.txt\",\"content\":\"hello\"}",
+            },
+            {
+              type: "response.output_item.done",
+              item: {
+                type: "function_call",
+                call_id: "call_1",
+                name: "write_file",
+                arguments: "{\"path\":\"a.txt\",\"content\":\"hello\"}",
+              },
+            },
+            { type: "response.completed", response: finalResponse },
+          ]),
+        ),
+      },
+    };
+
+    const resp = await provider.sendMessage(
+      [{ role: "user", content: "hi" } as any],
+      undefined,
+      {
+        onToolCallStart: (id) => events.push(`start:${id}`),
+        onToolCallArgDelta: (id, args) => events.push(`delta:${id}:${args}`),
+        onToolCallClosed: (id) => events.push(`close:${id}`),
+      },
+    );
+
+    expect(events).toContain("close:call_1");
+    expect(events.indexOf("close:call_1")).toBeGreaterThan(events.indexOf("delta:call_1:{\"path\":\"a.txt\",\"content\":\"hello\"}"));
+    expect(resp.toolCalls).toEqual([
+      {
+        id: "call_1",
+        name: "write_file",
+        arguments: {
+          path: "a.txt",
+          content: "hello",
+        },
+      },
+    ]);
+  });
+});

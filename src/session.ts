@@ -112,6 +112,7 @@ import {
   createLogSessionMeta,
   loadLog,
   saveLog,
+  validateAndRepairLog,
   type GlobalTuiPreferences,
   type LoadLogResult,
   type LogSessionMeta,
@@ -1690,12 +1691,21 @@ export class Session {
 
       try {
         const loaded = loadLog(sessionDir);
+        const repaired = validateAndRepairLog(loaded.entries);
+        if (repaired.repaired) {
+          for (const warning of repaired.warnings) {
+            warnings.push(`[repair:${record.id}] ${warning}`);
+          }
+        }
         prepared.push({
           record,
           agent,
           sessionDir,
           artifactsDir,
-          loaded,
+          loaded: {
+            ...loaded,
+            entries: repaired.entries,
+          },
         });
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
@@ -1808,22 +1818,17 @@ export class Session {
 
     if (turnStartIndex < 0 || interruptedTurnIndex < 0) return;
 
-    const interruptedSuffix = " [Interrupted here.]";
     const interruptedMarker = "[Interrupted here.]";
+    this._activeLogEntryId = null;
+
     let latestRound: number | undefined;
     let latestRoundHasToolCall = false;
-    let hasAssistantInTurn = false;
-    let latestAssistantEntry: LogEntry | null = null;
 
     for (let i = turnStartIndex; i < this._log.length; i++) {
       const entry = this._log[i];
       if (entry.discarded || entry.turnIndex !== interruptedTurnIndex) continue;
       if (entry.roundIndex !== undefined && (latestRound === undefined || entry.roundIndex > latestRound)) {
         latestRound = entry.roundIndex;
-      }
-      if (entry.type === "assistant_text") {
-        hasAssistantInTurn = true;
-        latestAssistantEntry = entry;
       }
     }
 
@@ -1842,32 +1847,26 @@ export class Session {
       }
     }
 
-    if (latestAssistantEntry) {
-      const currentDisplay = String(latestAssistantEntry.display ?? "");
-      const currentContent = String(latestAssistantEntry.content ?? "");
-      if (!currentDisplay.trimEnd().endsWith(interruptedSuffix)) {
-        latestAssistantEntry.display = `${currentDisplay.trimEnd()}${interruptedSuffix}`;
-      }
-      if (!currentContent.trimEnd().endsWith(interruptedSuffix)) {
-        latestAssistantEntry.content = `${currentContent.trimEnd()}${interruptedSuffix}`;
-      }
-    }
+    // Partial text is kept as-is (no suffix appended).
 
     const originalTurnCount = this._turnCount;
     this._turnCount = interruptedTurnIndex;
     this._completeMissingToolResultsFromLog(turnStartIndex, "[Interrupted] Tool was not executed.");
-    const lastRole = this._getLastSendableRole();
-    if (this._isUserSideProtocolRole(lastRole) && !hasAssistantInTurn) {
-      const ctxId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
-      this._appendEntry(createAssistantText(
-        this._nextLogId("assistant_text"),
-        interruptedTurnIndex,
-        this._computeNextRoundIndex(),
-        interruptedMarker,
-        interruptedMarker,
-        ctxId,
-      ), false);
-    }
+
+    // Create [Interrupted here.] marker for API protocol (ensures proper role alternation
+    // and model awareness), but hide from TUI — interrupted tools show their own status.
+    const markerCtxId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
+    const markerEntry = createAssistantText(
+      this._nextLogId("assistant_text"),
+      interruptedTurnIndex,
+      this._computeNextRoundIndex(),
+      interruptedMarker,
+      interruptedMarker,
+      markerCtxId,
+    );
+    markerEntry.tuiVisible = false;
+    markerEntry.displayKind = null;
+    this._appendEntry(markerEntry, false);
 
     const interruptionCtxId = this._allocateContextId();
     const interruptionEntry = createUserMessageEntry(
@@ -3169,9 +3168,10 @@ export class Session {
     const interruptedSuffix = " [Interrupted here.]";
     const interruptedMarker = "[Interrupted here.]";
 
-    // Clear ask runtime state for interrupted turn.
+    // Clear ask runtime state and active entry tracker for interrupted turn.
     this._activeAsk = null;
     this._pendingTurnState = null;
+    this._activeLogEntryId = null;
 
     let latestRound: number | undefined;
     let latestRoundHasToolCall = false;
@@ -3214,31 +3214,20 @@ export class Session {
       }
     }
 
-    // Mid-activation interruption keeps partial text and marks it explicitly.
-    if (!activationCompleted) {
-      if (latestAssistantEntry) {
-        const currentDisplay = String(latestAssistantEntry.display ?? "");
-        const currentContent = String(latestAssistantEntry.content ?? "");
-        if (!currentDisplay.trimEnd().endsWith(interruptedSuffix)) {
-          latestAssistantEntry.display = `${currentDisplay.trimEnd()}${interruptedSuffix}`;
-        }
-        if (!currentContent.trimEnd().endsWith(interruptedSuffix)) {
-          latestAssistantEntry.content = `${currentContent.trimEnd()}${interruptedSuffix}`;
-        }
-      } else {
-        const partialText = stripContextTags(accumulatedText).trim();
-        if (partialText) {
-          const partialContextId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
-          this._appendEntry(createAssistantText(
-            this._nextLogId("assistant_text"),
-            this._turnCount,
-            this._computeNextRoundIndex(),
-            `${partialText}${interruptedSuffix}`,
-            `${partialText}${interruptedSuffix}`,
-            partialContextId,
-          ), false);
-          hasAssistantInActivation = true;
-        }
+    // Mid-activation interruption: materialize any unsaved partial text (without suffix).
+    if (!activationCompleted && !latestAssistantEntry) {
+      const partialText = stripContextTags(accumulatedText).trim();
+      if (partialText) {
+        const partialContextId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
+        this._appendEntry(createAssistantText(
+          this._nextLogId("assistant_text"),
+          this._turnCount,
+          this._computeNextRoundIndex(),
+          partialText,
+          partialText,
+          partialContextId,
+        ), false);
+        hasAssistantInActivation = true;
       }
     }
 
@@ -3249,19 +3238,20 @@ export class Session {
       "[Interrupted] Tool was not executed.",
     );
 
-    // If protocol-side currently ends at user-side, add a synthetic assistant marker.
-    const lastRole = this._getLastSendableRole();
-    if (this._isUserSideProtocolRole(lastRole) && !hasAssistantInActivation) {
-      const ctxId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
-      this._appendEntry(createAssistantText(
-        this._nextLogId("assistant_text"),
-        this._turnCount,
-        this._computeNextRoundIndex(),
-        interruptedMarker,
-        interruptedMarker,
-        ctxId,
-      ), false);
-    }
+    // Create [Interrupted here.] marker for API protocol (ensures proper role alternation
+    // and model awareness), but hide from TUI — interrupted tools show their own status.
+    const markerCtxId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
+    const markerEntry = createAssistantText(
+      this._nextLogId("assistant_text"),
+      this._turnCount,
+      this._computeNextRoundIndex(),
+      interruptedMarker,
+      interruptedMarker,
+      markerCtxId,
+    );
+    markerEntry.tuiVisible = false;
+    markerEntry.displayKind = null;
+    this._appendEntry(markerEntry, false);
 
     const snapshot =
       this._interruptSnapshot && this._interruptSnapshot.turnIndex === this._turnCount
@@ -3308,7 +3298,15 @@ export class Session {
    * check if a tool_result exists for it. Create missing tool_results.
    */
   private _completeMissingToolResultsFromLog(fromIdx: number, interruptedContent: string): void {
-    const pendingToolCalls: Array<{ id: string; name: string; roundIndex?: number; contextId?: string }> = [];
+    const pendingToolCalls: Array<{
+      id: string;
+      name: string;
+      roundIndex?: number;
+      contextId?: string;
+      execState?: string;
+      streamState?: string;
+      repairedFromPartial?: boolean;
+    }> = [];
     const resolvedToolCallIds = new Set<string>();
 
     for (let i = fromIdx; i < this._log.length; i++) {
@@ -3320,6 +3318,9 @@ export class Session {
           name: (meta["toolName"] as string) ?? "",
           roundIndex: e.roundIndex,
           contextId: typeof meta["contextId"] === "string" ? meta["contextId"] as string : undefined,
+          execState: typeof meta["toolExecState"] === "string" ? meta["toolExecState"] as string : undefined,
+          streamState: typeof meta["toolStreamState"] === "string" ? meta["toolStreamState"] as string : undefined,
+          repairedFromPartial: meta["repairedFromPartial"] === true,
         });
       } else if (e.type === "tool_result") {
         resolvedToolCallIds.add((e.meta as Record<string, unknown>)["toolCallId"] as string);
@@ -3329,6 +3330,12 @@ export class Session {
     for (const tc of pendingToolCalls) {
       if (resolvedToolCallIds.has(tc.id)) continue;
       if (!tc.id) continue;
+      const content =
+        tc.execState === "running"
+          ? "[Interrupted] Tool execution was interrupted and may have had partial effects."
+          : tc.repairedFromPartial || tc.streamState === "partial" || tc.streamState === "partial_closed"
+            ? "[Interrupted] Incomplete arguments — tool was not executed."
+            : interruptedContent;
       this._appendEntry(createToolResultEntry(
         this._nextLogId("tool_result"),
         this._turnCount,
@@ -3336,10 +3343,10 @@ export class Session {
         {
           toolCallId: tc.id,
           toolName: tc.name,
-          content: interruptedContent,
-          toolSummary: interruptedContent,
+          content,
+          toolSummary: content,
         },
-        { isError: false, contextId: tc.contextId },
+        { isError: false, contextId: tc.contextId, previewText: content, previewDim: true },
       ), false);
     }
   }
@@ -3637,6 +3644,19 @@ export class Session {
         (entry.meta as Record<string, unknown>)["compactPhase"] = true;
       }
       this._appendEntry(entry, false);
+      if (
+        entry.type === "tool_call"
+        && !this._compactInProgress
+        && entry.meta["toolExecState"] !== "completed"
+        && entry.meta["toolExecState"] !== "failed"
+        && (entry.meta["toolExecState"] === "running"
+          || entry.meta["toolExecState"] === "not_started"
+          || entry.meta["toolStreamState"] === "partial"
+          || entry.meta["toolStreamState"] === "partial_closed"
+          || entry.meta["toolStreamState"] === "closed")
+      ) {
+        this._setActiveLogEntry(entry.id);
+      }
     };
 
     const allocId = (type: LogEntry["type"]): string => {
@@ -3644,11 +3664,35 @@ export class Session {
     };
 
     /** Update an existing log entry in-place (for finalizing pending tool call entries). */
-    const updateEntryFn = (entryId: string, patch: { content?: unknown; display?: string }): void => {
+    const updateEntryFn = (entryId: string, patch: { content?: unknown; display?: string; meta?: Record<string, unknown> }): void => {
       const entry = this._log.find((e) => e.id === entryId);
       if (!entry) return;
       if (patch.content !== undefined) entry.content = patch.content;
       if (patch.display !== undefined) entry.display = patch.display;
+      if (patch.meta !== undefined) entry.meta = patch.meta;
+      if (entry.type === "tool_call" && patch.meta) {
+        const execState = patch.meta["toolExecState"];
+        const streamState = patch.meta["toolStreamState"];
+        // Check completion first — exec finished takes priority over stream state
+        if (execState === "completed" || execState === "failed") {
+          if (this._activeLogEntryId === entry.id) {
+            this._setActiveLogEntry(null);
+          } else {
+            this._touchLog();
+          }
+          return;
+        }
+        if (
+          execState === "running"
+          || execState === "not_started"
+          || streamState === "partial"
+          || streamState === "partial_closed"
+          || streamState === "closed"
+        ) {
+          this._setActiveLogEntry(entry.id);
+          return;
+        }
+      }
       this._touchLog();
     };
 
@@ -5665,6 +5709,12 @@ export class Session {
     for (const [name, entry] of this._childSessions) {
       if (entry.status === "working") {
         entry.abortController?.abort();
+        // Normalize the child's log before persisting — the child's async
+        // catch block hasn't run yet, so dangling tool_calls / active state
+        // would be persisted as-is without this.
+        (entry.session as any)._normalizeInterruptedTurnFromLog(
+          "Parent session was interrupted by the user.",
+        );
         if (this._progress) {
           this._progress.emit({
             step: this._turnCount,

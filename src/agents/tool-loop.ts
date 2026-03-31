@@ -14,6 +14,7 @@
 import type {
   BaseProvider,
   ProviderResponse,
+  ToolCall,
   ToolDef,
   ToolResult,
 } from "../providers/base.js";
@@ -165,6 +166,304 @@ function extractToolPreview(metadata: Record<string, unknown>): { text: string; 
   return { text, dim };
 }
 
+interface ToolStreamSection {
+  key: string;
+  label: string;
+  text: string;
+  complete: boolean;
+}
+
+interface StreamableToolCall {
+  canonicalArgs: Record<string, unknown>;
+  sections: ToolStreamSection[];
+}
+
+type PendingToolStreamPhase = "hidden_partial" | "visible_partial" | "closed";
+type PendingToolExecPhase = "not_started" | "running" | "completed" | "failed";
+
+interface PendingToolCallState {
+  name: string;
+  rawArgsBuffer: string;
+  entryId: string | null;
+  canonicalArgs: Record<string, unknown> | null;
+  closedArgs: Record<string, unknown> | null;
+  sections: ToolStreamSection[];
+  executionPromise: Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null> | null;
+  parseError: string | null;
+  repairedFromPartial: boolean;
+  streamPhase: PendingToolStreamPhase;
+  execPhase: PendingToolExecPhase;
+}
+
+interface ParsedPartialField {
+  value: string | number | boolean | null;
+  complete: boolean;
+  kind: "string" | "number" | "boolean" | "null";
+}
+
+function trimIncompleteEscapeSuffix(raw: string): string {
+  const slashIndex = raw.lastIndexOf("\\");
+  if (slashIndex === -1) return raw;
+  const suffix = raw.slice(slashIndex);
+  if (suffix.length === 1) return raw.slice(0, slashIndex);
+  if (suffix[1] === "u") {
+    const hex = suffix.slice(2);
+    if (hex.length < 4 || /[^0-9a-fA-F]/.test(hex)) {
+      return raw.slice(0, slashIndex);
+    }
+  }
+  return raw;
+}
+
+function decodeJsonStringFragment(raw: string): string {
+  const sanitized = trimIncompleteEscapeSuffix(raw);
+  try {
+    return JSON.parse(`"${sanitized}"`) as string;
+  } catch {
+    return sanitized;
+  }
+}
+
+function skipWhitespace(input: string, index: number): number {
+  let cursor = index;
+  while (cursor < input.length && /\s/.test(input[cursor])) cursor += 1;
+  return cursor;
+}
+
+function readQuotedToken(
+  input: string,
+  index: number,
+): { raw: string; complete: boolean; next: number } | null {
+  if (input[index] !== "\"") return null;
+  let cursor = index + 1;
+  let raw = "";
+  while (cursor < input.length) {
+    const ch = input[cursor];
+    if (ch === "\\") {
+      if (cursor + 1 >= input.length) {
+        return { raw, complete: false, next: input.length };
+      }
+      if (input[cursor + 1] === "u") {
+        const unicodeChunk = input.slice(cursor, cursor + 6);
+        if (unicodeChunk.length < 6 || /[^\\u0-9a-fA-F]/.test(unicodeChunk)) {
+          return { raw, complete: false, next: input.length };
+        }
+        raw += unicodeChunk;
+        cursor += 6;
+        continue;
+      }
+      raw += input.slice(cursor, cursor + 2);
+      cursor += 2;
+      continue;
+    }
+    if (ch === "\"") {
+      return { raw, complete: true, next: cursor + 1 };
+    }
+    raw += ch;
+    cursor += 1;
+  }
+  return { raw, complete: false, next: input.length };
+}
+
+function readLiteralToken(
+  input: string,
+  index: number,
+): { raw: string; complete: boolean; next: number } {
+  let cursor = index;
+  while (cursor < input.length && !/[,\s}]/.test(input[cursor])) cursor += 1;
+  const raw = input.slice(index, cursor);
+  const next = skipWhitespace(input, cursor);
+  const complete = next >= input.length || input[next] === "," || input[next] === "}";
+  return { raw, complete, next: cursor };
+}
+
+function parsePartialFlatObject(input: string): Record<string, ParsedPartialField> {
+  const fields: Record<string, ParsedPartialField> = {};
+  let cursor = skipWhitespace(input, 0);
+  if (input[cursor] !== "{") return fields;
+  cursor += 1;
+
+  while (cursor < input.length) {
+    cursor = skipWhitespace(input, cursor);
+    if (cursor >= input.length || input[cursor] === "}") break;
+
+    const keyToken = readQuotedToken(input, cursor);
+    if (!keyToken || !keyToken.complete) break;
+    const key = decodeJsonStringFragment(keyToken.raw);
+    cursor = skipWhitespace(input, keyToken.next);
+    if (cursor >= input.length || input[cursor] !== ":") break;
+    cursor = skipWhitespace(input, cursor + 1);
+    if (cursor >= input.length) break;
+
+    if (input[cursor] === "\"") {
+      const valueToken = readQuotedToken(input, cursor);
+      if (!valueToken) break;
+      fields[key] = {
+        value: decodeJsonStringFragment(valueToken.raw),
+        complete: valueToken.complete,
+        kind: "string",
+      };
+      cursor = valueToken.next;
+      if (!valueToken.complete) break;
+    } else {
+      const literalToken = readLiteralToken(input, cursor);
+      const raw = literalToken.raw;
+      let kind: ParsedPartialField["kind"] | null = null;
+      let value: ParsedPartialField["value"] = null;
+
+      if (/^-?\d+(?:\.\d+)?$/.test(raw)) {
+        kind = "number";
+        value = Number(raw);
+      } else if (raw === "true" || raw === "false") {
+        kind = "boolean";
+        value = raw === "true";
+      } else if (raw === "null") {
+        kind = "null";
+        value = null;
+      }
+
+      if (kind) {
+        fields[key] = {
+          value,
+          complete: literalToken.complete,
+          kind,
+        };
+      }
+      cursor = literalToken.next;
+      if (!literalToken.complete) break;
+    }
+
+    cursor = skipWhitespace(input, cursor);
+    if (cursor < input.length && input[cursor] === ",") {
+      cursor += 1;
+      continue;
+    }
+    if (cursor < input.length && input[cursor] === "}") break;
+  }
+
+  return fields;
+}
+
+function extractCompleteOptionalArgs(
+  fields: Record<string, ParsedPartialField>,
+): Record<string, unknown> {
+  const optional: Record<string, unknown> = {};
+  const maybeAssign = (key: string): void => {
+    const field = fields[key];
+    if (!field || !field.complete) return;
+    optional[key] = field.value;
+  };
+  maybeAssign("expected_mtime_ms");
+  maybeAssign("intent");
+  return optional;
+}
+
+function buildStreamableToolCall(
+  toolName: string,
+  rawArgsBuffer: string,
+): StreamableToolCall | null {
+  const fields = parsePartialFlatObject(rawArgsBuffer);
+  const pathField = fields["path"];
+  if (!pathField || pathField.kind !== "string" || !pathField.complete) {
+    return null;
+  }
+  const path = pathField.value as string;
+  const optional = extractCompleteOptionalArgs(fields);
+
+  if (toolName === "write_file") {
+    const contentField = fields["content"];
+    if (!contentField || contentField.kind !== "string") return null;
+    return {
+      canonicalArgs: {
+        path,
+        content: contentField.value,
+        ...optional,
+      },
+      sections: [{
+        key: "content",
+        label: "Content",
+        text: String(contentField.value ?? ""),
+        complete: contentField.complete,
+      }],
+    };
+  }
+
+  if (toolName === "edit_file") {
+    // Append mode: single "Append" section
+    const appendField = fields["append_str"];
+    if (appendField && appendField.kind === "string") {
+      return {
+        canonicalArgs: { path, append_str: appendField.value, ...optional },
+        sections: [{
+          key: "append_str",
+          label: "Append",
+          text: String(appendField.value ?? ""),
+          complete: appendField.complete,
+        }],
+      };
+    }
+
+    // Replace mode: Before/After sections
+    const sections: ToolStreamSection[] = [];
+    const canonicalArgs: Record<string, unknown> = { path, ...optional };
+
+    const oldField = fields["old_str"];
+    if (oldField && oldField.kind === "string") {
+      canonicalArgs["old_str"] = oldField.value;
+      sections.push({
+        key: "old_str",
+        label: "Before",
+        text: String(oldField.value ?? ""),
+        complete: oldField.complete,
+      });
+    }
+
+    const newField = fields["new_str"];
+    if (newField && newField.kind === "string") {
+      canonicalArgs["new_str"] = newField.value;
+      sections.push({
+        key: "new_str",
+        label: "After",
+        text: String(newField.value ?? ""),
+        complete: newField.complete,
+      });
+    }
+
+    if (sections.length === 0) return null;
+    return { canonicalArgs, sections };
+  }
+
+  return null;
+}
+
+function parseArgsBuffer(argsBuffer: string): { args: Record<string, unknown>; parseError?: string } {
+  try {
+    return {
+      args: argsBuffer ? JSON.parse(argsBuffer) as Record<string, unknown> : {},
+    };
+  } catch {
+    const repaired = recoverPartialArgs(argsBuffer);
+    return {
+      args: repaired,
+      parseError: `Failed to parse streamed tool arguments as JSON (${argsBuffer.length} chars).`,
+    };
+  }
+}
+
+function buildToolCallMeta(
+  base: { toolCallId: string; toolName: string; agentName: string; contextId?: string },
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  const meta: Record<string, unknown> = {
+    toolCallId: base.toolCallId,
+    toolName: base.toolName,
+    agentName: base.agentName,
+  };
+  if (base.contextId !== undefined) meta.contextId = base.contextId;
+  if (extra) Object.assign(meta, extra);
+  return meta;
+}
+
 // ------------------------------------------------------------------
 // ToolLoopResult
 // ------------------------------------------------------------------
@@ -304,10 +603,10 @@ export interface ToolLoopOptions {
   onRetryExhausted?: (maxRetries: number, errMsg: string) => void;
   /** Called when a tool call is first identified during streaming. */
   onToolCallStart?: (callId: string, name: string) => void;
-  /** Called for each incremental JSON argument chunk during tool call streaming. */
-  onToolCallArgDelta?: (callId: string, argDelta: string) => void;
+  /** Called as tool-call arguments evolve; providers pass the latest merged argument buffer. */
+  onToolCallArgDelta?: (callId: string, argBuffer: string) => void;
   /** Update an existing log entry in-place (for finalizing pending tool call entries). */
-  updateEntry?: (entryId: string, patch: { content?: unknown; display?: string }) => void;
+  updateEntry?: (entryId: string, patch: { content?: unknown; display?: string; meta?: Record<string, unknown> }) => void;
   /** Mark a log entry as discarded (for cleanup on retry). */
   discardEntry?: (entryId: string) => void;
 }
@@ -405,32 +704,380 @@ export async function asyncRunToolLoop(
       };
     }
 
-    // Pending tool calls: entries created during streaming, finalized after response
-    const pendingToolCalls = new Map<string, {
-      name: string;
-      argChunks: string[];
-      entryId: string;
-      displayResolved: boolean;
-    }>();
+    const ensureRoundContextId = (): string | undefined => {
+      if (lastRoundId === undefined && contextIdAllocator) {
+        lastRoundId = contextIdAllocator(roundIndex);
+      }
+      return lastRoundId;
+    };
 
-    let wrappedToolCallStart: ((callId: string, name: string) => void) | undefined;
-    let wrappedToolCallArgDelta: ((callId: string, argDelta: string) => void) | undefined;
-    if (onToolCallStartOpt) {
-      wrappedToolCallStart = (callId: string, name: string) => {
-        if (pendingToolCalls.has(callId)) return; // idempotency guard
-        onToolCallStartOpt!(callId, name);
-        // Create pending tool_call entry with empty args
+    const pendingToolCalls = new Map<string, PendingToolCallState>();
+    const startedExecutionPromises = new Set<Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null>>();
+
+    const ensurePendingToolCall = (callId: string, name: string): PendingToolCallState => {
+      let pending = pendingToolCalls.get(callId);
+      if (!pending) {
+        pending = {
+          name,
+          rawArgsBuffer: "",
+          entryId: null,
+          canonicalArgs: null,
+          closedArgs: null,
+          sections: [],
+          executionPromise: null,
+          parseError: null,
+          repairedFromPartial: false,
+          streamPhase: "hidden_partial",
+          execPhase: "not_started",
+        };
+        pendingToolCalls.set(callId, pending);
+      } else if (name && pending.name !== name) {
+        pending.name = name;
+      }
+      return pending;
+    };
+
+    const getToolArgsForEntry = (pending: PendingToolCallState): Record<string, unknown> | null => {
+      return pending.closedArgs ?? pending.canonicalArgs;
+    };
+
+    const deriveSectionsForState = (
+      toolName: string,
+      pending: PendingToolCallState,
+    ): ToolStreamSection[] => {
+      if (pending.sections.length > 0) return pending.sections;
+      const args = pending.closedArgs;
+      if (!args) return [];
+      const streamable = buildStreamableToolCall(toolName, JSON.stringify(args));
+      return streamable?.sections ?? [];
+    };
+
+    const deriveToolStreamState = (pending: PendingToolCallState): string | undefined => {
+      if (pending.streamPhase === "hidden_partial") return undefined;
+      if (pending.streamPhase === "visible_partial") return "partial";
+      return pending.repairedFromPartial ? "partial_closed" : "closed";
+    };
+
+    const syncToolCallEntry = (callId: string): void => {
+      const pending = pendingToolCalls.get(callId);
+      if (!pending) return;
+      const args = getToolArgsForEntry(pending);
+      if (!args) return;
+
+      const sections = deriveSectionsForState(pending.name, pending);
+      const contextId = ensureRoundContextId();
+      const display = generateToolCallDisplay(pending.name, args);
+      const meta = buildToolCallMeta(
+        { toolCallId: callId, toolName: pending.name, agentName, contextId },
+        {
+          toolStreamState: deriveToolStreamState(pending),
+          toolExecState: pending.execPhase,
+          repairedFromPartial: pending.repairedFromPartial,
+          rawArgsBuffer: pending.rawArgsBuffer || undefined,
+          toolStreamSections: sections.length > 0 ? sections : undefined,
+          toolParseError: pending.parseError ?? undefined,
+        },
+      );
+
+      if (!pending.entryId) {
         const entryId = allocId("tool_call");
-        const display = generateToolCallDisplay(name, {});
-        appendEntry(createToolCall(
+        const entry = createToolCall(
           entryId,
           turnIndex,
           roundIndex,
           display,
-          { id: callId, name, arguments: {} },
-          { toolCallId: callId, toolName: name, agentName, contextId: lastRoundId },
+          { id: callId, name: pending.name, arguments: args },
+          { toolCallId: callId, toolName: pending.name, agentName, contextId },
+        );
+        entry.meta = meta;
+        appendEntry(entry);
+        pending.entryId = entryId;
+        return;
+      }
+
+      updateEntry?.(pending.entryId, {
+        content: { id: callId, name: pending.name, arguments: args },
+        display,
+        meta,
+      });
+    };
+
+    const recordPartialToolCall = (
+      callId: string,
+      toolName: string,
+      rawArgsBuffer: string,
+    ): void => {
+      const pending = ensurePendingToolCall(callId, toolName);
+      pending.rawArgsBuffer = rawArgsBuffer;
+      const streamable = buildStreamableToolCall(toolName, rawArgsBuffer);
+      if (!streamable) return;
+      pending.canonicalArgs = streamable.canonicalArgs;
+      pending.sections = streamable.sections;
+      if (pending.streamPhase !== "closed") {
+        pending.streamPhase = "visible_partial";
+      }
+      syncToolCallEntry(callId);
+    };
+
+    const executeResolvedToolCall = (
+      callId: string,
+      toolName: string,
+      args: Record<string, unknown>,
+      fatalParseError?: string,
+    ): Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null> => {
+      const pending = ensurePendingToolCall(callId, toolName);
+      if (pending.executionPromise) {
+        return pending.executionPromise;
+      }
+
+      const run = async (): Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null> => {
+        if (signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+
+        const toolDef = toolsMap?.[toolName];
+        const summary = generateToolSummary(
+          agentName,
+          toolName,
+          args,
+          toolDef?.summaryTemplate ?? "",
+        );
+
+        onToolCall?.(agentName, toolName, args, summary);
+
+        let preflight: ToolPreflightDecision | void = undefined;
+        if (beforeToolExecute) {
+          preflight = await beforeToolExecute({
+            agentName,
+            toolName,
+            toolArgs: args,
+            toolCallId: callId,
+            summary,
+          });
+        }
+
+        pending.execPhase = "running";
+        pending.streamPhase = "closed";
+        syncToolCallEntry(callId);
+
+        let toolOutput: ToolResult | string;
+        const execStartMs = Date.now();
+        try {
+          if (fatalParseError) {
+            toolOutput = new ToolResultClass({
+              content: `ERROR: ${fatalParseError}`,
+            });
+          } else if (preflight && preflight.kind === "deny") {
+            toolOutput = new ToolResultClass({
+              content: `ERROR: ${preflight.message}`,
+            });
+          } else if (toolName in toolExecutors) {
+            toolOutput = await toolExecutors[toolName](args);
+          } else if (builtinExecutor) {
+            toolOutput = await builtinExecutor(toolName, args);
+          } else {
+            toolOutput = new ToolResultClass({
+              content: `ERROR: No executor found for tool '${toolName}'`,
+            });
+          }
+        } catch (e) {
+          if ((e as any)?.name === "AskPendingError") {
+            const ask = (e as { ask?: AskRequest }).ask;
+            if (ask) {
+              ask.payload.toolCallId = callId;
+              ask.roundIndex = roundIndex;
+            }
+            return ask ? { suspendedAsk: { ask, toolCallId: callId, roundIndex } } : null;
+          }
+          if ((e as any)?.name === "AbortError" || signal?.aborted) {
+            throw e;
+          }
+          console.error(`[${agentName}] tool '${toolName}' raised:`, e);
+          toolOutput = new ToolResultClass({
+            content: `ERROR: Tool execution failed — ${e}`,
+          });
+        }
+
+        const resolved: ToolResultClass =
+          typeof toolOutput === "string"
+            ? new ToolResultClass({ content: toolOutput })
+            : toolOutput instanceof ToolResultClass
+              ? toolOutput
+              : new ToolResultClass({ content: String(toolOutput) });
+
+        let resultStr = resolved.content;
+        if (getNotification) {
+          const note = getNotification();
+          if (note) resultStr += note;
+        }
+
+        const toolEntry: Record<string, unknown> = {
+          tool: toolName,
+          arguments: args,
+          result: resultStr,
+        };
+        if (resolved.actionHint) toolEntry["action_hint"] = resolved.actionHint;
+        if (resolved.tags.length > 0) toolEntry["tags"] = resolved.tags;
+        if (Object.keys(resolved.metadata).length > 0) {
+          toolEntry["tool_metadata"] = resolved.metadata;
+        }
+        toolHistory.push(toolEntry);
+
+        const mergedMetadata = { ...resolved.metadata };
+        if (resolved.contentBlocks) {
+          mergedMetadata._contentBlocks = resolved.contentBlocks;
+        }
+        const preview = extractToolPreview(resolved.metadata);
+        appendEntry(createToolResultEntry(
+          allocId("tool_result"),
+          turnIndex,
+          roundIndex,
+          {
+            toolCallId: callId,
+            toolName,
+            content: resultStr,
+            toolSummary: summary,
+          },
+          {
+            isError: resolved.content.startsWith("ERROR:"),
+            contextId: ensureRoundContextId(),
+            toolMetadata: mergedMetadata,
+            execStartMs,
+            previewText: preview?.text,
+            previewDim: preview?.dim,
+          },
         ));
-        pendingToolCalls.set(callId, { name, argChunks: [], entryId, displayResolved: false });
+        if (onSaveCheckpoint) onSaveCheckpoint();
+        onToolResult?.(agentName, toolName, callId, resolved.content.startsWith("ERROR:"), summary);
+
+        pending.execPhase = resolved.content.startsWith("ERROR:") ? "failed" : "completed";
+        syncToolCallEntry(callId);
+        return null;
+      };
+
+      const promise = run();
+      pending.executionPromise = promise;
+      return promise;
+    };
+
+    const trackExecutionPromise = (
+      promise: Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null>,
+    ): void => {
+      startedExecutionPromises.add(promise);
+      void promise.catch(() => {});
+      void promise.finally(() => {
+        startedExecutionPromises.delete(promise);
+      }).catch(() => {});
+    };
+
+    const startExecutionIfNeeded = (
+      callId: string,
+      fatalParseError?: string,
+    ): Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null> | null => {
+      const pending = pendingToolCalls.get(callId);
+      if (!pending || !pending.closedArgs) return null;
+      const promise = executeResolvedToolCall(callId, pending.name, pending.closedArgs, fatalParseError);
+      trackExecutionPromise(promise);
+      return promise;
+    };
+
+    const sanitizeToolArgs = (args: Record<string, unknown>): Record<string, unknown> => {
+      const clean = { ...args };
+      delete clean["_parseError"];
+      return clean;
+    };
+
+    const closeToolCallFromBuffer = (callId: string, argsBuffer: string): void => {
+      const pending = pendingToolCalls.get(callId);
+      if (!pending) return;
+      pending.rawArgsBuffer = argsBuffer;
+      const parsed = parseArgsBuffer(argsBuffer);
+      const repairedFromPartial = Boolean(parsed.parseError && pending.canonicalArgs);
+      pending.repairedFromPartial = repairedFromPartial;
+      pending.parseError = parsed.parseError ?? null;
+      pending.closedArgs = repairedFromPartial
+        ? pending.canonicalArgs
+        : sanitizeToolArgs(parsed.args);
+      pending.streamPhase = "closed";
+
+      const closedStreamable = buildStreamableToolCall(
+        pending.name,
+        JSON.stringify(pending.closedArgs ?? {}),
+      );
+      if (closedStreamable) {
+        pending.sections = closedStreamable.sections;
+        pending.canonicalArgs = closedStreamable.canonicalArgs;
+      }
+      syncToolCallEntry(callId);
+
+      const shouldDeferExecution = Boolean(parsed.parseError && !repairedFromPartial);
+      if (!shouldDeferExecution) {
+        const promise = startExecutionIfNeeded(callId);
+        if (promise) {
+          void promise.then((result) => {
+            if (result?.suspendedAsk) {
+              suspendedAskResult = result.suspendedAsk;
+            }
+          }, () => {});
+        }
+      }
+    };
+
+    const reconcileClosedToolCallFromResponse = (tc: ToolCall): void => {
+      const pending = ensurePendingToolCall(tc.id, tc.name);
+      const providerParseError = typeof tc.arguments["_parseError"] === "string"
+        ? tc.arguments["_parseError"] as string
+        : null;
+      const cleanArgs = sanitizeToolArgs(tc.arguments);
+      const repairedFromPartial = Boolean(providerParseError && pending.canonicalArgs);
+      pending.parseError = providerParseError ?? pending.parseError;
+      pending.repairedFromPartial = pending.repairedFromPartial || repairedFromPartial;
+      pending.closedArgs = repairedFromPartial
+        ? pending.canonicalArgs
+        : cleanArgs;
+      pending.streamPhase = "closed";
+      if (!pending.rawArgsBuffer) {
+        pending.rawArgsBuffer = JSON.stringify(cleanArgs);
+      }
+
+      const closedStreamable = buildStreamableToolCall(
+        pending.name,
+        JSON.stringify(pending.closedArgs ?? {}),
+      );
+      if (closedStreamable) {
+        pending.sections = closedStreamable.sections;
+        pending.canonicalArgs = closedStreamable.canonicalArgs;
+      }
+      syncToolCallEntry(tc.id);
+
+      if (!pending.executionPromise) {
+        const fatalParseError = providerParseError && !repairedFromPartial
+          ? providerParseError
+          : undefined;
+        const promise = startExecutionIfNeeded(tc.id, fatalParseError);
+        if (promise) {
+          void promise.then((result) => {
+            if (result?.suspendedAsk) {
+              suspendedAskResult = result.suspendedAsk;
+            }
+          }, () => {});
+        }
+      }
+    };
+
+    let wrappedToolCallStart: ((callId: string, name: string) => void) | undefined;
+    let wrappedToolCallArgDelta: ((callId: string, argDelta: string) => void) | undefined;
+    let wrappedToolCallClosed: ((callId: string, argsBuffer: string) => void) | undefined;
+    let suspendedAskResult: { ask: AskRequest; toolCallId: string; roundIndex: number } | undefined;
+    if (onToolCallStartOpt) {
+      wrappedToolCallStart = (callId: string, name: string) => {
+        const existing = pendingToolCalls.get(callId);
+        if (existing) {
+          if (name && !existing.name) existing.name = name;
+          return;
+        }
+        onToolCallStartOpt!(callId, name);
+        ensurePendingToolCall(callId, name);
       };
     }
     if (onToolCallArgDeltaOpt) {
@@ -438,26 +1085,12 @@ export async function asyncRunToolLoop(
         onToolCallArgDeltaOpt!(callId, argDelta);
         const pending = pendingToolCalls.get(callId);
         if (!pending) return;
-        pending.argChunks.push(argDelta);
-        // Throttled display resolution: only parse until first display key found
-        if (!pending.displayResolved && updateEntry) {
-          try {
-            const partialArgs = recoverPartialArgs(pending.argChunks.join(""));
-            const display = generateToolCallDisplay(pending.name, partialArgs);
-            // Only update if display changed from just the tool name
-            if (display !== pending.name) {
-              updateEntry(pending.entryId, {
-                content: { id: callId, name: pending.name, arguments: partialArgs },
-                display,
-              });
-              pending.displayResolved = true;
-            }
-          } catch {
-            // Partial parse failed — will retry on next delta
-          }
-        }
+        recordPartialToolCall(callId, pending.name, argDelta);
       };
     }
+    wrappedToolCallClosed = (callId: string, argsBuffer: string) => {
+      closeToolCallFromBuffer(callId, argsBuffer);
+    };
 
     let resp: ProviderResponse;
     // eslint-disable-next-line no-constant-condition
@@ -474,6 +1107,7 @@ export async function asyncRunToolLoop(
             onReasoningChunk: wrappedReasoningChunk,
             onToolCallStart: wrappedToolCallStart,
             onToolCallArgDelta: wrappedToolCallArgDelta,
+            onToolCallClosed: wrappedToolCallClosed,
             signal,
             thinkingLevel,
             promptCacheKey,
@@ -496,10 +1130,9 @@ export async function asyncRunToolLoop(
           throw netErr;
         }
         networkRetryCount++;
-        // Clean up pending tool entries from the failed streaming attempt
         if (discardEntry) {
           for (const [, pending] of pendingToolCalls) {
-            discardEntry(pending.entryId);
+            if (pending.entryId) discardEntry(pending.entryId);
           }
         }
         pendingToolCalls.clear();
@@ -608,201 +1241,40 @@ export async function asyncRunToolLoop(
       ));
     }
 
-    // Pre-compute summaries, emit progress, and run preflight checks
-    const toolSummaries = new Map<string, string>();
-    const preflightDecisions = new Map<string, ToolPreflightDecision>();
-    for (const tc of resp.toolCalls) {
-      const toolDef = toolsMap?.[tc.name];
-      const summary = generateToolSummary(
-        agentName,
-        tc.name,
-        tc.arguments,
-        toolDef?.summaryTemplate ?? "",
-      );
-      toolSummaries.set(tc.id, summary);
-
-      if (onToolCall) {
-        onToolCall(agentName, tc.name, tc.arguments, summary);
-      }
-
-      if (beforeToolExecute) {
-        const decision = await beforeToolExecute({
-          agentName,
-          toolName: tc.name,
-          toolArgs: tc.arguments,
-          toolCallId: tc.id,
-          summary,
-        });
-        if (decision) {
-          preflightDecisions.set(tc.id, decision);
-        }
-      }
-    }
-
-    // Tool call entries — reconcile with pending entries from streaming, or create fresh
+    // Tool calls — reconcile final provider view with per-call runtime state.
     for (const tc of resp.toolCalls) {
       if (!tc.name) continue;
-      const display = generateToolCallDisplay(tc.name, tc.arguments);
-      const pending = pendingToolCalls.get(tc.id);
-      if (pending && updateEntry) {
-        // Finalize the pending entry with complete args and display
-        updateEntry(pending.entryId, {
-          content: { id: tc.id, name: tc.name, arguments: tc.arguments },
-          display,
-        });
-      } else {
-        // No pending entry (provider didn't fire streaming callbacks) — create fresh
-        appendEntry(createToolCall(
-          allocId("tool_call"),
-          turnIndex,
-          roundIndex,
-          display,
-          { id: tc.id, name: tc.name, arguments: tc.arguments },
-          { toolCallId: tc.id, toolName: tc.name, agentName, contextId: lastRoundId },
-        ));
+      reconcileClosedToolCallFromResponse(tc);
+    }
+
+    // Strict barrier: wait for all started tool executions to settle before next provider call.
+    const activeExecutions = [...startedExecutionPromises];
+    if (activeExecutions.length > 0) {
+      const results = await Promise.all(activeExecutions);
+      for (const result of results) {
+        if (result?.suspendedAsk) {
+          suspendedAskResult = result.suspendedAsk;
+        }
       }
     }
     pendingToolCalls.clear();
 
-    // Execute each tool call
-    for (const tc of resp.toolCalls) {
-      // Check abort before each tool execution
-      if (signal?.aborted) {
-        throw new DOMException("The operation was aborted.", "AbortError");
-      }
-
-      const summary = toolSummaries.get(tc.id) ?? "";
-      const execStartMs = Date.now();
-
-      // Execute tool with exception safety
-      let toolOutput: ToolResult | string;
-
-      // Check for JSON parse errors from provider (arguments couldn't be parsed)
-      if (tc.arguments["_parseError"]) {
-        const parseError = tc.arguments["_parseError"] as string;
-        toolOutput = new ToolResultClass({
-          content: `ERROR: ${parseError}`,
-        });
-        // Clean up internal marker from arguments before storing in history
-        const cleanArgs = { ...tc.arguments };
-        delete cleanArgs["_parseError"];
-        tc.arguments = cleanArgs;
-      } else try {
-        const preflight = preflightDecisions.get(tc.id);
-        if (preflight?.kind === "deny") {
-          toolOutput = new ToolResultClass({
-            content: `ERROR: ${preflight.message}`,
-          });
-        } else if (tc.name in toolExecutors) {
-          toolOutput = await toolExecutors[tc.name](tc.arguments);
-        } else if (builtinExecutor) {
-          toolOutput = await builtinExecutor(tc.name, tc.arguments);
-        } else {
-          toolOutput = new ToolResultClass({
-            content: `ERROR: No executor found for tool '${tc.name}'`,
-          });
-        }
-      } catch (e) {
-        if ((e as any)?.name === "AskPendingError") {
-          const ask = (e as { ask?: AskRequest }).ask;
-          if (ask) {
-            ask.payload.toolCallId = tc.id;
-            ask.roundIndex = roundIndex;
-          }
-          return {
-            text: resp.text || "",
-            toolHistory,
-            totalUsage: { inputTokens: totalInput, outputTokens: totalOutput },
-            intermediateText,
-            lastInputTokens: lastInput,
-            reasoningContent: resp.reasoningContent,
-            reasoningState: resp.reasoningState,
-            lastRoundId: lastRoundId,
-            compactNeeded: false,
-            lastTotalTokens: resp.usage.inputTokens + resp.usage.outputTokens,
-            textHandledInLog: streamCallbacksOwnEntries && textHandledViaCallback,
-            reasoningHandledInLog: streamCallbacksOwnEntries && reasoningHandledViaCallback,
-            suspendedAsk: ask ? { ask, toolCallId: tc.id, roundIndex } : undefined,
-          };
-        }
-        if ((e as any)?.name === "AbortError" || signal?.aborted) {
-          throw e;
-        }
-        console.error(`[${agentName}] tool '${tc.name}' raised:`, e);
-        toolOutput = new ToolResultClass({
-          content: `ERROR: Tool execution failed — ${e}`,
-        });
-      }
-
-      // Normalize to ToolResult
-      const resolved: ToolResultClass =
-        typeof toolOutput === "string"
-          ? new ToolResultClass({ content: toolOutput })
-          : toolOutput instanceof ToolResultClass
-            ? toolOutput
-            : new ToolResultClass({ content: String(toolOutput) });
-
-      // Append notification if queued messages are pending
-      let resultStr = resolved.content;
-      if (getNotification) {
-        const note = getNotification();
-        if (note) resultStr += note;
-      }
-
-      const toolEntry: Record<string, unknown> = {
-        tool: tc.name,
-        arguments: tc.arguments,
-        result: resultStr,
+    if (suspendedAskResult) {
+      return {
+        text: resp.text || "",
+        toolHistory,
+        totalUsage: { inputTokens: totalInput, outputTokens: totalOutput },
+        intermediateText,
+        lastInputTokens: lastInput,
+        reasoningContent: resp.reasoningContent,
+        reasoningState: resp.reasoningState,
+        lastRoundId: lastRoundId,
+        compactNeeded: false,
+        lastTotalTokens: resp.usage.inputTokens + resp.usage.outputTokens,
+        textHandledInLog: streamCallbacksOwnEntries && textHandledViaCallback,
+        reasoningHandledInLog: streamCallbacksOwnEntries && reasoningHandledViaCallback,
+        suspendedAsk: suspendedAskResult,
       };
-      if (resolved.actionHint) {
-        toolEntry["action_hint"] = resolved.actionHint;
-      }
-      if (resolved.tags.length > 0) {
-        toolEntry["tags"] = resolved.tags;
-      }
-      if (Object.keys(resolved.metadata).length > 0) {
-        toolEntry["tool_metadata"] = resolved.metadata;
-      }
-      toolHistory.push(toolEntry);
-
-      // Assign contextId to ALL tool_results in the round (metadata only, no visible §{id}§ tag)
-      const finalContent = resultStr;
-      const toolResultContextId =
-        contextIdAllocator && lastRoundId !== undefined
-          ? lastRoundId
-          : undefined;
-
-      // Propagate contentBlocks to metadata for multimodal tool results
-      const mergedMetadata = { ...resolved.metadata };
-      if (resolved.contentBlocks) {
-        mergedMetadata._contentBlocks = resolved.contentBlocks;
-      }
-
-      // Create tool_result entry
-      const preview = extractToolPreview(resolved.metadata);
-      appendEntry(createToolResultEntry(
-        allocId("tool_result"),
-        turnIndex,
-        roundIndex,
-        {
-          toolCallId: tc.id,
-          toolName: tc.name,
-          content: finalContent,
-          toolSummary: summary,
-        },
-        {
-          isError: resolved.content.startsWith("ERROR:"),
-          contextId: toolResultContextId,
-          toolMetadata: mergedMetadata,
-          execStartMs,
-          previewText: preview?.text,
-          previewDim: preview?.dim,
-        },
-      ));
-      if (onSaveCheckpoint) onSaveCheckpoint();
-      if (onToolResult) {
-        onToolResult(agentName, tc.name, tc.id, resolved.content.startsWith("ERROR:"), summary);
-      }
     }
 
     // After all tool calls executed: if compact was triggered, return early

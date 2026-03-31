@@ -19,6 +19,7 @@ function DetailToolTabInner(
   { entry, colors, contentWidth, scrollRef }: DetailToolTabProps,
 ): React.ReactElement {
   const text = entry.toolResultFullText ?? "";
+  const streamSections = entry.toolStreamSections ?? [];
   const displayName = entry.toolDisplayName ?? "Tool";
   const toolText = entry.toolText ?? "";
   const title = toolText ? `${displayName} ${toolText}` : displayName;
@@ -54,6 +55,18 @@ function DetailToolTabInner(
                 <text content={artifact.content} wrapMode="none" />
               </box>
             ))}
+          </box>
+        ) : streamSections.length > 0 ? (
+          <box flexDirection="column" paddingLeft={2} paddingRight={2} gap={0}>
+            {streamSections.map((section) => (
+              <box key={section.key} flexDirection="column" paddingBottom={1}>
+                <text fg={colors.dim} content={`${section.label}${section.complete ? "" : " (streaming)"}`} />
+                <text fg={colors.text} content={section.text} wrapMode="char" />
+              </box>
+            ))}
+            {entry.toolRepairedFromPartial ? (
+              <text fg={colors.dim} content="(repaired from partial stream)" />
+            ) : null}
           </box>
         ) : (
           <box paddingLeft={2} paddingRight={2}>

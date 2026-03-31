@@ -210,6 +210,36 @@ describe("validateAndRepairLog", () => {
     expect(entries[3].meta.toolCallId).toBe("call_1");
   });
 
+  it("recovers partial streamed tool_call as not executed", () => {
+    const entries: LogEntry[] = [
+      createSystemPrompt("sys-001", "prompt"),
+      createUserMessage("user-001", 1, "do it", "do it", "c1"),
+      createToolCall("tc-001", 1, 0, "write_file hello.py", { id: "call_1", name: "write_file", arguments: { path: "hello.py", content: "print('hel" } }, { toolCallId: "call_1", toolName: "write_file", agentName: "a" }),
+    ];
+    entries[2].meta.toolStreamState = "partial";
+    entries[2].meta.repairedFromPartial = true;
+
+    const result = validateAndRepairLog(entries);
+    expect(result.repaired).toBe(true);
+    expect(entries[3].type).toBe("tool_result");
+    expect(String((entries[3].content as any).content)).toContain("repaired from a partial stream");
+    expect(String((entries[3].content as any).content)).toContain("not executed");
+  });
+
+  it("recovers running orphaned tool_call as effect unknown", () => {
+    const entries: LogEntry[] = [
+      createSystemPrompt("sys-001", "prompt"),
+      createUserMessage("user-001", 1, "do it", "do it", "c1"),
+      createToolCall("tc-001", 1, 0, "bash rm -rf tmp", { id: "call_1", name: "bash", arguments: { command: "rm -rf tmp" } }, { toolCallId: "call_1", toolName: "bash", agentName: "a" }),
+    ];
+    entries[2].meta.toolExecState = "running";
+
+    const result = validateAndRepairLog(entries);
+    expect(result.repaired).toBe(true);
+    expect(entries[3].type).toBe("tool_result");
+    expect(String((entries[3].content as any).content)).toContain("unknown real-world effects");
+  });
+
   it("discards orphan ask_resolution", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),

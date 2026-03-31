@@ -23,6 +23,8 @@ interface ThinkingEntryProps {
 }
 
 const thinkingBaseColor = RGBA.fromHex(THINKING_COLOR);
+const THINKING_PREVIEW_LINES = 10;
+const LINE_PREFIX = "  ";
 
 function ThinkingEntryInner(
   { entry, colors, onEntryClick }: ThinkingEntryProps,
@@ -30,6 +32,11 @@ function ThinkingEntryInner(
   const active = entry.state === "active";
   const spinner = useSpinner(THINKING_SPINNER_FRAMES, THINKING_SPINNER_INTERVAL, active);
   const shimmer = useShimmer("Thinking", thinkingBaseColor, active);
+  const fullText = entry.thinkingFullText ?? "";
+  const lines = fullText.split("\n");
+  const truncated = lines.length > THINKING_PREVIEW_LINES;
+  const visibleLines = truncated ? lines.slice(0, THINKING_PREVIEW_LINES) : lines;
+  const hiddenCount = Math.max(0, lines.length - THINKING_PREVIEW_LINES);
 
   const indicator = active
     ? spinner
@@ -47,13 +54,14 @@ function ThinkingEntryInner(
   );
 
   return (
-    <SelectableRow hoverBackgroundColor={colors.border} onPress={onEntryClick ? () => onEntryClick(entry) : undefined}>
-      <box
-        flexDirection="row"
-        paddingLeft={2}
-        paddingTop={1}
-        width="100%"
-      >
+    <box
+      flexDirection="column"
+      paddingLeft={1}
+      paddingTop={1}
+      width="100%"
+      gap={0}
+    >
+      <box flexDirection="row" width="100%">
         <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
         {active ? (
           <text content={shimmer} flexShrink={0} />
@@ -61,7 +69,36 @@ function ThinkingEntryInner(
           <text fg={THINKING_COLOR} content="Thinking" flexShrink={0} />
         )}
       </box>
-    </SelectableRow>
+      {fullText.trim().length > 0 ? (
+        <box flexDirection="column" paddingLeft={1} paddingTop={1} gap={0}>
+          {visibleLines.map((line, idx) => (
+            <box key={idx} flexDirection="row" width="100%">
+              <text fg={colors.dim} content={LINE_PREFIX} />
+              <text fg={colors.dim} content={line} wrapMode="char" />
+            </box>
+          ))}
+          {truncated ? (
+            <SelectableRow
+              hoverBackgroundColor={colors.border}
+              onPress={onEntryClick ? () => onEntryClick(entry) : undefined}
+            >
+              <text
+                fg={colors.dim}
+                content={`${LINE_PREFIX}... (${hiddenCount} more lines${onEntryClick ? ", CLICK to open" : ""})`}
+              />
+            </SelectableRow>
+          ) : null}
+          {entry.state === "error" ? (
+            <text fg={colors.orange} content={`${LINE_PREFIX}[Interrupted — not sent to model]`} />
+          ) : null}
+        </box>
+      ) : null}
+      {entry.state === "error" && !fullText.trim() ? (
+        <box paddingLeft={1} paddingTop={1}>
+          <text fg={colors.orange} content={`${LINE_PREFIX}[Interrupted — not sent to model]`} />
+        </box>
+      ) : null}
+    </box>
   );
 }
 

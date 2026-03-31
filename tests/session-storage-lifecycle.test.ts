@@ -817,16 +817,24 @@ describe("session storage lifecycle", () => {
       (session as any)._handleInterruption(logLenBefore, "partial", { activationCompleted: false });
 
       const log = (session as any)._log as any[];
+      // Partial text is kept without suffix
       const interruptedText = log.find((e) => e.id === "as-001");
-      expect(interruptedText.display).toContain("[Interrupted here.]");
-      expect(interruptedText.content).toContain("[Interrupted here.]");
+      expect(interruptedText.display).toBe("partial");
+      expect(interruptedText.content).toBe("partial");
 
       const reasoning = log.find((e) => e.id === "rs-001");
       expect(reasoning.discarded).toBe(true);
 
       const interruptedToolResult = log.find((e) => e.type === "tool_result" && e.meta?.toolCallId === "call-1");
       expect(interruptedToolResult).toBeTruthy();
-      expect(interruptedToolResult.content.content).toBe("[Interrupted here.]");
+      expect(interruptedToolResult.content.content).toBe("[Interrupted] Tool was not executed.");
+      // Interrupted tool_result now has previewText → tuiVisible
+      expect(interruptedToolResult.tuiVisible).toBe(true);
+
+      // [Interrupted here.] marker exists for API protocol but hidden from TUI
+      const markerEntry = log.find((e) => e.type === "assistant_text" && String(e.display) === "[Interrupted here.]");
+      expect(markerEntry).toBeTruthy();
+      expect(markerEntry.tuiVisible).toBe(false);
 
       const interruptionUser = log[log.length - 1];
       expect(interruptionUser.type).toBe("user_message");
@@ -841,7 +849,7 @@ describe("session storage lifecycle", () => {
       expect(tuiEntries).toEqual([
         { kind: "tool_call", text: "edit_file src/a.ts", id: "tc-001", startedAt: expect.any(Number), elapsedMs: expect.any(Number), meta: { toolName: "edit_file", toolArgs: { path: "src/a.ts" } } },
         { kind: "assistant", text: "partial", id: "as-001" },
-        { kind: "interrupted_marker", text: "[Interrupted here.]", id: "as-001:interrupt" },
+        { kind: "tool_result", text: "[Interrupted] Tool was not executed.", id: expect.any(String), dim: true, meta: { toolName: "edit_file", isError: false } },
       ]);
 
       const apiMessages = projectToApiMessages(log);

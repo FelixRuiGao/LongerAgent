@@ -185,4 +185,116 @@ describe("OpenAIChatProvider streamed tool arguments", () => {
       content: "hello",
     });
   });
+
+  it("closes a streamed tool call when the next tool call entry begins", async () => {
+    const provider = new OpenAIChatProvider(modelConfig());
+    const events: string[] = [];
+
+    const create = vi.fn(async (kwargs: Record<string, unknown>) => {
+      if (kwargs["stream"] === true) {
+        return streamFrom([
+          {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: "call_1",
+                  function: {
+                    name: "write_file",
+                    arguments: "{\"path\":\"a.txt\",\"content\":\"one\"}",
+                  },
+                }],
+              },
+            }],
+          },
+          {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 1,
+                  id: "call_2",
+                  function: {
+                    name: "write_file",
+                    arguments: "{\"path\":\"b.txt\",\"content\":\"two\"}",
+                  },
+                }],
+              },
+            }],
+          },
+        ]);
+      }
+      return {
+        choices: [{ message: { content: "", tool_calls: [] } }],
+      };
+    });
+
+    (provider as unknown as { _client: unknown })._client = {
+      chat: { completions: { create } },
+    };
+
+    await provider.sendMessage(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      {
+        onToolCallStart: (id) => events.push(`start:${id}`),
+        onToolCallClosed: (id) => events.push(`close:${id}`),
+      },
+    );
+
+    expect(events).toContain("close:call_1");
+    expect(events.indexOf("close:call_1")).toBeLessThan(events.indexOf("start:call_2"));
+  });
+
+  it("closes a streamed tool call before switching back to text output", async () => {
+    const provider = new OpenAIChatProvider(modelConfig());
+    const events: string[] = [];
+
+    const create = vi.fn(async (kwargs: Record<string, unknown>) => {
+      if (kwargs["stream"] === true) {
+        return streamFrom([
+          {
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: "call_1",
+                  function: {
+                    name: "write_file",
+                    arguments: "{\"path\":\"a.txt\",\"content\":\"one\"}",
+                  },
+                }],
+              },
+            }],
+          },
+          {
+            choices: [{
+              delta: {
+                content: "Done.",
+              },
+            }],
+          },
+        ]);
+      }
+      return {
+        choices: [{ message: { content: "", tool_calls: [] } }],
+      };
+    });
+
+    (provider as unknown as { _client: unknown })._client = {
+      chat: { completions: { create } },
+    };
+
+    await provider.sendMessage(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      {
+        onToolCallStart: (id) => events.push(`start:${id}`),
+        onToolCallClosed: (id) => events.push(`close:${id}`),
+        onTextChunk: (chunk) => events.push(`text:${chunk}`),
+      },
+    );
+
+    expect(events).toContain("close:call_1");
+    expect(events.indexOf("close:call_1")).toBeLessThan(events.indexOf("text:Done."));
+  });
 });

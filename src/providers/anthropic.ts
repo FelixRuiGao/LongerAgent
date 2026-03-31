@@ -376,7 +376,7 @@ export class AnthropicProvider extends BaseProvider {
     this._applyCacheBreakpoint(kwargs);
 
     if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallStart) {
-      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal, options?.onToolCallStart, options?.onToolCallArgDelta);
+      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal, options?.onToolCallStart, options?.onToolCallArgDelta, options?.onToolCallClosed);
     }
 
     const resp = await this._client.messages.create(
@@ -397,6 +397,7 @@ export class AnthropicProvider extends BaseProvider {
     signal?: AbortSignal,
     onToolCallStart?: (callId: string, name: string) => void,
     onToolCallArgDelta?: (callId: string, argDelta: string) => void,
+    onToolCallClosed?: (callId: string, argsBuffer: string) => void,
   ): Promise<ProviderResponse> {
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
@@ -407,6 +408,7 @@ export class AnthropicProvider extends BaseProvider {
     let currentThinking: Record<string, string> | null = null;
     // Map block index → block id for routing input_json_delta events
     const indexToBlockId = new Map<number, string>();
+    const toolJsonById = new Map<string, string>();
 
     const stream = this._client.messages.stream(
       kwargs as unknown as Anthropic.MessageCreateParamsStreaming,
@@ -437,6 +439,9 @@ export class AnthropicProvider extends BaseProvider {
           if (blockId && blockName && onToolCallStart) {
             onToolCallStart(blockId, blockName);
           }
+          if (blockId && !toolJsonById.has(blockId)) {
+            toolJsonById.set(blockId, "");
+          }
         }
       } else if (eventType === "content_block_delta") {
         const index = (event as unknown as Record<string, unknown>)["index"] as number | undefined;
@@ -466,7 +471,9 @@ export class AnthropicProvider extends BaseProvider {
           if (partial && onToolCallArgDelta && index !== undefined) {
             const blockId = indexToBlockId.get(index);
             if (blockId) {
-              onToolCallArgDelta(blockId, partial);
+              const merged = (toolJsonById.get(blockId) ?? "") + partial;
+              toolJsonById.set(blockId, merged);
+              onToolCallArgDelta(blockId, merged);
             }
           }
         }
@@ -474,6 +481,13 @@ export class AnthropicProvider extends BaseProvider {
         if (currentThinking) {
           reasoningBlocks.push(currentThinking);
           currentThinking = null;
+        }
+        const index = (event as unknown as Record<string, unknown>)["index"] as number | undefined;
+        if (index !== undefined) {
+          const blockId = indexToBlockId.get(index);
+          if (blockId && onToolCallClosed) {
+            onToolCallClosed(blockId, toolJsonById.get(blockId) ?? "");
+          }
         }
       }
     }

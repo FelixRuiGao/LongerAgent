@@ -22,7 +22,7 @@ function TurnSummaryEntryInner(
   const line = "─".repeat(leftDashes) + label + "─".repeat(rightDashes);
 
   return (
-    <box paddingLeft={2} width="100%" paddingTop={1}>
+    <box paddingLeft={1} width="100%" paddingTop={1}>
       <text fg={colors.dim} content={line} />
     </box>
   );

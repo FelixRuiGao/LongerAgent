@@ -8,4 +8,10 @@ Apply a minimal patch by replacing a unique string. `old_str` must appear **exac
 edit_file(path="{PROJECT_ROOT}/example.py", old_str="Hello", new_str="Hi")
 ```
 
+To append content to the end of a file, use `append_str` instead of `old_str`/`new_str`:
+
+```
+edit_file(path="{PROJECT_ROOT}/log.txt", append_str="\nNew entry")
+```
+
 Supports `expected_mtime_ms` for concurrency safety. Prefer `edit_file` over `write_file` for modifications — it's smaller and safer.

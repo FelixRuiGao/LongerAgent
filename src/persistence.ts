@@ -857,6 +857,15 @@ export function validateAndRepairLog(
       // Check if this is the last entry or near the end — likely a crash
       const isNearEnd = entries.length - i <= 5;
       if (isNearEnd) {
+        const execState = entry.meta.toolExecState as string | undefined;
+        const streamState = entry.meta.toolStreamState as string | undefined;
+        const repairedFromPartial = entry.meta.repairedFromPartial === true;
+        const recoveredContent =
+          execState === "running"
+            ? "Session recovered. Tool execution was interrupted and may have caused partial or unknown real-world effects."
+            : repairedFromPartial || streamState === "partial" || streamState === "partial_closed"
+              ? "Session recovered. Tool call was interrupted before execution. Arguments were repaired from a partial stream and the tool was not executed."
+              : "Session recovered. Tool result unavailable due to abnormal termination.";
         // Add a recovered tool_result (we need an ID — use a predictable format)
         const recoveredId = `tr-recovered-${toolCallId}`;
         const recoveredEntry: LogEntry = {
@@ -872,7 +881,7 @@ export function validateAndRepairLog(
           content: {
             toolCallId,
             toolName: entry.meta.toolName as string,
-            content: "Session recovered. Tool result unavailable due to abnormal termination.",
+            content: recoveredContent,
             toolSummary: "(recovered)",
           },
           archived: false,

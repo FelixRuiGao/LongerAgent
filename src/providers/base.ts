@@ -67,6 +67,8 @@ export interface SendMessageOptions {
   onToolCallStart?: (callId: string, name: string) => void;
   /** Fired for each incremental JSON argument chunk during tool call streaming. */
   onToolCallArgDelta?: (callId: string, argDelta: string) => void;
+  /** Fired when a tool call's argument buffer is considered closed for this response. */
+  onToolCallClosed?: (callId: string, argsBuffer: string) => void;
   signal?: AbortSignal;
   /** Unified thinking level string ("off", "low", "medium", "high", "adaptive", etc.) */
   thinkingLevel?: string;

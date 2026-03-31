@@ -35,7 +35,8 @@ interface InputAreaProps {
   hint: string | null;
   contextTokens: number;
   contextLimit: number | undefined;
-  terminalWidth: number;
+  /** Width of the content column (terminal width minus screen padding). */
+  contentWidth: number;
   colors: ConversationPalette;
   inputVisibleLines: number;
   maxInputLines: number;
@@ -96,7 +97,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     hint,
     contextTokens,
     contextLimit,
-    terminalWidth,
+    contentWidth,
     colors,
     inputVisibleLines,
     maxInputLines,
@@ -170,8 +171,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
           placeholderColor={colors.muted}
           cursorStyle={{ style: "block", blinking: false }}
           cursorColor={colors.accent}
-          paddingRight={1}
-          width="100%"
+          width={Math.max(10, contentWidth - 2 - 2 - 1)}
           height={inputVisibleLines}
           maxHeight={maxInputLines}
           minHeight={1}

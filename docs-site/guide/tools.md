@@ -11,8 +11,8 @@ These tools are available to the agent in every session.
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read a file's contents. Supports text files and images (PNG, JPG, GIF, WebP) on multimodal models -- the agent can directly see and analyze images. |
-| `write_file` | Write content to a file, creating it if it does not exist. Set `append=true` to append instead of overwrite. |
-| `edit_file` | Edit a file with targeted find-and-replace operations. |
+| `write_file` | Write content to a file, creating it if it does not exist. |
+| `edit_file` | Edit a file with targeted find-and-replace operations. Use `append_str` to append content to the end of a file. |
 | `list_dir` | List the contents of a directory. |
 | `glob` | Find files matching a glob pattern (e.g., `**/*.ts`). |
 | `grep` | Search file contents with regular expressions. |

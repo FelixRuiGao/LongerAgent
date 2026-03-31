@@ -105,6 +105,16 @@ function toConversationEntry(
       ce.meta = {};
       if (typeof toolName === "string") ce.meta.toolName = toolName;
       if (toolArgs && typeof toolArgs === "object") ce.meta.toolArgs = toolArgs;
+      const streamSections = entry.meta["toolStreamSections"];
+      if (Array.isArray(streamSections)) ce.meta.toolStreamSections = streamSections;
+      const streamState = entry.meta["toolStreamState"];
+      if (typeof streamState === "string") ce.meta.toolStreamState = streamState;
+      const execState = entry.meta["toolExecState"];
+      if (typeof execState === "string") ce.meta.toolExecState = execState;
+      const repaired = entry.meta["repairedFromPartial"];
+      if (typeof repaired === "boolean") ce.meta.repairedFromPartial = repaired;
+      const parseError = entry.meta["toolParseError"];
+      if (typeof parseError === "string") ce.meta.toolParseError = parseError;
     }
   }
 

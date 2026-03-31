@@ -127,9 +127,31 @@ function buildToolOperation(
   const toolName = getToolName(callEntry);
   const toolArgs = getToolArgs(callEntry);
   const profile = getToolProfile(toolName);
+  const callMeta = getMeta(callEntry);
+  const toolStreamSections = Array.isArray(callMeta.toolStreamSections)
+    ? callMeta.toolStreamSections as PresentationEntry["toolStreamSections"]
+    : undefined;
+  const toolExecState = typeof callMeta.toolExecState === "string"
+    ? callMeta.toolExecState
+    : undefined;
+  const toolStreamState = typeof callMeta.toolStreamState === "string"
+    ? callMeta.toolStreamState
+    : undefined;
+  const toolRepairedFromPartial = callMeta.repairedFromPartial === true;
+  const execFinished = toolExecState === "completed" || toolExecState === "failed";
+  const toolStillWorking =
+    !resultEntry && !execFinished && (
+      toolExecState === "running"
+      || toolExecState === "not_started"
+      || toolStreamState === "partial"
+      || toolStreamState === "partial_closed"
+      || toolStreamState === "closed"
+    );
 
   let state: PresentationState;
-  if (activeEntryId && activeEntryId === callEntry.id) {
+  if (toolStillWorking) {
+    state = "active";
+  } else if (!resultEntry && activeEntryId && activeEntryId === callEntry.id) {
     state = "active";
   } else if (!resultEntry) {
     // If another entry is active (streaming/executing), this one is queued — show as done
@@ -146,17 +168,15 @@ function buildToolOperation(
     ? ((resultEntry.entry.meta as Record<string, unknown>)?.toolMetadata as Record<string, unknown>) ?? undefined
     : undefined;
 
-  // Resolve dynamic display name for write_file variants
+  // Resolve dynamic display name for variants
   let displayName = profile.displayName;
   let noDiffBackground = false;
-  if (toolName === "write_file" && resultMeta) {
-    if (resultMeta.isAppend === true) {
+  if (toolName === "edit_file") {
+    if (toolArgs["append_str"] !== undefined || resultMeta?.isAppend === true) {
       displayName = "Append";
-    } else if (resultMeta.isNewFile === true) {
-      displayName = "Create";
-      noDiffBackground = true;
-    } else if (resultMeta.isNewFile === false) {
-      displayName = "Overwrite";
+    }
+  } else if (toolName === "write_file") {
+    if (resultMeta) {
       noDiffBackground = true;
     }
   }
@@ -190,6 +210,10 @@ function buildToolOperation(
     toolElapsedMs: callEntry.entry.elapsedMs,
     toolInlineResult: inlineResult,
     toolResultFullText: resultEntry?.entry.text,
+    toolStreamSections,
+    toolRepairedFromPartial,
+    toolExecState,
+    toolStreamState,
     sourceEntries,
   };
 }

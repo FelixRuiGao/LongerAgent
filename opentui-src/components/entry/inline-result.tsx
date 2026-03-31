@@ -173,7 +173,7 @@ function InlineResultInner(
       }
 
       return (
-        <box flexDirection="column" paddingLeft={4} gap={0}>
+        <box flexDirection="column" paddingLeft={3} gap={0}>
           {elements}
         </box>
       );
@@ -184,7 +184,7 @@ function InlineResultInner(
     const artifactHiddenCount = Math.max(0, artifacts.length - data.maxLines);
 
     return (
-      <box flexDirection="column" paddingLeft={4} gap={0}>
+      <box flexDirection="column" paddingLeft={3} gap={0}>
         {visibleArtifacts.map((artifact, idx) => (
           <box
             key={idx}
@@ -217,7 +217,7 @@ function InlineResultInner(
   const hiddenCount = Math.max(0, lines.length - data.maxLines);
 
   return (
-    <box flexDirection="column" paddingLeft={4} gap={0}>
+    <box flexDirection="column" paddingLeft={3} gap={0}>
       {visibleLines.map((line, idx) => (
         <box key={idx} flexDirection="row" width="100%">
           <text

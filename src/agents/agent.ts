@@ -229,7 +229,7 @@ export class Agent {
     onRetryExhausted?: (maxRetries: number, errMsg: string) => void,
     onToolCallStart?: (callId: string, name: string) => void,
     onToolCallArgDelta?: (callId: string, argDelta: string) => void,
-    updateEntry?: (entryId: string, patch: { content?: unknown; display?: string }) => void,
+    updateEntry?: (entryId: string, patch: { content?: unknown; display?: string; meta?: Record<string, unknown> }) => void,
     discardEntry?: (entryId: string) => void,
   ): Promise<ToolLoopResult> {
     return asyncRunToolLoop({

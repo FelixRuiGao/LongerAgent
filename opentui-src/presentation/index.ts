@@ -19,4 +19,5 @@ export {
   TOOL_SPINNER_INTERVAL,
 } from "./use-spinner.js";
 export { useShimmer } from "./use-shimmer.js";
+export { useTransition } from "./use-transition.js";
 export { useTurnTimer, formatElapsed } from "./use-turn-timer.js";
