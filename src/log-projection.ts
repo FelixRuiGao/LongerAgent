@@ -108,6 +108,15 @@ function toConversationEntry(
     }
   }
 
+  // Forward reasoningComplete for reasoning entries (needed by TUI active entry tracker)
+  if (entry.type === "reasoning") {
+    const rc = entry.meta["reasoningComplete"];
+    if (rc !== undefined) {
+      ce.meta ??= {};
+      ce.meta.reasoningComplete = rc;
+    }
+  }
+
   if (entry.type === "tool_result") {
     const toolName = entry.meta["toolName"];
     const toolMetadata = entry.meta["toolMetadata"];

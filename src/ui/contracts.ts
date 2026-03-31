@@ -63,6 +63,8 @@ export interface Session {
   log?: readonly LogEntry[];
   subscribeLog?(listener: () => void): () => void;
   getLogRevision?(): number;
+  /** The ID of the currently active (streaming/executing) log entry, or null. */
+  activeLogEntryId?: string | null;
   getChildSessionSnapshots?(): ChildSessionSnapshot[];
   getChildSessionLog?(childId: string): readonly LogEntry[] | null;
   interruptChildSession?(childId: string): { accepted: boolean; reason?: string };

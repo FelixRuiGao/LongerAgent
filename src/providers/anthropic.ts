@@ -375,8 +375,8 @@ export class AnthropicProvider extends BaseProvider {
     // Prompt caching (always enabled)
     this._applyCacheBreakpoint(kwargs);
 
-    if (options?.onTextChunk || options?.onReasoningChunk) {
-      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal);
+    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallStart) {
+      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal, options?.onToolCallStart, options?.onToolCallArgDelta);
     }
 
     const resp = await this._client.messages.create(
@@ -395,6 +395,8 @@ export class AnthropicProvider extends BaseProvider {
     onTextChunk?: (chunk: string) => void,
     onReasoningChunk?: (chunk: string) => void,
     signal?: AbortSignal,
+    onToolCallStart?: (callId: string, name: string) => void,
+    onToolCallArgDelta?: (callId: string, argDelta: string) => void,
   ): Promise<ProviderResponse> {
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
@@ -403,6 +405,8 @@ export class AnthropicProvider extends BaseProvider {
     const citations: Citation[] = [];
 
     let currentThinking: Record<string, string> | null = null;
+    // Map block index → block id for routing input_json_delta events
+    const indexToBlockId = new Map<number, string>();
 
     const stream = this._client.messages.stream(
       kwargs as unknown as Anthropic.MessageCreateParamsStreaming,
@@ -413,6 +417,7 @@ export class AnthropicProvider extends BaseProvider {
       const eventType = (event as unknown as Record<string, unknown>)["type"] as string;
 
       if (eventType === "content_block_start") {
+        const index = (event as unknown as Record<string, unknown>)["index"] as number | undefined;
         const block = (event as unknown as Record<string, unknown>)[
           "content_block"
         ] as Record<string, unknown> | undefined;
@@ -423,8 +428,18 @@ export class AnthropicProvider extends BaseProvider {
             type: "redacted_thinking",
             data: (block["data"] as string) || "",
           });
+        } else if (block?.["type"] === "tool_use") {
+          const blockId = (block["id"] as string) || "";
+          const blockName = (block["name"] as string) || "";
+          if (index !== undefined && blockId) {
+            indexToBlockId.set(index, blockId);
+          }
+          if (blockId && blockName && onToolCallStart) {
+            onToolCallStart(blockId, blockName);
+          }
         }
       } else if (eventType === "content_block_delta") {
+        const index = (event as unknown as Record<string, unknown>)["index"] as number | undefined;
         const delta = (event as unknown as Record<string, unknown>)["delta"] as
           | Record<string, unknown>
           | undefined;
@@ -446,6 +461,14 @@ export class AnthropicProvider extends BaseProvider {
         } else if (deltaType === "signature_delta") {
           const sig = (delta["signature"] as string) || "";
           if (sig && currentThinking) currentThinking["signature"] += sig;
+        } else if (deltaType === "input_json_delta") {
+          const partial = (delta["partial_json"] as string) || "";
+          if (partial && onToolCallArgDelta && index !== undefined) {
+            const blockId = indexToBlockId.get(index);
+            if (blockId) {
+              onToolCallArgDelta(blockId, partial);
+            }
+          }
         }
       } else if (eventType === "content_block_stop") {
         if (currentThinking) {

@@ -490,12 +490,14 @@ export class OpenAIResponsesProvider extends BaseProvider {
     }
 
     // Codex backend requires stream=true for all requests.
-    if (options?.onTextChunk || options?.onReasoningChunk || this._config.provider === "openai-codex") {
+    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallStart || this._config.provider === "openai-codex") {
       return this._callStream(
         kwargs,
         requestOptions,
         options?.onTextChunk,
         options?.onReasoningChunk,
+        options?.onToolCallStart,
+        options?.onToolCallArgDelta,
       );
     }
 
@@ -512,6 +514,8 @@ export class OpenAIResponsesProvider extends BaseProvider {
     requestOptions?: Record<string, unknown>,
     onTextChunk?: (chunk: string) => void,
     onReasoningChunk?: (chunk: string) => void,
+    onToolCallStart?: (callId: string, name: string) => void,
+    onToolCallArgDelta?: (callId: string, argDelta: string) => void,
   ): Promise<ProviderResponse> {
     kwargs["stream"] = true;
 
@@ -549,6 +553,10 @@ export class OpenAIResponsesProvider extends BaseProvider {
         }
         if (delta) {
           toolAcc.get(callId)!.argChunks.push(delta);
+          // Emit arg delta for known tool calls (has name → not a ghost reasoning item)
+          if (onToolCallArgDelta && toolAcc.get(callId)!.name) {
+            onToolCallArgDelta(callId, delta);
+          }
         }
       } else if (eventType === "response.output_item.added") {
         const item = event["item"] as Record<string, unknown> | undefined;
@@ -560,6 +568,10 @@ export class OpenAIResponsesProvider extends BaseProvider {
               toolAcc.set(callId, { name, argChunks: [] });
             } else {
               toolAcc.get(callId)!.name = name;
+            }
+            // Emit tool call start for real function calls (non-empty name)
+            if (name && onToolCallStart) {
+              onToolCallStart(callId, name);
             }
           }
         }

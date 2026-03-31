@@ -17,7 +17,7 @@ import type {
   ToolDef,
   ToolResult,
 } from "../providers/base.js";
-import { ToolResult as ToolResultClass } from "../providers/base.js";
+import { ToolResult as ToolResultClass, recoverPartialArgs } from "../providers/base.js";
 import {
   isRetryableNetworkError,
   computeRetryDelay,
@@ -302,6 +302,14 @@ export interface ToolLoopOptions {
   onRetrySuccess?: (attempt: number) => void;
   /** Called when all network retries have been exhausted. */
   onRetryExhausted?: (maxRetries: number, errMsg: string) => void;
+  /** Called when a tool call is first identified during streaming. */
+  onToolCallStart?: (callId: string, name: string) => void;
+  /** Called for each incremental JSON argument chunk during tool call streaming. */
+  onToolCallArgDelta?: (callId: string, argDelta: string) => void;
+  /** Update an existing log entry in-place (for finalizing pending tool call entries). */
+  updateEntry?: (entryId: string, patch: { content?: unknown; display?: string }) => void;
+  /** Mark a log entry as discarded (for cleanup on retry). */
+  discardEntry?: (entryId: string) => void;
 }
 
 /**
@@ -344,6 +352,10 @@ export async function asyncRunToolLoop(
     onRetryAttempt,
     onRetrySuccess,
     onRetryExhausted,
+    onToolCallStart: onToolCallStartOpt,
+    onToolCallArgDelta: onToolCallArgDeltaOpt,
+    updateEntry,
+    discardEntry,
   } = opts;
 
   let toolsMap = opts.toolsMap;
@@ -393,6 +405,60 @@ export async function asyncRunToolLoop(
       };
     }
 
+    // Pending tool calls: entries created during streaming, finalized after response
+    const pendingToolCalls = new Map<string, {
+      name: string;
+      argChunks: string[];
+      entryId: string;
+      displayResolved: boolean;
+    }>();
+
+    let wrappedToolCallStart: ((callId: string, name: string) => void) | undefined;
+    let wrappedToolCallArgDelta: ((callId: string, argDelta: string) => void) | undefined;
+    if (onToolCallStartOpt) {
+      wrappedToolCallStart = (callId: string, name: string) => {
+        if (pendingToolCalls.has(callId)) return; // idempotency guard
+        onToolCallStartOpt!(callId, name);
+        // Create pending tool_call entry with empty args
+        const entryId = allocId("tool_call");
+        const display = generateToolCallDisplay(name, {});
+        appendEntry(createToolCall(
+          entryId,
+          turnIndex,
+          roundIndex,
+          display,
+          { id: callId, name, arguments: {} },
+          { toolCallId: callId, toolName: name, agentName, contextId: lastRoundId },
+        ));
+        pendingToolCalls.set(callId, { name, argChunks: [], entryId, displayResolved: false });
+      };
+    }
+    if (onToolCallArgDeltaOpt) {
+      wrappedToolCallArgDelta = (callId: string, argDelta: string) => {
+        onToolCallArgDeltaOpt!(callId, argDelta);
+        const pending = pendingToolCalls.get(callId);
+        if (!pending) return;
+        pending.argChunks.push(argDelta);
+        // Throttled display resolution: only parse until first display key found
+        if (!pending.displayResolved && updateEntry) {
+          try {
+            const partialArgs = recoverPartialArgs(pending.argChunks.join(""));
+            const display = generateToolCallDisplay(pending.name, partialArgs);
+            // Only update if display changed from just the tool name
+            if (display !== pending.name) {
+              updateEntry(pending.entryId, {
+                content: { id: callId, name: pending.name, arguments: partialArgs },
+                display,
+              });
+              pending.displayResolved = true;
+            }
+          } catch {
+            // Partial parse failed — will retry on next delta
+          }
+        }
+      };
+    }
+
     let resp: ProviderResponse;
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -406,6 +472,8 @@ export async function asyncRunToolLoop(
           {
             onTextChunk: wrappedChunk,
             onReasoningChunk: wrappedReasoningChunk,
+            onToolCallStart: wrappedToolCallStart,
+            onToolCallArgDelta: wrappedToolCallArgDelta,
             signal,
             thinkingLevel,
             promptCacheKey,
@@ -428,6 +496,13 @@ export async function asyncRunToolLoop(
           throw netErr;
         }
         networkRetryCount++;
+        // Clean up pending tool entries from the failed streaming attempt
+        if (discardEntry) {
+          for (const [, pending] of pendingToolCalls) {
+            discardEntry(pending.entryId);
+          }
+        }
+        pendingToolCalls.clear();
         const errMsg = netErr instanceof Error ? netErr.message : String(netErr);
         const delay = computeRetryDelay(networkRetryCount - 1);
         const delaySec = Math.round(delay / 1000);
@@ -564,20 +639,30 @@ export async function asyncRunToolLoop(
       }
     }
 
-    // Tool call entries (skip unnamed tool calls — e.g. reasoning function_calls from interrupted streams)
+    // Tool call entries — reconcile with pending entries from streaming, or create fresh
     for (const tc of resp.toolCalls) {
       if (!tc.name) continue;
-      const summary = toolSummaries.get(tc.id) ?? "";
       const display = generateToolCallDisplay(tc.name, tc.arguments);
-      appendEntry(createToolCall(
-        allocId("tool_call"),
-        turnIndex,
-        roundIndex,
-        display,
-        { id: tc.id, name: tc.name, arguments: tc.arguments },
-        { toolCallId: tc.id, toolName: tc.name, agentName, contextId: lastRoundId },
-      ));
+      const pending = pendingToolCalls.get(tc.id);
+      if (pending && updateEntry) {
+        // Finalize the pending entry with complete args and display
+        updateEntry(pending.entryId, {
+          content: { id: tc.id, name: tc.name, arguments: tc.arguments },
+          display,
+        });
+      } else {
+        // No pending entry (provider didn't fire streaming callbacks) — create fresh
+        appendEntry(createToolCall(
+          allocId("tool_call"),
+          turnIndex,
+          roundIndex,
+          display,
+          { id: tc.id, name: tc.name, arguments: tc.arguments },
+          { toolCallId: tc.id, toolName: tc.name, agentName, contextId: lastRoundId },
+        ));
+      }
     }
+    pendingToolCalls.clear();
 
     // Execute each tool call
     for (const tc of resp.toolCalls) {

@@ -354,8 +354,8 @@ export class OpenAIChatProvider extends BaseProvider {
       delete kwargs["extra_body"];
     }
 
-    if (options?.onTextChunk || options?.onReasoningChunk) {
-      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal);
+    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallStart) {
+      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal, options?.onToolCallStart, options?.onToolCallArgDelta);
     }
 
     const resp = await this._client.chat.completions.create(
@@ -374,6 +374,8 @@ export class OpenAIChatProvider extends BaseProvider {
     onTextChunk?: (chunk: string) => void,
     onReasoningChunk?: (chunk: string) => void,
     signal?: AbortSignal,
+    onToolCallStart?: (callId: string, name: string) => void,
+    onToolCallArgDelta?: (callId: string, argDelta: string) => void,
   ): Promise<ProviderResponse> {
     kwargs["stream"] = true;
     kwargs["stream_options"] = { include_usage: true };
@@ -611,16 +613,27 @@ export class OpenAIChatProvider extends BaseProvider {
         for (const tcDelta of delta.tool_calls) {
           const idx = tcDelta.index;
           if (!toolAcc.has(idx)) {
+            const name = tcDelta.function?.name || "";
+            const id = tcDelta.id || "";
             toolAcc.set(idx, {
-              id: tcDelta.id || "",
-              name: tcDelta.function?.name || "",
+              id,
+              name,
               argsSoFar: "",
               lastChunk: "",
             });
+            // Emit tool call start when name is known on first delta
+            if (name && id && onToolCallStart) {
+              onToolCallStart(id, name);
+            }
           } else {
             const acc = toolAcc.get(idx)!;
+            const hadName = !!acc.name;
             if (tcDelta.id) acc.id = tcDelta.id;
             if (tcDelta.function?.name) acc.name = tcDelta.function.name;
+            // Emit start if name arrived on a subsequent delta
+            if (!hadName && acc.name && acc.id && onToolCallStart) {
+              onToolCallStart(acc.id, acc.name);
+            }
           }
           if (tcDelta.function?.arguments) {
             const acc = toolAcc.get(idx)!;
@@ -629,6 +642,9 @@ export class OpenAIChatProvider extends BaseProvider {
               acc.argsSoFar,
               tcDelta.function.arguments,
             );
+            if (onToolCallArgDelta && acc.id) {
+              onToolCallArgDelta(acc.id, tcDelta.function.arguments);
+            }
           }
         }
       }

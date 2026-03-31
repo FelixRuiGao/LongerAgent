@@ -122,14 +122,18 @@ function transformSystem(entry: ReconciledConversationEntry): PresentationEntry 
 function buildToolOperation(
   callEntry: ReconciledConversationEntry,
   resultEntry: ReconciledConversationEntry | null,
+  activeEntryId: string | null = null,
 ): PresentationEntry {
   const toolName = getToolName(callEntry);
   const toolArgs = getToolArgs(callEntry);
   const profile = getToolProfile(toolName);
 
   let state: PresentationState;
-  if (!resultEntry) {
-    state = callEntry.entry.elapsedMs != null ? "done" : "active";
+  if (activeEntryId && activeEntryId === callEntry.id) {
+    state = "active";
+  } else if (!resultEntry) {
+    // If another entry is active (streaming/executing), this one is queued — show as done
+    state = (callEntry.entry.elapsedMs != null || activeEntryId) ? "done" : "active";
   } else if (isToolResultError(resultEntry)) {
     state = "error";
   } else if (isToolResultInterrupted(resultEntry)) {
@@ -198,6 +202,7 @@ export function presentationTransform(
   entries: ReconciledConversationEntry[],
   previousOutput: PresentationEntry[],
   processing: boolean,
+  activeEntryId: string | null = null,
 ): PresentationEntry[] {
   const result: PresentationEntry[] = [];
   const prevById = new Map<string, PresentationEntry>();
@@ -233,8 +238,15 @@ export function presentationTransform(
 
       case "reasoning": {
         const reasoningComplete = getMeta(entry).reasoningComplete === true;
-        const active = processing && !reasoningComplete;
-        result.push(transformThinking(entry, active));
+        let thinkingState: PresentationState;
+        if (activeEntryId && activeEntryId === entry.id) {
+          thinkingState = "active";
+        } else if (!reasoningComplete && !processing) {
+          thinkingState = "error"; // interrupted — not transmitted to model
+        } else {
+          thinkingState = "done";
+        }
+        result.push(transformThinking(entry, thinkingState === "active"));
         i++;
         break;
       }
@@ -256,7 +268,7 @@ export function presentationTransform(
           resultEntry = entries[i];
           i++;
         }
-        result.push(buildToolOperation(callEntry, resultEntry));
+        result.push(buildToolOperation(callEntry, resultEntry, activeEntryId));
         break;
       }
 

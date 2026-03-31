@@ -227,6 +227,10 @@ export class Agent {
     onRetryAttempt?: (attempt: number, maxRetries: number, delaySec: number, errMsg: string) => void,
     onRetrySuccess?: (attempt: number) => void,
     onRetryExhausted?: (maxRetries: number, errMsg: string) => void,
+    onToolCallStart?: (callId: string, name: string) => void,
+    onToolCallArgDelta?: (callId: string, argDelta: string) => void,
+    updateEntry?: (entryId: string, patch: { content?: unknown; display?: string }) => void,
+    discardEntry?: (entryId: string) => void,
   ): Promise<ToolLoopResult> {
     return asyncRunToolLoop({
       provider: this._provider,
@@ -258,6 +262,10 @@ export class Agent {
       onRetryAttempt,
       onRetrySuccess,
       onRetryExhausted,
+      onToolCallStart,
+      onToolCallArgDelta,
+      updateEntry,
+      discardEntry,
     });
   }
 }

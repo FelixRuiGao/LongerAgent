@@ -19,12 +19,14 @@ export function usePresentationEntries(
 ): PresentationEntry[] {
   const reconciledItems = useTranscriptModel({ session, selectedChildId, childSessions });
   const previousRef = useRef<PresentationEntry[]>([]);
+  // Read activeEntryId from session — changes propagate via log revision bump
+  const activeEntryId = session.activeLogEntryId ?? null;
 
   const presentationItems = useMemo(() => {
-    const result = presentationTransform(reconciledItems, previousRef.current, processing);
+    const result = presentationTransform(reconciledItems, previousRef.current, processing, activeEntryId);
     previousRef.current = result;
     return result;
-  }, [reconciledItems, processing]);
+  }, [reconciledItems, processing, activeEntryId]);
 
   return presentationItems;
 }

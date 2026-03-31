@@ -486,6 +486,23 @@ export class Session {
   private _lifetimeToolCallCount = 0;
   private _lastToolCallSummary = "";
   private _recentSessionEvents: string[] = [];
+
+  // Active entry tracker — tracks which log entry is currently "live"
+  private _activeLogEntryId: string | null = null;
+
+  /** Update the active entry tracker; implicitly marks previous reasoning as complete. */
+  private _setActiveLogEntry(entryId: string | null): void {
+    if (this._activeLogEntryId === entryId) return;
+    // If the previous active entry was a reasoning entry, mark it complete
+    if (this._activeLogEntryId) {
+      const prevEntry = this._log.find((e) => e.id === this._activeLogEntryId);
+      if (prevEntry && prevEntry.type === "reasoning") {
+        (prevEntry.meta as Record<string, unknown>).reasoningComplete = true;
+      }
+    }
+    this._activeLogEntryId = entryId;
+    this._touchLog();
+  }
   private _lastTurnEndStatus: "completed" | "interrupted" | "error" | null = null;
 
   // Thinking level + accent
@@ -1254,6 +1271,11 @@ export class Session {
     this._currentTurnAbortController = controller;
     this._currentTurnSignal = controller.signal;
 
+    // Clear active entry tracker on abort
+    controller.signal.addEventListener("abort", () => {
+      this._activeLogEntryId = null;
+    }, { once: true });
+
     return {
       prevSignal,
       prevController,
@@ -1396,6 +1418,11 @@ export class Session {
 
   getLogRevision(): number {
     return this._logRevision;
+  }
+
+  /** The ID of the currently active (streaming/executing) log entry, or null. */
+  get activeLogEntryId(): string | null {
+    return this._activeLogEntryId;
   }
 
   /** Subscribe to log changes. Returns an unsubscribe function. */
@@ -3012,6 +3039,7 @@ export class Session {
         this._injectPendingMessages();
       }
       this._agentState = "idle";
+      this._activeLogEntryId = null;
       this._setSelfPhase("idle");
       if (!this._activeAsk && this._hasActiveAgents()) {
         this._cleanupNonInteractiveAgents();
@@ -3402,10 +3430,15 @@ export class Session {
               );
               this._appendEntry(nextEntry, false);
               streamedAssistantEntries.set(roundIndex, nextEntry);
+              this._setActiveLogEntry(nextEntry.id);
             } else {
               entry.display += cleanChunk;
               entry.content = String(entry.content ?? "") + cleanChunk;
-              this._touchLog();
+              if (this._activeLogEntryId !== entry.id) {
+                this._setActiveLogEntry(entry.id);
+              } else {
+                this._touchLog();
+              }
             }
           });
           roundBuffer = new NoReplyStreamBuffer((cleanChunk: string) => stripBuf.feed(cleanChunk));
@@ -3434,10 +3467,16 @@ export class Session {
           );
           this._appendEntry(nextEntry, false);
           streamedReasoningEntries.set(roundIndex, nextEntry);
+          this._setActiveLogEntry(nextEntry.id);
         } else {
           entry.display += chunk;
           entry.content = String(entry.content ?? "") + chunk;
-          this._touchLog();
+          // Keep active tracker pointing to this reasoning entry
+          if (this._activeLogEntryId !== entry.id) {
+            this._setActiveLogEntry(entry.id);
+          } else {
+            this._touchLog();
+          }
         }
         return true;
       };
@@ -3448,6 +3487,9 @@ export class Session {
       const entry = streamedReasoningEntries.get(roundIndex);
       if (entry) {
         (entry.meta as Record<string, unknown>).reasoningComplete = true;
+        if (this._activeLogEntryId === entry.id) {
+          this._activeLogEntryId = null;
+        }
         this._touchLog();
       }
     };
@@ -3478,6 +3520,21 @@ export class Session {
         progress.onToolResult(step, name, tool, toolCallId, isError, summary);
       };
     }
+
+    // Streaming tool call callbacks — set active entry for early display
+    const onToolCallStartCb = (_callId: string, _name: string) => {
+      // Active entry tracking happens in tool-loop via appendEntry → _appendEntry;
+      // we find the just-appended pending tool_call entry and mark it active
+      const lastEntry = this._log[this._log.length - 1];
+      if (lastEntry && lastEntry.type === "tool_call") {
+        this._setActiveLogEntry(lastEntry.id);
+      }
+    };
+
+    const onToolCallArgDeltaCb = (_callId: string, _argDelta: string) => {
+      // No tracker change — active stays on the same pending entry
+      // Display updates are handled by updateEntryFn which calls _touchLog
+    };
 
     // Token update callback: update _lastInputTokens after each provider call
     // so the TUI can display real-time context usage.
@@ -3586,6 +3643,24 @@ export class Session {
       return this._nextLogId(type);
     };
 
+    /** Update an existing log entry in-place (for finalizing pending tool call entries). */
+    const updateEntryFn = (entryId: string, patch: { content?: unknown; display?: string }): void => {
+      const entry = this._log.find((e) => e.id === entryId);
+      if (!entry) return;
+      if (patch.content !== undefined) entry.content = patch.content;
+      if (patch.display !== undefined) entry.display = patch.display;
+      this._touchLog();
+    };
+
+    /** Mark a log entry as discarded (for cleanup on retry). */
+    const discardEntryFn = (entryId: string): void => {
+      const entry = this._log.find((e) => e.id === entryId);
+      if (!entry) return;
+      entry.discarded = true;
+      entry.tuiVisible = false;
+      this._touchLog();
+    };
+
     return this.primaryAgent.asyncRunWithMessages(
       getMessages,
       appendEntry,
@@ -3611,6 +3686,10 @@ export class Session {
       emitRetryAttempt,
       emitRetrySuccess,
       emitRetryExhausted,
+      onToolCallStartCb,
+      onToolCallArgDeltaCb,
+      updateEntryFn,
+      discardEntryFn,
     );
   }
 

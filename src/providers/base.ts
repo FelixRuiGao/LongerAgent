@@ -63,6 +63,10 @@ export interface SendMessageOptions {
   maxTokens?: number;
   onTextChunk?: (chunk: string) => void;
   onReasoningChunk?: (chunk: string) => void;
+  /** Fired when a tool call is first identified during streaming (name known, args not yet complete). */
+  onToolCallStart?: (callId: string, name: string) => void;
+  /** Fired for each incremental JSON argument chunk during tool call streaming. */
+  onToolCallArgDelta?: (callId: string, argDelta: string) => void;
   signal?: AbortSignal;
   /** Unified thinking level string ("off", "low", "medium", "high", "adaptive", etc.) */
   thinkingLevel?: string;
