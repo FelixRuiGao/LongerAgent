@@ -114,6 +114,22 @@ export class ProgressReporter {
     }));
   }
 
+  onToolResult(
+    step: number,
+    agent: string,
+    toolName: string,
+    toolCallId: string,
+    isError: boolean,
+    summary = "",
+  ): void {
+    const msg = `  [${agent}] <- ${toolName}${isError ? " (error)" : ""}`;
+    this.emit(makeEvent({
+      step, agent, action: "tool_result",
+      message: msg, level: "normal",
+      usage: {}, extra: { tool: toolName, toolCallId, isError, summary },
+    }));
+  }
+
   // ------------------------------------------------------------------
   // Network retry emitters
   // ------------------------------------------------------------------

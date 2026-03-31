@@ -3470,6 +3470,15 @@ export class Session {
       this._recordSessionEvent(summary);
     };
 
+    let onToolResult: ((name: string, tool: string, toolCallId: string, isError: boolean, summary: string) => void) | undefined;
+    if (this._progress) {
+      const step = this._turnCount;
+      const progress = this._progress;
+      onToolResult = (name: string, tool: string, toolCallId: string, isError: boolean, summary: string) => {
+        progress.onToolResult(step, name, tool, toolCallId, isError, summary);
+      };
+    }
+
     // Token update callback: update _lastInputTokens after each provider call
     // so the TUI can display real-time context usage.
     const onTokenUpdate = (inputTokens: number, usage?: import("./providers/base.js").Usage) => {
@@ -3585,6 +3594,7 @@ export class Session {
       baseRoundIndex,
       this._toolExecutors,
       onToolCall,
+      onToolResult,
       onTextChunk,
       onReasoningChunk,
       onReasoningDone,

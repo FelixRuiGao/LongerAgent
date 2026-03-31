@@ -424,7 +424,7 @@ export function OpenTuiApp({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
-    setPhase("working");
+    setPhase("prefilling");
     try {
       await session.resumePendingTurn({ signal: controller.signal });
       setPhase("idle");
@@ -627,6 +627,9 @@ export function OpenTuiApp({
         break;
       case "tool_call":
         setPhase("working");
+        break;
+      case "tool_result":
+        setPhase("prefilling");
         break;
       case "agent_no_reply":
         setPhase("waiting");
@@ -1137,7 +1140,7 @@ export function OpenTuiApp({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
-    setPhase("working");
+    setPhase("prefilling");
     try {
       await session.turn(input, { signal: controller.signal });
       setPhase("idle");
@@ -1166,7 +1169,7 @@ export function OpenTuiApp({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
-    setPhase("working");
+    setPhase("prefilling");
     try {
       await session.runManualSummarize(instruction, { signal: controller.signal });
       setPhase("idle");
@@ -1191,7 +1194,7 @@ export function OpenTuiApp({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
-    setPhase("working");
+    setPhase("prefilling");
     try {
       await session.runManualCompact(instruction, { signal: controller.signal });
       setPhase("idle");
@@ -2011,6 +2014,33 @@ export function OpenTuiApp({
       return;
     }
 
+    // Tab switching: Ctrl+Left/Right to cycle, Ctrl+Up to return to Main Session
+    if (event.name === "left" && event.ctrl && tabs.length > 1) {
+      const idx = tabs.findIndex((t) => t.id === activeTabId);
+      const prev = (idx - 1 + tabs.length) % tabs.length;
+      setActiveTabId(tabs[prev].id);
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.name === "right" && event.ctrl && tabs.length > 1) {
+      const idx = tabs.findIndex((t) => t.id === activeTabId);
+      const next = (idx + 1) % tabs.length;
+      setActiveTabId(tabs[next].id);
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.name === "up" && event.ctrl) {
+      const mainTab = tabs.find((t) => t.kind === "main");
+      if (mainTab && activeTabId !== mainTab.id) {
+        setActiveTabId(mainTab.id);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
+
     if (!composer || pendingAsk) return;
 
     if (isDeleteToVisualLineStartShortcut(event)) {
@@ -2068,8 +2098,6 @@ export function OpenTuiApp({
       onToggleSidebar={() => setSidebarExpanded((value) => !value)}
       contextTokens={contextTokens}
       contextLimit={session.primaryAgent.modelConfig?.contextLength}
-      cacheReadTokens={cacheReadTokens}
-      codexUsage={codexUsage}
       presentationEntries={presentationEntries}
       processing={processing}
       markdownMode={markdownMode}

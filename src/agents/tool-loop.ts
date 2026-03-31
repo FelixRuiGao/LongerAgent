@@ -208,6 +208,14 @@ export type OnToolCallCallback = (
   summary: string,
 ) => void;
 
+export type OnToolResultCallback = (
+  agentName: string,
+  toolName: string,
+  toolCallId: string,
+  isError: boolean,
+  summary: string,
+) => void;
+
 export interface ToolPreflightContext {
   agentName: string;
   toolName: string;
@@ -252,6 +260,7 @@ export interface ToolLoopOptions {
   maxRounds: number;
   agentName?: string;
   onToolCall?: OnToolCallCallback;
+  onToolResult?: OnToolResultCallback;
   toolsMap?: Record<string, ToolDef>;
   onTextChunk?: (roundIndex: number, chunk: string) => boolean | void;
   onReasoningChunk?: (roundIndex: number, chunk: string) => boolean | void;
@@ -317,6 +326,7 @@ export async function asyncRunToolLoop(
     maxRounds,
     agentName = "",
     onToolCall,
+    onToolResult,
     onTextChunk,
     onReasoningChunk,
     onReasoningDone,
@@ -705,6 +715,9 @@ export async function asyncRunToolLoop(
         },
       ));
       if (onSaveCheckpoint) onSaveCheckpoint();
+      if (onToolResult) {
+        onToolResult(agentName, tc.name, tc.id, resolved.content.startsWith("ERROR:"), summary);
+      }
     }
 
     // After all tool calls executed: if compact was triggered, return early

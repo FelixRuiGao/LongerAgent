@@ -5,7 +5,6 @@ import React from "react";
 import type { InputRenderable, KeyBinding, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import type { PendingAskUi } from "../../../src/ask.js";
 import type { AgentQuestionItem } from "../../../src/ask.js";
-import type { UsageSnapshot } from "../../../src/provider-usage.js";
 import type { CommandPickerState } from "../../../src/ui/command-picker.js";
 import type { CheckboxPickerState } from "../../../src/ui/checkbox-picker.js";
 import type { PresentationEntry } from "../../presentation/types.js";
@@ -13,7 +12,6 @@ import type { ComposerTokenVisuals } from "../../composer-tokens.js";
 import { PresentationPanel } from "../../components/entry/presentation-panel.js";
 import { DetailThinkingTab } from "../../components/entry/detail-thinking-tab.js";
 import { DetailToolTab } from "../../components/entry/detail-tool-tab.js";
-import { LeftSidebar } from "../../sidebar/sidebar.js";
 import { InputArea } from "../../input/input-area.js";
 import type { TabState } from "../../sidebar/sidebar-tabs.js";
 import type { DisplayTheme } from "../theme/index.js";
@@ -26,7 +24,6 @@ import type {
   QuestionAnswerState,
 } from "../types.js";
 import { AskPanelView } from "../panels/ask-panel.js";
-import { ContextUsageCard, CodexUsageCard } from "../panels/usage-cards.js";
 import {
   CheckboxPickerView,
   CommandOverlayView,
@@ -35,8 +32,9 @@ import {
   PromptSecretView,
   PromptSelectView,
 } from "../overlays/views.js";
-import { computePickerMaxVisible, getSidebarWidth } from "./metrics.js";
-import { shortenPath, shouldShowSidebar } from "../utils/format.js";
+import { computePickerMaxVisible } from "./metrics.js";
+import { HorizontalTabBar } from "./horizontal-tab-bar.js";
+import { shortenPath } from "../utils/format.js";
 
 export interface OpenTuiScreenProps {
   theme: DisplayTheme;
@@ -50,7 +48,6 @@ export interface OpenTuiScreenProps {
   contextTokens: number;
   contextLimit?: number;
   cacheReadTokens?: number;
-  codexUsage: UsageSnapshot | null;
   presentationEntries: readonly PresentationEntry[];
   processing: boolean;
   markdownMode: "rendered" | "raw";
@@ -104,12 +101,8 @@ export function OpenTuiScreen({
   activeTabId,
   onSelectTab,
   onCloseTab,
-  sidebarExpanded,
-  onToggleSidebar,
   contextTokens,
   contextLimit,
-  cacheReadTokens,
-  codexUsage,
   presentationEntries,
   processing,
   markdownMode,
@@ -155,19 +148,20 @@ export function OpenTuiScreen({
   onModelClick,
   onBackgroundMouseDown,
 }: OpenTuiScreenProps): React.ReactElement {
-  const sidebarVisible = shouldShowSidebar(terminal.width, theme.layout);
-  const sidebarWidth = sidebarVisible ? getSidebarWidth(terminal.width, theme.layout) : 0;
-  const conversationColumnWidth = terminal.width - (theme.spacing.screenPaddingX * 2) - (sidebarVisible ? sidebarWidth + 1 : 0);
+  const conversationColumnWidth = terminal.width - (theme.spacing.screenPaddingX * 2);
   const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
-  const pickerContentWidth = terminal.width - 10 - (sidebarVisible ? sidebarWidth : 0);
+  const pickerContentWidth = terminal.width - 10;
   const pickerMaxVisible = computePickerMaxVisible(terminal.height, theme.layout);
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const isDetailTab = activeTab?.kind === "detail-thinking" || activeTab?.kind === "detail-tool";
   const detailEntry = isDetailTab
     ? presentationEntries.find((entry) => activeTabId === `detail:${entry.id}`)
     : null;
-  const showLogoInScroll = terminal.width >= theme.layout.minTerminalWidthForLogoHeader
-    && terminal.height >= theme.layout.minTerminalHeightForLogoHeader;
+
+  // Logo disappears once user sends the first message
+  const hasUserMessage = presentationEntries.some((e) => e.kind === "user");
+  const showLogoInScroll = !hasUserMessage
+    && terminal.width >= theme.layout.minTerminalWidthForLogoHeader;
 
   return (
     <box
@@ -179,121 +173,109 @@ export function OpenTuiScreen({
       paddingBottom={theme.spacing.screenPaddingY}
       paddingLeft={theme.spacing.screenPaddingX}
       paddingRight={theme.spacing.screenPaddingX}
-      gap={theme.spacing.screenGap}
+      gap={0}
       onMouseDown={onBackgroundMouseDown}
     >
-      <box flexDirection="row" flexGrow={1} gap={0}>
-        {sidebarVisible ? (
-          <LeftSidebar
-            tabs={tabs}
-            activeTabId={activeTabId}
-            onSelectTab={onSelectTab}
-            onCloseTab={onCloseTab}
-            expanded={sidebarExpanded}
-            onToggleExpanded={onToggleSidebar}
-            width={sidebarWidth}
-            collapsedWidth={theme.layout.sidebarCollapsedWidth}
+      {/* Horizontal tab bar */}
+      <HorizontalTabBar
+        tabs={tabs}
+        activeTabId={activeTabId}
+        onSelectTab={onSelectTab}
+        onCloseTab={onCloseTab}
+        colors={theme.colors}
+      />
+
+      {/* Spacer between tab bar and content */}
+      <box height={1} />
+
+      {/* Main content area */}
+      <box flexDirection="column" flexGrow={1} gap={0}>
+        {detailEntry && activeTab?.kind === "detail-thinking" ? (
+          <DetailThinkingTab entry={detailEntry} colors={theme.colors} scrollRef={scrollRef} />
+        ) : detailEntry && activeTab?.kind === "detail-tool" ? (
+          <DetailToolTab
+            entry={detailEntry}
             colors={theme.colors}
+            contentWidth={conversationContentWidth}
+            scrollRef={scrollRef}
+          />
+        ) : (
+          <PresentationPanel
+            items={presentationEntries}
+            processing={processing}
+            contentWidth={conversationContentWidth}
+            markdownMode={markdownMode}
+            colors={theme.colors}
+            markdownStyle={theme.markdownStyle}
+            scrollRef={scrollRef}
+            selectedChildId={selectedChildId}
+            showLogoInScroll={showLogoInScroll}
             branding={theme.branding}
-            contextSection={(
-              <ContextUsageCard
-                contextTokens={contextTokens}
-                contextLimit={contextLimit}
-                cacheReadTokens={cacheReadTokens}
-                theme={theme}
-              />
-            )}
-            codexSection={<CodexUsageCard snapshot={codexUsage} theme={theme} />}
+            onEntryClick={onEntryClick}
+          />
+        )}
+
+        {pendingAsk ? (
+          <AskPanelView
+            ask={pendingAsk}
+            error={askError}
+            selectedIndex={askSelectionIndex}
+            currentQuestionIndex={currentQuestionIndex}
+            totalQuestions={pendingAsk.kind === "agent_question" ? getAskQuestions().length : 1}
+            questionAnswers={questionAnswers}
+            customInputMode={customInputMode}
+            noteInputMode={noteInputMode}
+            reviewMode={reviewMode}
+            inlineValue={askInputValue}
+            optionNotes={optionNotes}
+            inputRef={askInputRef}
+            onInput={onAskInput}
+            onSubmit={onAskSubmit}
+            theme={theme}
           />
         ) : null}
-
-        <box flexDirection="column" flexGrow={1} gap={theme.spacing.sectionGap}>
-          {detailEntry && activeTab?.kind === "detail-thinking" ? (
-            <DetailThinkingTab entry={detailEntry} colors={theme.colors} scrollRef={scrollRef} />
-          ) : detailEntry && activeTab?.kind === "detail-tool" ? (
-            <DetailToolTab
-              entry={detailEntry}
-              colors={theme.colors}
-              contentWidth={conversationContentWidth}
-              scrollRef={scrollRef}
-            />
-          ) : (
-            <PresentationPanel
-              items={presentationEntries}
-              processing={processing}
-              contentWidth={conversationContentWidth}
-              markdownMode={markdownMode}
-              colors={theme.colors}
-              markdownStyle={theme.markdownStyle}
-              scrollRef={scrollRef}
-              selectedChildId={selectedChildId}
-              showLogoInScroll={showLogoInScroll}
-              branding={theme.branding}
-              onEntryClick={onEntryClick}
-            />
-          )}
-
-          {pendingAsk ? (
-            <AskPanelView
-              ask={pendingAsk}
-              error={askError}
-              selectedIndex={askSelectionIndex}
-              currentQuestionIndex={currentQuestionIndex}
-              totalQuestions={pendingAsk.kind === "agent_question" ? getAskQuestions().length : 1}
-              questionAnswers={questionAnswers}
-              customInputMode={customInputMode}
-              noteInputMode={noteInputMode}
-              reviewMode={reviewMode}
-              inlineValue={askInputValue}
-              optionNotes={optionNotes}
-              inputRef={askInputRef}
-              onInput={onAskInput}
-              onSubmit={onAskSubmit}
-              theme={theme}
-            />
-          ) : null}
-          <CommandOverlayView
-            overlay={commandOverlay}
-            theme={theme}
-            contentWidth={pickerContentWidth}
-            maxVisible={pickerMaxVisible}
-            onItemClick={onOverlayItemClick}
-          />
-          <CommandPickerView
-            picker={commandPicker}
-            theme={theme}
-            contentWidth={pickerContentWidth}
-            maxVisible={pickerMaxVisible}
-            onItemClick={onCommandPickerItemClick}
-          />
-          <CheckboxPickerView
-            picker={checkboxPicker}
-            theme={theme}
-            contentWidth={pickerContentWidth}
-            onItemClick={onCheckboxPickerItemClick}
-          />
-          <PromptSelectView
-            prompt={promptSelect}
-            theme={theme}
-            contentWidth={pickerContentWidth}
-            maxVisible={pickerMaxVisible}
-            onItemClick={onPromptSelectItemClick}
-          />
-          <PromptSecretView
-            prompt={promptSecret}
-            inputRef={promptSecretInputRef}
-            focused={Boolean(promptSecret)}
-            onSubmit={onPromptSecretSubmit}
-            theme={theme}
-          />
-          <OAuthOverlayView
-            state={oauthOverlay}
-            theme={theme}
-            contentWidth={pickerContentWidth}
-          />
-        </box>
+        <CommandOverlayView
+          overlay={commandOverlay}
+          theme={theme}
+          contentWidth={pickerContentWidth}
+          maxVisible={pickerMaxVisible}
+          onItemClick={onOverlayItemClick}
+        />
+        <CommandPickerView
+          picker={commandPicker}
+          theme={theme}
+          contentWidth={pickerContentWidth}
+          maxVisible={pickerMaxVisible}
+          onItemClick={onCommandPickerItemClick}
+        />
+        <CheckboxPickerView
+          picker={checkboxPicker}
+          theme={theme}
+          contentWidth={pickerContentWidth}
+          onItemClick={onCheckboxPickerItemClick}
+        />
+        <PromptSelectView
+          prompt={promptSelect}
+          theme={theme}
+          contentWidth={pickerContentWidth}
+          maxVisible={pickerMaxVisible}
+          onItemClick={onPromptSelectItemClick}
+        />
+        <PromptSecretView
+          prompt={promptSecret}
+          inputRef={promptSecretInputRef}
+          focused={Boolean(promptSecret)}
+          onSubmit={onPromptSecretSubmit}
+          theme={theme}
+        />
+        <OAuthOverlayView
+          state={oauthOverlay}
+          theme={theme}
+          contentWidth={pickerContentWidth}
+        />
       </box>
 
+      {/* Input area */}
       <InputArea
         inputRef={inputRef}
         processing={processing}
@@ -307,7 +289,6 @@ export function OpenTuiScreen({
         hint={hint}
         contextTokens={contextTokens}
         contextLimit={contextLimit}
-        showContext={!sidebarVisible}
         terminalWidth={terminal.width}
         colors={theme.colors}
         inputVisibleLines={inputVisibleLines}

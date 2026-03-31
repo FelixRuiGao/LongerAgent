@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 
-export const THINKING_SPINNER_FRAMES = ["◌", "○", "◎", "●", "◎", "○"] as const;
+// Phase-specific spinner presets — each visually distinct at a glance.
+export const THINKING_SPINNER_FRAMES = ["◌", "○", "⊙", "●", "⊙", "○"] as const;
 export const THINKING_SPINNER_INTERVAL = 150;
 
 export const TOOL_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 export const TOOL_SPINNER_INTERVAL = 80;
+
+export const DECODING_SPINNER_FRAMES = ["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸"] as const;
+export const DECODING_SPINNER_INTERVAL = 120;
+
+export const PREFILL_SPINNER_FRAMES = ["░", "▒", "▓", "▒"] as const;
+export const PREFILL_SPINNER_INTERVAL = 100;
+
+export const AWAITING_SPINNER_FRAMES = ["◐", "◓", "◑", "◒"] as const;
+export const AWAITING_SPINNER_INTERVAL = 120;
 
 export function useSpinner(
   frames: readonly string[],

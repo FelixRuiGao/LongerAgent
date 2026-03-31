@@ -17,6 +17,7 @@ import {
   asyncRunToolLoop,
   type BeforeToolExecuteCallback,
   type OnToolCallCallback,
+  type OnToolResultCallback,
   type ToolExecutor,
   type ToolLoopResult,
 } from "./tool-loop.js";
@@ -205,6 +206,7 @@ export class Agent {
     baseRoundIndex?: number,
     toolExecutors?: Record<string, ToolExecutor>,
     onToolCall?: OnToolCallCallback,
+    onToolResult?: OnToolResultCallback,
     onTextChunk?: (roundIndex: number, chunk: string) => boolean | void,
     onReasoningChunk?: (roundIndex: number, chunk: string) => boolean | void,
     onReasoningDone?: (roundIndex: number) => void,
@@ -238,6 +240,7 @@ export class Agent {
       maxRounds: this.maxToolRounds,
       agentName: this.name,
       onToolCall,
+      onToolResult,
       onTextChunk,
       onReasoningChunk,
       onReasoningDone,
