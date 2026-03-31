@@ -31,6 +31,16 @@ import {
   projectedDocumentLabel,
 } from "../document-projection.js";
 import { classifyFile, IMAGE_MEDIA_TYPES } from "../file-attach.js";
+import {
+  type FileModifyDisplayData,
+  type MatchInfo,
+  inferLanguageByExt,
+  countFileLines,
+  buildHunkFromMatch,
+  buildMultiEditHunks,
+  buildAppendDisplayData,
+  buildWriteDisplayData,
+} from "../diff-hunk.js";
 
 // ------------------------------------------------------------------
 // Bash safety limits
@@ -151,20 +161,36 @@ const LIST: ToolDef = {
 const EDIT: ToolDef = {
   name: "edit_file",
   description:
-    "Apply a minimal patch to an existing file by replacing a unique string with a new string. The old_str must appear exactly once in the file. " +
-    "Alternatively, use append_str (without old_str/new_str) to append content to the end of the file.",
+    "Apply a patch to an existing file. " +
+    "For a single replacement: provide old_str/new_str (old_str must appear exactly once). " +
+    "For multiple replacements in one call: provide edits array (each old_str must be unique, edits must not overlap). " +
+    "To append: use append_str (without old_str/new_str/edits).",
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path to edit" },
       old_str: {
         type: "string",
-        description: "Exact string to find (must be unique in the file)",
+        description: "Exact string to find (must be unique). Mutually exclusive with edits.",
       },
       new_str: { type: "string", description: "Replacement string" },
+      edits: {
+        type: "array",
+        description:
+          "Multiple replacements in one atomic write. Each item has old_str and new_str. " +
+          "Mutually exclusive with top-level old_str/new_str.",
+        items: {
+          type: "object",
+          properties: {
+            old_str: { type: "string", description: "Exact string to find (must be unique)" },
+            new_str: { type: "string", description: "Replacement string" },
+          },
+          required: ["old_str", "new_str"],
+        },
+      },
       append_str: {
         type: "string",
-        description: "Content to append to the end of the file. Mutually exclusive with old_str/new_str.",
+        description: "Content to append to the end of the file. Mutually exclusive with old_str/new_str/edits.",
       },
       expected_mtime_ms: {
         type: "integer",
@@ -778,6 +804,7 @@ async function toolEditFile(
       return `ERROR: old_str appears ${count} times (must be unique).`;
     }
 
+    const matchOffset = content.indexOf(oldStr);
     const newContent = content.replace(oldStr, newStr);
     const diffPreview = buildUnifiedDiffPreview(
       simpleUnifiedDiff(
@@ -787,6 +814,15 @@ async function toolEditFile(
         filePath,
       ),
     );
+
+    const totalLineCount = countFileLines(content);
+    const fileModifyData: FileModifyDisplayData = {
+      filePath,
+      language: inferLanguageByExt(filePath),
+      mode: "replace",
+      totalLineCount,
+      hunks: [buildHunkFromMatch(content, matchOffset, oldStr, newStr)],
+    };
 
     try {
       await atomicWriteTextFile(filePath, newContent, initialVersion.mode, initialVersion);
@@ -804,6 +840,7 @@ async function toolEditFile(
           text: diffPreview.text,
           truncated: diffPreview.truncated,
         },
+        fileModifyData,
       },
     });
   });
@@ -834,6 +871,7 @@ async function toolEditFileAppend(
       return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
     }
 
+    const totalLineCount = countFileLines(before);
     const finalContent = before + appendStr;
 
     const beforeLines = before.length > 0 ? before.split("\n") : [];
@@ -841,6 +879,8 @@ async function toolEditFileAppend(
     const diffPreview = buildUnifiedDiffPreview(
       simpleUnifiedDiff(beforeLines, afterLines, filePath, filePath),
     );
+
+    const fileModifyData = buildAppendDisplayData(filePath, appendStr, totalLineCount);
 
     try {
       await atomicWriteTextFile(filePath, finalContent, initialVersion.mode, initialVersion);
@@ -860,6 +900,118 @@ async function toolEditFileAppend(
           text: diffPreview.text,
           truncated: diffPreview.truncated,
         },
+        fileModifyData,
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------------
+// edit_file multi-edit
+// ------------------------------------------------------------------
+
+async function toolEditFileMulti(
+  filePath: string,
+  edits: Array<{ old_str: string; new_str: string }>,
+  expectedMtimeMs?: number,
+): Promise<string | ToolResult> {
+  return withFileWriteLock(filePath, async () => {
+    if (!existsSync(filePath)) {
+      return `ERROR: File not found: ${filePath}`;
+    }
+
+    let initialVersion: FileVersionSnapshot;
+    try {
+      initialVersion = getFileVersionSnapshot(filePath);
+      validateExpectedMtime(filePath, expectedMtimeMs, initialVersion);
+    } catch (e) {
+      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    let content: string;
+    try {
+      content = readFileSync(filePath, { encoding: "utf-8" });
+    } catch (e) {
+      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    // Find all matches, validate uniqueness
+    const matches: MatchInfo[] = [];
+    for (const edit of edits) {
+      const count = content.split(edit.old_str).length - 1;
+      if (count === 0) {
+        const snippet = edit.old_str.length > 60
+          ? edit.old_str.slice(0, 60) + "..."
+          : edit.old_str;
+        return `ERROR: old_str not found in file: ${JSON.stringify(snippet)}`;
+      }
+      if (count > 1) {
+        const snippet = edit.old_str.length > 60
+          ? edit.old_str.slice(0, 60) + "..."
+          : edit.old_str;
+        return `ERROR: old_str appears ${count} times (must be unique): ${JSON.stringify(snippet)}`;
+      }
+      matches.push({
+        index: content.indexOf(edit.old_str),
+        oldStr: edit.old_str,
+        newStr: edit.new_str,
+      });
+    }
+
+    // Sort by offset ascending for overlap check
+    matches.sort((a, b) => a.index - b.index);
+
+    // Check overlaps
+    for (let i = 1; i < matches.length; i++) {
+      const prev = matches[i - 1];
+      if (prev.index + prev.oldStr.length > matches[i].index) {
+        return `ERROR: edits overlap at offset ${matches[i].index}`;
+      }
+    }
+
+    // Apply from bottom to top (reverse offset order)
+    let newContent = content;
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const m = matches[i];
+      newContent = newContent.slice(0, m.index) + m.newStr + newContent.slice(m.index + m.oldStr.length);
+    }
+
+    const totalLineCount = countFileLines(content);
+    const hunks = buildMultiEditHunks(content, matches);
+    const diffPreview = buildUnifiedDiffPreview(
+      simpleUnifiedDiff(
+        content.split("\n"),
+        newContent.split("\n"),
+        filePath,
+        filePath,
+      ),
+    );
+
+    const fileModifyData: FileModifyDisplayData = {
+      filePath,
+      language: inferLanguageByExt(filePath),
+      mode: "replace",
+      totalLineCount,
+      hunks,
+    };
+
+    try {
+      await atomicWriteTextFile(filePath, newContent, initialVersion.mode, initialVersion);
+    } catch (e) {
+      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
+    return new ToolResult({
+      content: `OK: ${edits.length} edits applied successfully. [mtime_ms=${newMtimeMs}]`,
+      metadata: {
+        path: filePath,
+        tui_preview: {
+          kind: "diff",
+          text: diffPreview.text,
+          truncated: diffPreview.truncated,
+        },
+        fileModifyData,
       },
     });
   });
@@ -896,6 +1048,9 @@ async function toolWriteFile(
         ),
       );
 
+      const originalTotalLineCount = countFileLines(before);
+      const fileModifyData = buildWriteDisplayData(filePath, content, originalTotalLineCount);
+
       await atomicWriteTextFile(filePath, content, mode, initialVersion);
 
       const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
@@ -912,6 +1067,7 @@ async function toolWriteFile(
           isNewFile: !initialVersion.exists,
           lineCount: afterLines.length,
           tui_preview: tuiPreview,
+          fileModifyData,
         },
       });
     } catch (e) {
@@ -1917,8 +2073,10 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         const requestedPath = requiredStringArg("edit_file", a, "path", { nonEmpty: true });
         const expectedMtimeMs = optionalIntegerArg("edit_file", a, "expected_mtime_ms");
         const appendStr = optionalStringArg("edit_file", a, "append_str", "");
+        const editsRaw = a.edits;
+
         // Validate mode-specific args before resolving path
-        if (!appendStr) {
+        if (!appendStr && !Array.isArray(editsRaw)) {
           requiredStringArg("edit_file", a, "old_str", { nonEmpty: true });
           requiredStringArg("edit_file", a, "new_str");
         }
@@ -1930,6 +2088,26 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         );
         if (appendStr) {
           return toolEditFileAppend(filePath, appendStr, expectedMtimeMs);
+        }
+        if (Array.isArray(editsRaw)) {
+          const edits: Array<{ old_str: string; new_str: string }> = [];
+          for (const item of editsRaw) {
+            if (!item || typeof item !== "object") {
+              return "ERROR: Each item in edits must be an object with old_str and new_str.";
+            }
+            const obj = item as Record<string, unknown>;
+            if (typeof obj.old_str !== "string" || !obj.old_str) {
+              return "ERROR: Each item in edits must have a non-empty old_str.";
+            }
+            if (typeof obj.new_str !== "string") {
+              return "ERROR: Each item in edits must have a new_str.";
+            }
+            edits.push({ old_str: obj.old_str, new_str: obj.new_str });
+          }
+          if (edits.length === 0) {
+            return "ERROR: edits array must not be empty.";
+          }
+          return toolEditFileMulti(filePath, edits, expectedMtimeMs);
         }
         const oldStr = a.old_str as string;
         const newStr = a.new_str as string;

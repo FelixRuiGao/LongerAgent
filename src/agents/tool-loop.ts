@@ -11,6 +11,8 @@
  * (sub-agents / stateless runs).
  */
 
+import { readFileSync, existsSync } from "node:fs";
+
 import type {
   BaseProvider,
   ProviderResponse,
@@ -33,6 +35,18 @@ import {
   createToolResult as createToolResultEntry,
 } from "../log-entry.js";
 import type { AskRequest } from "../ask.js";
+import {
+  type DiffHunk,
+  type FileModifyDisplayData,
+  type EditProbeState,
+  inferLanguageByExt,
+  computeContextBefore,
+  computeContextAfter,
+  countFileLines,
+  buildHunkFromMatch,
+  buildAppendDisplayData,
+  buildWriteDisplayData,
+} from "../diff-hunk.js";
 
 // ------------------------------------------------------------------
 // Tool executor type
@@ -171,11 +185,19 @@ interface ToolStreamSection {
   label: string;
   text: string;
   complete: boolean;
+  contextBefore?: string;
+  contextAfter?: string;
+  contextResolved?: boolean;
+  startLineNumber?: number;
 }
+
+type StreamMode = "replace" | "append" | "write";
 
 interface StreamableToolCall {
   canonicalArgs: Record<string, unknown>;
   sections: ToolStreamSection[];
+  language?: string;
+  streamMode?: StreamMode;
 }
 
 type PendingToolStreamPhase = "hidden_partial" | "visible_partial" | "closed";
@@ -193,6 +215,15 @@ interface PendingToolCallState {
   repairedFromPartial: boolean;
   streamPhase: PendingToolStreamPhase;
   execPhase: PendingToolExecPhase;
+  // Context probing (edit_file replace/append mode)
+  cachedFileContent?: string;
+  cachedTotalLineCount?: number;
+  /** Per-edit probing state (single-edit = 1 element, multi-edit = N elements). */
+  editProbes?: EditProbeState[];
+  appendStartLine?: number;
+  // Streaming display hints
+  streamLanguage?: string;
+  streamMode?: StreamMode;
 }
 
 interface ParsedPartialField {
@@ -358,6 +389,59 @@ function extractCompleteOptionalArgs(
   return optional;
 }
 
+// ------------------------------------------------------------------
+// Partial edits-array parser for multi-edit streaming
+// ------------------------------------------------------------------
+
+interface ParsedEditItem {
+  old_str: ParsedPartialField | null;
+  new_str: ParsedPartialField | null;
+  complete: boolean;
+}
+
+function parseEditsArray(
+  input: string,
+  startCursor: number,
+): { edits: ParsedEditItem[]; arrayComplete: boolean } {
+  const edits: ParsedEditItem[] = [];
+  let cursor = startCursor;
+  if (input[cursor] !== "[") return { edits, arrayComplete: false };
+  cursor += 1;
+
+  while (cursor < input.length) {
+    cursor = skipWhitespace(input, cursor);
+    if (cursor >= input.length) break;
+    if (input[cursor] === "]") return { edits, arrayComplete: true };
+    if (input[cursor] === ",") { cursor += 1; continue; }
+    if (input[cursor] !== "{") break;
+
+    // Parse a single { old_str: "...", new_str: "..." } object
+    const innerFields = parsePartialFlatObject(input.slice(cursor));
+    // Find the closing } to know if this edit item is complete
+    let depth = 0;
+    let objEnd = cursor;
+    let objComplete = false;
+    for (let k = cursor; k < input.length; k++) {
+      if (input[k] === "{") depth++;
+      else if (input[k] === "}") {
+        depth--;
+        if (depth === 0) { objEnd = k + 1; objComplete = true; break; }
+      }
+    }
+    if (!objComplete) objEnd = input.length;
+
+    edits.push({
+      old_str: innerFields["old_str"] ?? null,
+      new_str: innerFields["new_str"] ?? null,
+      complete: objComplete,
+    });
+
+    cursor = objEnd;
+  }
+
+  return { edits, arrayComplete: false };
+}
+
 function buildStreamableToolCall(
   toolName: string,
   rawArgsBuffer: string,
@@ -369,6 +453,8 @@ function buildStreamableToolCall(
   }
   const path = pathField.value as string;
   const optional = extractCompleteOptionalArgs(fields);
+
+  const language = inferLanguageByExt(path);
 
   if (toolName === "write_file") {
     const contentField = fields["content"];
@@ -385,6 +471,8 @@ function buildStreamableToolCall(
         text: String(contentField.value ?? ""),
         complete: contentField.complete,
       }],
+      language,
+      streamMode: "write" as StreamMode,
     };
   }
 
@@ -400,10 +488,52 @@ function buildStreamableToolCall(
           text: String(appendField.value ?? ""),
           complete: appendField.complete,
         }],
+        language,
+        streamMode: "append" as StreamMode,
       };
     }
 
-    // Replace mode: Before/After sections
+    // Multi-edit mode: edits array
+    const editsStart = rawArgsBuffer.indexOf('"edits"');
+    if (editsStart !== -1) {
+      const arrayStart = rawArgsBuffer.indexOf("[", editsStart);
+      if (arrayStart !== -1) {
+        const parsed = parseEditsArray(rawArgsBuffer, arrayStart);
+        const sections: ToolStreamSection[] = [];
+        const canonicalEdits: Array<{ old_str: unknown; new_str: unknown }> = [];
+        for (const [idx, edit] of parsed.edits.entries()) {
+          if (edit.old_str) {
+            sections.push({
+              key: `old_str_${idx}`,
+              label: `Before #${idx + 1}`,
+              text: String(edit.old_str.value ?? ""),
+              complete: edit.old_str.complete,
+            });
+          }
+          if (edit.new_str) {
+            sections.push({
+              key: `new_str_${idx}`,
+              label: `After #${idx + 1}`,
+              text: String(edit.new_str.value ?? ""),
+              complete: edit.new_str.complete,
+            });
+          }
+          canonicalEdits.push({
+            old_str: edit.old_str?.value ?? "",
+            new_str: edit.new_str?.value ?? "",
+          });
+        }
+        if (sections.length === 0) return null;
+        return {
+          canonicalArgs: { path, edits: canonicalEdits, ...optional },
+          sections,
+          language,
+          streamMode: "replace" as StreamMode,
+        };
+      }
+    }
+
+    // Single replace mode: Before/After sections
     const sections: ToolStreamSection[] = [];
     const canonicalArgs: Record<string, unknown> = { path, ...optional };
 
@@ -430,7 +560,7 @@ function buildStreamableToolCall(
     }
 
     if (sections.length === 0) return null;
-    return { canonicalArgs, sections };
+    return { canonicalArgs, sections, language, streamMode: "replace" as StreamMode };
   }
 
   return null;
@@ -749,7 +879,14 @@ export async function asyncRunToolLoop(
       const args = pending.closedArgs;
       if (!args) return [];
       const streamable = buildStreamableToolCall(toolName, JSON.stringify(args));
-      return streamable?.sections ?? [];
+      if (!streamable) return [];
+      // Backfill language/mode when recordPartialToolCall was never called
+      // (provider sent full args at once without streaming deltas)
+      if (!pending.streamLanguage && streamable.language) pending.streamLanguage = streamable.language;
+      if (!pending.streamMode && streamable.streamMode) pending.streamMode = streamable.streamMode;
+      pending.sections = streamable.sections;
+      probeEditContext(pending, streamable);
+      return pending.sections;
     };
 
     const deriveToolStreamState = (pending: PendingToolCallState): string | undefined => {
@@ -767,6 +904,7 @@ export async function asyncRunToolLoop(
       const sections = deriveSectionsForState(pending.name, pending);
       const contextId = ensureRoundContextId();
       const display = generateToolCallDisplay(pending.name, args);
+      const fmd = buildFileModifyData(pending);
       const meta = buildToolCallMeta(
         { toolCallId: callId, toolName: pending.name, agentName, contextId },
         {
@@ -776,6 +914,9 @@ export async function asyncRunToolLoop(
           rawArgsBuffer: pending.rawArgsBuffer || undefined,
           toolStreamSections: sections.length > 0 ? sections : undefined,
           toolParseError: pending.parseError ?? undefined,
+          toolStreamLanguage: pending.streamLanguage,
+          toolStreamMode: pending.streamMode,
+          fileModifyData: fmd,
         },
       );
 
@@ -802,6 +943,132 @@ export async function asyncRunToolLoop(
       });
     };
 
+    const probeEditContext = (
+      pending: PendingToolCallState,
+      streamable: StreamableToolCall,
+    ): void => {
+      if (streamable.streamMode !== "replace" && streamable.streamMode !== "append") return;
+
+      const filePath = streamable.canonicalArgs.path as string | undefined;
+      if (!filePath) return;
+
+      // Read and cache file content (shared by replace + append)
+      if (pending.cachedFileContent === undefined) {
+        try {
+          if (existsSync(filePath)) {
+            pending.cachedFileContent = readFileSync(filePath, "utf-8");
+            pending.cachedTotalLineCount = countFileLines(pending.cachedFileContent);
+          }
+        } catch { /* skip */ }
+        if (pending.cachedFileContent === undefined) {
+          pending.cachedFileContent = ""; // mark as attempted
+          return;
+        }
+      }
+      if (!pending.cachedFileContent) return;
+
+      // --- append mode ---
+      if (streamable.streamMode === "append") {
+        if (pending.appendStartLine === undefined) {
+          pending.appendStartLine = (pending.cachedTotalLineCount ?? 0) + 1;
+        }
+        return;
+      }
+
+      // --- replace mode (single or multi-edit) ---
+      // Collect edit pairs from sections
+      const editPairs: Array<{ oldText: string; oldComplete: boolean; idx: number }> = [];
+      for (const s of streamable.sections) {
+        const m = s.key.match(/^old_str(?:_(\d+))?$/);
+        if (m) {
+          const editIdx = m[1] !== undefined ? parseInt(m[1], 10) : 0;
+          editPairs.push({ oldText: s.text, oldComplete: s.complete, idx: editIdx });
+        }
+      }
+
+      if (!pending.editProbes) pending.editProbes = [];
+      const fc = pending.cachedFileContent;
+
+      for (const pair of editPairs) {
+        const probe: EditProbeState = pending.editProbes[pair.idx] ??= { resolved: false };
+        if (!pair.oldText) continue;
+
+        // Only probe when old_str has at least one newline (or is complete)
+        if (!pair.oldText.includes("\n") && !pair.oldComplete) continue;
+
+        // First resolution: find unique match
+        if (!probe.resolved) {
+          const idx = fc.indexOf(pair.oldText);
+          if (idx === -1) continue;
+          if (fc.indexOf(pair.oldText, idx + 1) !== -1) continue;
+
+          probe.resolved = true;
+          probe.matchOffset = idx;
+          probe.startLine = fc.substring(0, idx).split("\n").length;
+          probe.contextBefore = computeContextBefore(fc, idx, 3);
+        }
+
+        // Compute contextAfter once when old_str is complete
+        if (pair.oldComplete && probe.resolved && !probe.contextAfter) {
+          const matchEnd = probe.matchOffset! + pair.oldText.length;
+          probe.contextAfter = computeContextAfter(fc, matchEnd, 3);
+        }
+      }
+    };
+
+    /** Build FileModifyDisplayData from pending state for meta injection. */
+    const buildFileModifyData = (
+      pending: PendingToolCallState,
+    ): FileModifyDisplayData | undefined => {
+      const filePath = pending.canonicalArgs?.path as string | undefined;
+      if (!filePath || !pending.streamMode) return undefined;
+
+      const totalLineCount = pending.cachedTotalLineCount ?? 0;
+
+      if (pending.streamMode === "write") {
+        const contentSection = pending.sections.find((s) => s.key === "content");
+        return buildWriteDisplayData(filePath, contentSection?.text ?? "", totalLineCount);
+      }
+
+      if (pending.streamMode === "append") {
+        const appendSection = pending.sections.find((s) => s.key === "append_str");
+        return buildAppendDisplayData(filePath, appendSection?.text ?? "", totalLineCount);
+      }
+
+      // Replace mode: build hunks from editProbes
+      if (!pending.editProbes || pending.editProbes.length === 0) return undefined;
+
+      const hunks: DiffHunk[] = [];
+      // Pair up old_str/new_str sections
+      for (let i = 0; i < pending.editProbes.length; i++) {
+        const probe = pending.editProbes[i];
+        if (!probe.resolved || probe.startLine === undefined) continue;
+
+        const oldKey = i === 0 ? "old_str" : `old_str_${i}`;
+        const newKey = i === 0 ? "new_str" : `new_str_${i}`;
+        const oldSection = pending.sections.find((s) => s.key === oldKey);
+        const newSection = pending.sections.find((s) => s.key === newKey);
+
+        hunks.push({
+          startLine: probe.startLine,
+          contextBefore: probe.contextBefore ?? [],
+          deletions: oldSection?.text ? oldSection.text.split("\n") : [],
+          additions: newSection?.text ? newSection.text.split("\n") : [],
+          contextAfter: probe.contextAfter ?? [],
+        });
+      }
+
+      if (hunks.length === 0) return undefined;
+
+      return {
+        filePath,
+        language: pending.streamLanguage,
+        mode: "replace",
+        totalLineCount,
+        hunks,
+      };
+    };
+
     const recordPartialToolCall = (
       callId: string,
       toolName: string,
@@ -813,6 +1080,10 @@ export async function asyncRunToolLoop(
       if (!streamable) return;
       pending.canonicalArgs = streamable.canonicalArgs;
       pending.sections = streamable.sections;
+      if (streamable.language) pending.streamLanguage = streamable.language;
+      if (streamable.streamMode) pending.streamMode = streamable.streamMode;
+      // Probe context for edit_file replace mode
+      probeEditContext(pending, streamable);
       if (pending.streamPhase !== "closed") {
         pending.streamPhase = "visible_partial";
       }
@@ -1007,6 +1278,7 @@ export async function asyncRunToolLoop(
       if (closedStreamable) {
         pending.sections = closedStreamable.sections;
         pending.canonicalArgs = closedStreamable.canonicalArgs;
+        probeEditContext(pending, closedStreamable);
       }
       syncToolCallEntry(callId);
 
@@ -1047,6 +1319,7 @@ export async function asyncRunToolLoop(
       if (closedStreamable) {
         pending.sections = closedStreamable.sections;
         pending.canonicalArgs = closedStreamable.canonicalArgs;
+        probeEditContext(pending, closedStreamable);
       }
       syncToolCallEntry(tc.id);
 

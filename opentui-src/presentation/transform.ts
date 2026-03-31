@@ -4,6 +4,7 @@ import type {
   PresentationState,
   InlineResultData,
 } from "./types.js";
+import type { FileModifyDisplayData } from "../../src/diff-hunk.js";
 import { getToolProfile, HIDDEN_TOOLS } from "./tool-profiles.js";
 
 // ------------------------------------------------------------------
@@ -138,6 +139,10 @@ function buildToolOperation(
     ? callMeta.toolStreamState
     : undefined;
   const toolRepairedFromPartial = callMeta.repairedFromPartial === true;
+  const toolStreamLanguage = typeof callMeta.toolStreamLanguage === "string"
+    ? callMeta.toolStreamLanguage : undefined;
+  const toolStreamMode = typeof callMeta.toolStreamMode === "string"
+    ? callMeta.toolStreamMode as PresentationEntry["toolStreamMode"] : undefined;
   const execFinished = toolExecState === "completed" || toolExecState === "failed";
   const toolStillWorking =
     !resultEntry && !execFinished && (
@@ -168,14 +173,22 @@ function buildToolOperation(
     ? ((resultEntry.entry.meta as Record<string, unknown>)?.toolMetadata as Record<string, unknown>) ?? undefined
     : undefined;
 
+  // Extract fileModifyData — tool_result (authoritative) takes priority over tool_call (streaming)
+  let fileModifyData: FileModifyDisplayData | undefined;
+  const resultFmd = resultMeta?.fileModifyData;
+  if (resultFmd && typeof resultFmd === "object") {
+    fileModifyData = resultFmd as FileModifyDisplayData;
+  } else {
+    const callFmd = callMeta.fileModifyData;
+    if (callFmd && typeof callFmd === "object") {
+      fileModifyData = callFmd as FileModifyDisplayData;
+    }
+  }
+
   // Resolve dynamic display name for variants
   let displayName = profile.displayName;
   let noDiffBackground = false;
-  if (toolName === "edit_file") {
-    if (toolArgs["append_str"] !== undefined || resultMeta?.isAppend === true) {
-      displayName = "Append";
-    }
-  } else if (toolName === "write_file") {
+  if (toolName === "write_file") {
     if (resultMeta) {
       noDiffBackground = true;
     }
@@ -214,6 +227,9 @@ function buildToolOperation(
     toolRepairedFromPartial,
     toolExecState,
     toolStreamState,
+    toolStreamLanguage,
+    toolStreamMode,
+    fileModifyData,
     sourceEntries,
   };
 }

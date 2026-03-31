@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
 
-import React, { useMemo } from "react";
+import React from "react";
 
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../conversation-types.js";
-import { buildToolResultArtifacts } from "../tool-result-artifacts.js";
+import { FileModifyBody } from "./file-modify-body.js";
 import { ScrollViewport } from "../../display/primitives/scroll-viewport.js";
 import { SectionHeader } from "../../display/primitives/section-header.js";
 
@@ -24,37 +24,21 @@ function DetailToolTabInner(
   const toolText = entry.toolText ?? "";
   const title = toolText ? `${displayName} ${toolText}` : displayName;
 
-  const toolMetadata = entry.toolInlineResult?.toolMetadata;
-  const codePreviewOnly = entry.toolInlineResult?.noDiffBackground;
-
-  const artifacts = useMemo(() => {
-    if (toolMetadata) {
-      return buildToolResultArtifacts({
-        text,
-        toolMetadata,
-        wrapWidth: Math.max(8, contentWidth - 6),
-        colors,
-        codePreviewOnly,
-      });
-    }
-    return null;
-  }, [text, toolMetadata, contentWidth, colors, codePreviewOnly]);
+  const fmd = entry.fileModifyData;
 
   return (
     <box flexDirection="column" flexGrow={1} width="100%">
       <SectionHeader label={title} color={colors.dim} paddingLeft={2} paddingBottom={1} />
       <ScrollViewport colors={colors} scrollRef={scrollRef}>
-        {artifacts ? (
-          <box flexDirection="column" paddingLeft={2} paddingRight={2}>
-            {artifacts.map((artifact, idx) => (
-              <box
-                key={idx}
-                width="100%"
-                backgroundColor={artifact.rowBackgroundColor}
-              >
-                <text content={artifact.content} wrapMode="none" />
-              </box>
-            ))}
+        {fmd && (fmd.hunks.length > 0 || (fmd.writeLines && fmd.writeLines.length > 0)) ? (
+          <box paddingLeft={2} paddingRight={2}>
+            <FileModifyBody
+              data={fmd}
+              colors={colors}
+              contentWidth={Math.max(8, contentWidth - 6)}
+              streaming={entry.state === "active"}
+              maxVisibleLines={Infinity}
+            />
           </box>
         ) : streamSections.length > 0 ? (
           <box flexDirection="column" paddingLeft={2} paddingRight={2} gap={0}>

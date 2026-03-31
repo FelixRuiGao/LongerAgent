@@ -115,6 +115,12 @@ function toConversationEntry(
       if (typeof repaired === "boolean") ce.meta.repairedFromPartial = repaired;
       const parseError = entry.meta["toolParseError"];
       if (typeof parseError === "string") ce.meta.toolParseError = parseError;
+      const streamLanguage = entry.meta["toolStreamLanguage"];
+      if (typeof streamLanguage === "string") ce.meta.toolStreamLanguage = streamLanguage;
+      const streamMode = entry.meta["toolStreamMode"];
+      if (typeof streamMode === "string") ce.meta.toolStreamMode = streamMode;
+      const fmd = entry.meta["fileModifyData"];
+      if (fmd && typeof fmd === "object") ce.meta.fileModifyData = fmd;
     }
   }
 
@@ -139,6 +145,14 @@ function toConversationEntry(
     if (typeof isError === "boolean") {
       ce.meta ??= {};
       ce.meta.isError = isError;
+    }
+    // Forward fileModifyData from tool result metadata
+    if (toolMetadata && typeof toolMetadata === "object") {
+      const fmd = (toolMetadata as Record<string, unknown>)["fileModifyData"];
+      if (fmd && typeof fmd === "object") {
+        ce.meta ??= {};
+        ce.meta.fileModifyData = fmd;
+      }
     }
   }
 

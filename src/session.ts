@@ -3689,7 +3689,11 @@ export class Session {
           || streamState === "partial_closed"
           || streamState === "closed"
         ) {
-          this._setActiveLogEntry(entry.id);
+          if (this._activeLogEntryId !== entry.id) {
+            this._setActiveLogEntry(entry.id);
+          } else {
+            this._touchLog();
+          }
           return;
         }
       }

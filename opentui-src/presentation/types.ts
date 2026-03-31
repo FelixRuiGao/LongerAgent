@@ -1,4 +1,5 @@
 import type { ReconciledConversationEntry } from "../transcript/types.js";
+import type { FileModifyDisplayData } from "../../src/diff-hunk.js";
 
 export type PresentationKind =
   | "user"
@@ -32,6 +33,11 @@ export interface ToolStreamSectionData {
   label: string;
   text: string;
   complete: boolean;
+  contextBefore?: string;
+  contextAfter?: string;
+  contextResolved?: boolean;
+  /** 1-indexed starting line number for this section (from file content probing). */
+  startLineNumber?: number;
 }
 
 export interface PresentationEntry {
@@ -61,6 +67,8 @@ export interface PresentationEntry {
   toolRepairedFromPartial?: boolean;
   toolExecState?: string;
   toolStreamState?: string;
+  toolStreamLanguage?: string;
+  toolStreamMode?: "replace" | "append" | "write";
 
   // kind=assistant
   assistantText?: string;
@@ -72,6 +80,9 @@ export interface PresentationEntry {
 
   // kind=turn_summary
   turnSummaryText?: string;
+
+  // Unified file-modify display data (replaces toolStreamSections for file-modify tools)
+  fileModifyData?: FileModifyDisplayData;
 
   // Original entries for detail tab rendering
   sourceEntries?: ReconciledConversationEntry[];
