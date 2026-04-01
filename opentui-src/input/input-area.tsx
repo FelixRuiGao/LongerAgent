@@ -10,10 +10,6 @@ import { formatCompactTokensShort } from "../display/utils/format.js";
 import { formatElapsed } from "../presentation/use-turn-timer.js";
 import {
   useSpinner,
-  TOOL_SPINNER_FRAMES,
-  TOOL_SPINNER_INTERVAL,
-  THINKING_SPINNER_FRAMES,
-  THINKING_SPINNER_INTERVAL,
   DECODING_SPINNER_FRAMES,
   DECODING_SPINNER_INTERVAL,
   PREFILL_SPINNER_FRAMES,
@@ -52,10 +48,8 @@ interface InputAreaProps {
 
 function getPhaseLabel(phase: ActivityPhase): string {
   switch (phase) {
-    case "thinking": return "Reasoning";
-    case "generating": return "Decoding";
-    case "working": return "Executing";
-    case "waiting": return "Awaiting";
+    case "decoding": return "Decoding";
+    case "asking": return "Asking";
     case "prefilling":
     default: return "Prefilling";
   }
@@ -63,10 +57,8 @@ function getPhaseLabel(phase: ActivityPhase): string {
 
 function getPhaseSpinnerConfig(phase: ActivityPhase): { frames: readonly string[]; interval: number } {
   switch (phase) {
-    case "thinking": return { frames: THINKING_SPINNER_FRAMES, interval: THINKING_SPINNER_INTERVAL };
-    case "generating": return { frames: DECODING_SPINNER_FRAMES, interval: DECODING_SPINNER_INTERVAL };
-    case "working": return { frames: TOOL_SPINNER_FRAMES, interval: TOOL_SPINNER_INTERVAL };
-    case "waiting": return { frames: AWAITING_SPINNER_FRAMES, interval: AWAITING_SPINNER_INTERVAL };
+    case "decoding": return { frames: DECODING_SPINNER_FRAMES, interval: DECODING_SPINNER_INTERVAL };
+    case "asking": return { frames: AWAITING_SPINNER_FRAMES, interval: AWAITING_SPINNER_INTERVAL };
     case "prefilling":
     default: return { frames: PREFILL_SPINNER_FRAMES, interval: PREFILL_SPINNER_INTERVAL };
   }
@@ -74,10 +66,8 @@ function getPhaseSpinnerConfig(phase: ActivityPhase): { frames: readonly string[
 
 function getPhaseColor(phase: ActivityPhase, colors: ConversationPalette): string {
   switch (phase) {
-    case "thinking": return colors.thinkingStatus;
-    case "generating": return colors.generatingStatus;
-    case "working": return colors.workingStatus;
-    case "waiting": return colors.waitingStatus;
+    case "decoding": return colors.generatingStatus;
+    case "asking": return colors.waitingStatus;
     case "prefilling":
     default: return colors.dim;
   }

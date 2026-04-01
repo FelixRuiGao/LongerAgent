@@ -109,6 +109,7 @@ function transformSystem(entry: ReconciledConversationEntry): PresentationEntry 
   else if (kind === "compact_mark") severity = "compact";
   else if (kind === "interrupted_marker") severity = "interrupted";
   else if (kind === "sub_agent_rollup" || kind === "sub_agent_done") severity = "sub_agent";
+  else if (entry.entry.meta?.statusType === "no_reply") severity = "no_reply";
 
   return {
     id: entry.id,
@@ -158,6 +159,8 @@ function buildToolOperation(
     state = "active";
   } else if (!resultEntry && activeEntryId && activeEntryId === callEntry.id) {
     state = "active";
+  } else if (!resultEntry && toolExecState === "failed") {
+    state = "error";
   } else if (!resultEntry) {
     // If another entry is active (streaming/executing), this one is queued — show as done
     state = (callEntry.entry.elapsedMs != null || activeEntryId) ? "done" : "active";
@@ -195,14 +198,21 @@ function buildToolOperation(
   }
 
   let inlineResult: InlineResultData | null = null;
-  if (resultEntry && profile.inlineResult !== false && state !== "active") {
-    inlineResult = {
-      text: resultEntry.entry.text,
-      dim: resultEntry.entry.dim ?? false,
-      maxLines: profile.inlineResult.maxLines,
-      toolMetadata: resultMeta,
-      noDiffBackground: noDiffBackground || undefined,
-    };
+  if (resultEntry && state !== "active") {
+    // Errors always show inline result regardless of profile setting
+    const showResult = state === "error" || profile.inlineResult !== false;
+    if (showResult) {
+      const maxLines = profile.inlineResult !== false
+        ? profile.inlineResult.maxLines
+        : 8; // default for error-only display
+      inlineResult = {
+        text: resultEntry.entry.text,
+        dim: resultEntry.entry.dim ?? false,
+        maxLines,
+        toolMetadata: resultMeta,
+        noDiffBackground: noDiffBackground || undefined,
+      };
+    }
   }
 
   const sourceEntries: ReconciledConversationEntry[] = [callEntry];

@@ -2821,12 +2821,18 @@ export class Session {
         };
 
         const _trimmedText = result.text.trimEnd();
-        const _hasNoReply = isNoReply(result.text) || _trimmedText.endsWith(NO_REPLY_MARKER);
+        const _hasNoReply = isNoReply(result.text)
+          || _trimmedText.endsWith(NO_REPLY_MARKER)
+          || (!_trimmedText && result.toolHistory.length === 0);
 
         if (_hasNoReply) {
-          const _precedingText = _trimmedText
-            .slice(0, _trimmedText.length - NO_REPLY_MARKER.length)
-            .trim();
+          // Strip the <NO_REPLY> marker (if present) — treat as empty response.
+          // Emit progress event so TUI can show a status message.
+          if (_trimmedText.endsWith(NO_REPLY_MARKER)) {
+            result.text = _trimmedText
+              .slice(0, _trimmedText.length - NO_REPLY_MARKER.length)
+              .trim();
+          }
 
           if (this._progress) {
             this._progress.onNoReplyClear(this.primaryAgent.name);
@@ -2835,57 +2841,7 @@ export class Session {
           if (this._progress) {
             this._progress.onAgentNoReply(this.primaryAgent.name);
           }
-
-          if (!this._hasActiveAgents()) {
-            // Silently ignore <NO_REPLY> when no sub-agents are running
-            continue;
-          }
-
-          const noReplyContent = _precedingText || "<NO_REPLY>";
-          const noReplyRound = result.reasoningHandledInLog
-            ? Math.max(0, this._computeNextRoundIndex() - 1)
-            : this._computeNextRoundIndex();
-          const noReplyContextId = this._resolveOutputRoundContextId(this._turnCount, noReplyRound);
-          if (result.textHandledInLog || result.reasoningHandledInLog) {
-            this._retagRoundEntries(this._turnCount, noReplyRound, noReplyContextId);
-          }
-
-          // v2 log: create no_reply entry (+ reasoning if present)
-          {
-            if (result.reasoningContent && !result.reasoningHandledInLog) {
-              this._appendEntry(createReasoning(
-                this._nextLogId("reasoning"),
-                this._turnCount,
-                noReplyRound,
-                result.reasoningContent,
-                result.reasoningContent,
-                result.reasoningState,
-                noReplyContextId,
-              ), false);
-            }
-            this._appendEntry(createNoReply(
-              this._nextLogId("no_reply"),
-              this._turnCount,
-              noReplyRound,
-              noReplyContent,
-              noReplyContextId,
-            ), false);
-          }
-          this.onSaveRequest?.();
-
-          await this._waitForAnyAgent(activeSignal);
-          if (activeSignal.aborted) {
-            this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
-              activationCompleted: true,
-            });
-            this.onSaveRequest?.();
-            finalText = textAccumulator.text.trim() || "";
-            turnEndStatus = "interrupted";
-            break;
-          }
-
-          this.onSaveRequest?.();
-          // Fall through to activation boundary drain (★) below
+          // Fall through to normal response handling — turn ends naturally.
         }
 
         const shouldMaterializeFinalResponse =

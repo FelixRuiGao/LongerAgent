@@ -1,7 +1,7 @@
 import type { DisplayTheme } from "../theme/index.js";
 
 export function getSystemEntryColor(
-  severity: "info" | "error" | "compact" | "interrupted" | "sub_agent",
+  severity: "info" | "error" | "compact" | "interrupted" | "sub_agent" | "no_reply",
   theme: DisplayTheme,
 ): string {
   switch (severity) {
@@ -12,6 +12,7 @@ export function getSystemEntryColor(
     case "info":
       return theme.colors.orange;
     case "sub_agent":
+    case "no_reply":
       return theme.colors.dim;
     default:
       return theme.colors.orange;

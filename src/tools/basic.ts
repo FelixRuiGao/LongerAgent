@@ -162,23 +162,17 @@ const EDIT: ToolDef = {
   name: "edit_file",
   description:
     "Apply a patch to an existing file. " +
-    "For a single replacement: provide old_str/new_str (old_str must appear exactly once). " +
-    "For multiple replacements in one call: provide edits array (each old_str must be unique, edits must not overlap). " +
-    "To append: use append_str (without old_str/new_str/edits).",
+    "Provide edits array with one or more replacements (each old_str must appear exactly once, edits must not overlap). " +
+    "To append: use append_str (can be combined with edits — all replacements execute first, append last).",
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path to edit" },
-      old_str: {
-        type: "string",
-        description: "Exact string to find (must be unique). Mutually exclusive with edits.",
-      },
-      new_str: { type: "string", description: "Replacement string" },
       edits: {
         type: "array",
         description:
-          "Multiple replacements in one atomic write. Each item has old_str and new_str. " +
-          "Mutually exclusive with top-level old_str/new_str.",
+          "One or more replacements applied in a single atomic write. " +
+          "Each item has old_str (must be unique in file) and new_str.",
         items: {
           type: "object",
           properties: {
@@ -190,7 +184,9 @@ const EDIT: ToolDef = {
       },
       append_str: {
         type: "string",
-        description: "Content to append to the end of the file. Mutually exclusive with old_str/new_str/edits.",
+        description:
+          "Content to append to the end of the file. " +
+          "Can be used alone or combined with edits (append always executes last).",
       },
       expected_mtime_ms: {
         type: "integer",
@@ -770,82 +766,6 @@ async function withFileWriteLock<T>(
 // edit_file
 // ------------------------------------------------------------------
 
-async function toolEditFile(
-  filePath: string,
-  oldStr: string,
-  newStr: string,
-  expectedMtimeMs?: number,
-): Promise<string | ToolResult> {
-  return withFileWriteLock(filePath, async () => {
-    if (!existsSync(filePath)) {
-      return `ERROR: File not found: ${filePath}`;
-    }
-
-    let initialVersion: FileVersionSnapshot;
-    try {
-      initialVersion = getFileVersionSnapshot(filePath);
-      validateExpectedMtime(filePath, expectedMtimeMs, initialVersion);
-    } catch (e) {
-      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    let content: string;
-    try {
-      content = readFileSync(filePath, { encoding: "utf-8" });
-    } catch (e) {
-      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    const count = content.split(oldStr).length - 1;
-    if (count === 0) {
-      return "ERROR: old_str not found in file.";
-    }
-    if (count > 1) {
-      return `ERROR: old_str appears ${count} times (must be unique).`;
-    }
-
-    const matchOffset = content.indexOf(oldStr);
-    const newContent = content.replace(oldStr, newStr);
-    const diffPreview = buildUnifiedDiffPreview(
-      simpleUnifiedDiff(
-        content.split("\n"),
-        newContent.split("\n"),
-        filePath,
-        filePath,
-      ),
-    );
-
-    const totalLineCount = countFileLines(content);
-    const fileModifyData: FileModifyDisplayData = {
-      filePath,
-      language: inferLanguageByExt(filePath),
-      mode: "replace",
-      totalLineCount,
-      hunks: [buildHunkFromMatch(content, matchOffset, oldStr, newStr)],
-    };
-
-    try {
-      await atomicWriteTextFile(filePath, newContent, initialVersion.mode, initialVersion);
-    } catch (e) {
-      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
-    return new ToolResult({
-      content: `OK: File edited successfully. [mtime_ms=${newMtimeMs}]`,
-      metadata: {
-        path: filePath,
-        tui_preview: {
-          kind: "diff",
-          text: diffPreview.text,
-          truncated: diffPreview.truncated,
-        },
-        fileModifyData,
-      },
-    });
-  });
-}
-
 async function toolEditFileAppend(
   filePath: string,
   appendStr: string,
@@ -914,6 +834,7 @@ async function toolEditFileMulti(
   filePath: string,
   edits: Array<{ old_str: string; new_str: string }>,
   expectedMtimeMs?: number,
+  appendStr?: string,
 ): Promise<string | ToolResult> {
   return withFileWriteLock(filePath, async () => {
     if (!existsSync(filePath)) {
@@ -969,15 +890,33 @@ async function toolEditFileMulti(
       }
     }
 
-    // Apply from bottom to top (reverse offset order)
+    // Apply replacements from bottom to top (reverse offset order)
     let newContent = content;
     for (let i = matches.length - 1; i >= 0; i--) {
       const m = matches[i];
       newContent = newContent.slice(0, m.index) + m.newStr + newContent.slice(m.index + m.oldStr.length);
     }
 
+    // Append always executes last, after all replacements
+    if (appendStr) {
+      newContent += appendStr;
+    }
+
     const totalLineCount = countFileLines(content);
     const hunks = buildMultiEditHunks(content, matches);
+
+    // If append, add an append hunk at the end
+    if (appendStr) {
+      const appendStartLine = countFileLines(newContent) - countFileLines(appendStr) + 1;
+      hunks.push({
+        startLine: appendStartLine,
+        contextBefore: [],
+        deletions: [],
+        additions: appendStr.split("\n"),
+        contextAfter: [],
+      });
+    }
+
     const diffPreview = buildUnifiedDiffPreview(
       simpleUnifiedDiff(
         content.split("\n"),
@@ -1001,9 +940,11 @@ async function toolEditFileMulti(
       return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
     }
 
+    const parts = [`${edits.length} edits applied`];
+    if (appendStr) parts.push(`${appendStr.length} chars appended`);
     const newMtimeMs = Math.trunc(statSync(filePath).mtimeMs);
     return new ToolResult({
-      content: `OK: ${edits.length} edits applied successfully. [mtime_ms=${newMtimeMs}]`,
+      content: `OK: ${parts.join(", ")}. [mtime_ms=${newMtimeMs}]`,
       metadata: {
         path: filePath,
         tui_preview: {
@@ -2075,22 +2016,9 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         const appendStr = optionalStringArg("edit_file", a, "append_str", "");
         const editsRaw = a.edits;
 
-        // Validate mode-specific args before resolving path
-        if (!appendStr && !Array.isArray(editsRaw)) {
-          requiredStringArg("edit_file", a, "old_str", { nonEmpty: true });
-          requiredStringArg("edit_file", a, "new_str");
-        }
-        const filePath = scopedPath(
-          requestedPath,
-          "write",
-          ctx,
-          { mustExist: true, expectFile: true },
-        );
-        if (appendStr) {
-          return toolEditFileAppend(filePath, appendStr, expectedMtimeMs);
-        }
+        // Validate edits array
+        const edits: Array<{ old_str: string; new_str: string }> = [];
         if (Array.isArray(editsRaw)) {
-          const edits: Array<{ old_str: string; new_str: string }> = [];
           for (const item of editsRaw) {
             if (!item || typeof item !== "object") {
               return "ERROR: Each item in edits must be an object with old_str and new_str.";
@@ -2107,11 +2035,26 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
           if (edits.length === 0) {
             return "ERROR: edits array must not be empty.";
           }
-          return toolEditFileMulti(filePath, edits, expectedMtimeMs);
         }
-        const oldStr = a.old_str as string;
-        const newStr = a.new_str as string;
-        return toolEditFile(filePath, oldStr, newStr, expectedMtimeMs);
+
+        if (edits.length === 0 && !appendStr) {
+          return "ERROR: edit_file requires edits array and/or append_str.";
+        }
+
+        const filePath = scopedPath(
+          requestedPath,
+          "write",
+          ctx,
+          { mustExist: true, expectFile: true },
+        );
+
+        // Append-only (no replacements)
+        if (edits.length === 0) {
+          return toolEditFileAppend(filePath, appendStr, expectedMtimeMs);
+        }
+
+        // Edits (possibly combined with append)
+        return toolEditFileMulti(filePath, edits, expectedMtimeMs, appendStr || undefined);
       } catch (e) {
         return formatToolError("edit_file", e);
       }

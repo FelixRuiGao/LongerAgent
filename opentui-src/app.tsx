@@ -620,19 +620,15 @@ export function OpenTuiApp({
     if (closingRef.current) return;
     switch (event.action) {
       case "reasoning_chunk":
-        setPhase("thinking");
-        break;
       case "text_chunk":
-        setPhase("generating");
-        break;
       case "tool_call":
-        setPhase("working");
+        setPhase("decoding");
         break;
       case "tool_result":
         setPhase("prefilling");
         break;
       case "agent_no_reply":
-        setPhase("waiting");
+        session.appendStatusMessage("[No reply] The model chose not to reply.", "no_reply");
         break;
       case "agent_end":
         setPhase("idle");
@@ -642,7 +638,7 @@ export function OpenTuiApp({
       case "ask_requested":
         setPendingAsk(session.getPendingAsk?.() ?? null);
         setAskError(null);
-        setPhase("waiting");
+        setPhase("asking");
         break;
       case "ask_resolved":
         setPendingAsk(session.getPendingAsk?.() ?? null);

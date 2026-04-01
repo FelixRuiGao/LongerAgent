@@ -12,9 +12,11 @@ function str(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function truncateCmd(cmd: unknown, max = 60): string {
-  const s = str(cmd);
-  return s.length > max ? s.slice(0, max) + "..." : s;
+function truncateLines(value: unknown, maxLines = 5): string {
+  const s = str(value);
+  const lines = s.split("\n");
+  if (lines.length <= maxLines) return s;
+  return lines.slice(0, maxLines).join("\n") + "\n...";
 }
 
 export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
@@ -73,7 +75,7 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
   bash: {
     category: "execute",
     displayName: "Run",
-    text: (args) => truncateCmd(args.command),
+    text: (args) => truncateLines(args.command),
     suffix: (meta) => {
       const code = meta?.exitCode;
       return typeof code === "number" ? `(exit ${code})` : "";
@@ -83,7 +85,7 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
   bash_background: {
     category: "execute",
     displayName: "Run",
-    text: (args) => truncateCmd(args.command),
+    text: (args) => truncateLines(args.command),
     inlineResult: false,
   },
   bash_output: {
@@ -140,13 +142,16 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     category: "orchestration",
     displayName: "Send",
     text: (args) => str(args.to),
-    inlineResult: false,
+    inlineResult: { maxLines: 4 },
   },
   ask: {
     category: "orchestration",
     displayName: "Ask",
-    text: () => "",
-    inlineResult: false,
+    text: (args) => {
+      const q = str(args.question);
+      return q.length > 80 ? q.slice(0, 80) + "..." : q;
+    },
+    inlineResult: { maxLines: 4 },
   },
   show_context: {
     category: "internal",
@@ -176,9 +181,18 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     text: () => "",
     inlineResult: false,
   },
+  wait: {
+    category: "orchestration",
+    displayName: "Wait",
+    text: (args) => {
+      const s = args.seconds;
+      return typeof s === "number" ? `${s}s` : "";
+    },
+    inlineResult: false,
+  },
 };
 
-export const HIDDEN_TOOLS = new Set(["wait"]);
+export const HIDDEN_TOOLS = new Set<string>();
 
 export function getToolProfile(toolName: string): ToolDisplayProfile {
   return TOOL_PROFILES[toolName] ?? {

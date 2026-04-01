@@ -348,11 +348,12 @@ export function createToolResult(
   }
   if (opts.execStartMs !== undefined) meta.execStartMs = opts.execStartMs;
   if (opts.previewDim) meta.tuiDim = true;
+  const hasDisplay = Boolean(opts.previewText) || opts.isError;
   return baseEntry(id, "tool_result", turnIndex, {
     roundIndex,
-    tuiVisible: Boolean(opts.previewText),
-    displayKind: opts.previewText ? "tool_result" : null,
-    display: opts.previewText ?? "",
+    tuiVisible: hasDisplay,
+    displayKind: hasDisplay ? "tool_result" : null,
+    display: opts.previewText ?? (opts.isError ? resultContent.content : ""),
     apiRole: "tool_result",
     content: resultContent,
     meta,

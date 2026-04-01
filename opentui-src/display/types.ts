@@ -10,10 +10,8 @@ import type { OAuthTokens } from "../../src/auth/openai-oauth.js";
 export type ActivityPhase =
   | "idle"
   | "prefilling"
-  | "working"
-  | "thinking"
-  | "generating"
-  | "waiting"
+  | "decoding"
+  | "asking"
   | "closing"
   | "cancelling"
   | "error";

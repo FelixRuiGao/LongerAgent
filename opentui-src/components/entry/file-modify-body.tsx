@@ -141,6 +141,9 @@ function buildReplaceArtifacts(
     const afterStart = hunk.startLine + hunk.deletions.length;
     const endLine = afterStart + hunk.contextAfter.length;
     if (endLine > maxLineNo) maxLineNo = endLine;
+    // Additions can extend beyond deletions (e.g. append hunks)
+    const addEnd = hunk.startLine + hunk.additions.length;
+    if (addEnd > maxLineNo) maxLineNo = addEnd;
   }
   const numW = maxLineNo > 0 ? Math.max(String(maxLineNo).length, 2) : 0;
 

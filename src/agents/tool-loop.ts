@@ -477,23 +477,10 @@ function buildStreamableToolCall(
   }
 
   if (toolName === "edit_file") {
-    // Append mode: single "Append" section
     const appendField = fields["append_str"];
-    if (appendField && appendField.kind === "string") {
-      return {
-        canonicalArgs: { path, append_str: appendField.value, ...optional },
-        sections: [{
-          key: "append_str",
-          label: "Append",
-          text: String(appendField.value ?? ""),
-          complete: appendField.complete,
-        }],
-        language,
-        streamMode: "append" as StreamMode,
-      };
-    }
+    const hasAppend = appendField && appendField.kind === "string";
 
-    // Multi-edit mode: edits array
+    // Edits array (possibly combined with append)
     const editsStart = rawArgsBuffer.indexOf('"edits"');
     if (editsStart !== -1) {
       const arrayStart = rawArgsBuffer.indexOf("[", editsStart);
@@ -501,11 +488,12 @@ function buildStreamableToolCall(
         const parsed = parseEditsArray(rawArgsBuffer, arrayStart);
         const sections: ToolStreamSection[] = [];
         const canonicalEdits: Array<{ old_str: unknown; new_str: unknown }> = [];
+        const isSingle = parsed.edits.length === 1;
         for (const [idx, edit] of parsed.edits.entries()) {
           if (edit.old_str) {
             sections.push({
               key: `old_str_${idx}`,
-              label: `Before #${idx + 1}`,
+              label: isSingle ? "Before" : `Before #${idx + 1}`,
               text: String(edit.old_str.value ?? ""),
               complete: edit.old_str.complete,
             });
@@ -513,7 +501,7 @@ function buildStreamableToolCall(
           if (edit.new_str) {
             sections.push({
               key: `new_str_${idx}`,
-              label: `After #${idx + 1}`,
+              label: isSingle ? "After" : `After #${idx + 1}`,
               text: String(edit.new_str.value ?? ""),
               complete: edit.new_str.complete,
             });
@@ -523,9 +511,22 @@ function buildStreamableToolCall(
             new_str: edit.new_str?.value ?? "",
           });
         }
+        if (hasAppend) {
+          sections.push({
+            key: "append_str",
+            label: "Append",
+            text: String(appendField!.value ?? ""),
+            complete: appendField!.complete,
+          });
+        }
         if (sections.length === 0) return null;
         return {
-          canonicalArgs: { path, edits: canonicalEdits, ...optional },
+          canonicalArgs: {
+            path,
+            edits: canonicalEdits,
+            ...(hasAppend ? { append_str: appendField!.value } : {}),
+            ...optional,
+          },
           sections,
           language,
           streamMode: "replace" as StreamMode,
@@ -533,34 +534,22 @@ function buildStreamableToolCall(
       }
     }
 
-    // Single replace mode: Before/After sections
-    const sections: ToolStreamSection[] = [];
-    const canonicalArgs: Record<string, unknown> = { path, ...optional };
-
-    const oldField = fields["old_str"];
-    if (oldField && oldField.kind === "string") {
-      canonicalArgs["old_str"] = oldField.value;
-      sections.push({
-        key: "old_str",
-        label: "Before",
-        text: String(oldField.value ?? ""),
-        complete: oldField.complete,
-      });
+    // Append-only (no edits array)
+    if (hasAppend) {
+      return {
+        canonicalArgs: { path, append_str: appendField!.value, ...optional },
+        sections: [{
+          key: "append_str",
+          label: "Append",
+          text: String(appendField!.value ?? ""),
+          complete: appendField!.complete,
+        }],
+        language,
+        streamMode: "append" as StreamMode,
+      };
     }
 
-    const newField = fields["new_str"];
-    if (newField && newField.kind === "string") {
-      canonicalArgs["new_str"] = newField.value;
-      sections.push({
-        key: "new_str",
-        label: "After",
-        text: String(newField.value ?? ""),
-        complete: newField.complete,
-      });
-    }
-
-    if (sections.length === 0) return null;
-    return { canonicalArgs, sections, language, streamMode: "replace" as StreamMode };
+    return null;
   }
 
   return null;
@@ -1044,8 +1033,8 @@ export async function asyncRunToolLoop(
         const probe = pending.editProbes[i];
         if (!probe.resolved || probe.startLine === undefined) continue;
 
-        const oldKey = i === 0 ? "old_str" : `old_str_${i}`;
-        const newKey = i === 0 ? "new_str" : `new_str_${i}`;
+        const oldKey = `old_str_${i}`;
+        const newKey = `new_str_${i}`;
         const oldSection = pending.sections.find((s) => s.key === oldKey);
         const newSection = pending.sections.find((s) => s.key === newKey);
 
@@ -1198,7 +1187,21 @@ export async function asyncRunToolLoop(
         if (resolved.contentBlocks) {
           mergedMetadata._contentBlocks = resolved.contentBlocks;
         }
+        const isError = resolved.content.startsWith("ERROR:");
         const preview = extractToolPreview(resolved.metadata);
+        // Auto-preview: when tool didn't set explicit tui_preview, use result
+        // text directly (capped to avoid bloating log entries). The TUI layer
+        // controls final display truncation via profile maxLines.
+        let previewText = preview?.text;
+        let previewDim = preview?.dim;
+        if (!previewText && !isError) {
+          // Cap at ~20 lines to keep log entry display field reasonable
+          const lines = resultStr.split("\n");
+          previewText = lines.length > 20
+            ? lines.slice(0, 20).join("\n") + `\n... (${lines.length - 20} more lines)`
+            : resultStr;
+          previewDim = true;
+        }
         appendEntry(createToolResultEntry(
           allocId("tool_result"),
           turnIndex,
@@ -1210,12 +1213,12 @@ export async function asyncRunToolLoop(
             toolSummary: summary,
           },
           {
-            isError: resolved.content.startsWith("ERROR:"),
+            isError,
             contextId: ensureRoundContextId(),
             toolMetadata: mergedMetadata,
             execStartMs,
-            previewText: preview?.text,
-            previewDim: preview?.dim,
+            previewText,
+            previewDim,
           },
         ));
         if (onSaveCheckpoint) onSaveCheckpoint();

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { RGBA } from "../../forked/core/lib/RGBA.js";
 import type { PresentationEntry, ToolCategory } from "../../presentation/types.js";
@@ -45,6 +45,24 @@ function buildSectionPreview(text: string, maxLines: number): { text: string; tr
   };
 }
 
+/** Live elapsed seconds since a start timestamp (updates every second). Returns 0 when inactive. */
+function useElapsedSince(startMs: number | undefined, active: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!active || !startMs) {
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+      setElapsed(0);
+      return;
+    }
+    const tick = () => setElapsed(Math.floor((Date.now() - startMs) / 1000));
+    tick();
+    intervalRef.current = setInterval(tick, 1000);
+    return () => { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } };
+  }, [active, startMs]);
+  return elapsed;
+}
+
 interface ToolOperationEntryProps {
   entry: PresentationEntry;
   colors: ConversationPalette;
@@ -76,6 +94,8 @@ function ToolOperationEntryInner(
     "tool",
   );
 
+  const isWait = displayName === "Wait";
+  const waitElapsed = useElapsedSince(entry.toolStartedAt, active && isWait);
   const toolText = entry.toolText ?? "";
   const suffix = entry.toolSuffix ?? "";
   const streamSections = entry.toolStreamSections ?? [];
@@ -124,7 +144,11 @@ function ToolOperationEntryInner(
           <text fg={colors.dim} content={` ${suffix}`} flexShrink={0} />
         ) : null}
         <text content="  " flexShrink={0} />
-        <text fg={colors.dim} content={toolText} wrapMode="char" flexGrow={1} flexShrink={1} />
+        {isWait && active ? (
+          <text fg={colors.dim} content={`${waitElapsed}s  Timeout: ${toolText} (Send a message to interrupt)`} flexShrink={0} />
+        ) : (
+          <text fg={colors.dim} content={toolText} wrapMode="char" flexGrow={1} flexShrink={1} />
+        )}
       </box>
       {hasBody ? (
         <box

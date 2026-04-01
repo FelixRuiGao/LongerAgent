@@ -76,7 +76,7 @@ export interface PresentationEntry {
 
   // kind=system
   systemText?: string;
-  systemSeverity?: "info" | "error" | "compact" | "interrupted" | "sub_agent";
+  systemSeverity?: "info" | "error" | "compact" | "interrupted" | "sub_agent" | "no_reply";
 
   // kind=turn_summary
   turnSummaryText?: string;

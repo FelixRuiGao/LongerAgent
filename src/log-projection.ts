@@ -89,6 +89,10 @@ function toConversationEntry(
     id: entry.id,
   };
   if (entry.meta["tuiDim"]) ce.dim = true;
+  if (entry.type === "status" && entry.meta["statusType"]) {
+    ce.meta ??= {};
+    ce.meta.statusType = entry.meta["statusType"];
+  }
 
   // Attach timing info and meta for tool_call entries
   if (entry.type === "tool_call") {
