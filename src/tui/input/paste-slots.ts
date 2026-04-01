@@ -1,3 +1,5 @@
+import { buildPasteLabel } from "../../ui/input/paste.js";
+
 const PASTE_MARKER_START = 0xe000;
 const PASTE_MARKER_END = 0xf8ff;
 
@@ -26,7 +28,7 @@ export class TurnPasteSlotStore {
 
     this.slots.set(marker, {
       marker,
-      label: `[Pasted Text #${index} - ${lineCount} lines]`,
+      label: buildPasteLabel(text, index, lineCount),
       text,
       lineCount,
       index,

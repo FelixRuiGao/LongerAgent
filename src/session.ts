@@ -1034,14 +1034,15 @@ export class Session {
    */
   private _injectMessageDirect(msg: AgentMessage): void {
     const ctxId = this._allocateContextId();
-    const formatted = `[Message from ${msg.from}]\n${msg.content}`;
+    const display = `[Message from ${msg.from}]`;
+    const content = `[Message from ${msg.from}]\n${msg.content}`;
     // v2 log (source of truth)
     this._appendEntry(
       createUserMessageEntry(
         this._nextLogId("user_message"),
         this._turnCount,
-        formatted,
-        formatted,
+        display,
+        content,
         ctxId,
       ),
       false,
@@ -1165,20 +1166,44 @@ export class Session {
    * Drains queue + builds agent report → pushes as user message.
    */
   private _injectPendingMessages(): void {
-    const content = this._buildDeliveryContent();
+    // Build display summary before draining inbox
+    const display = this._buildDeliveryDisplaySummary();
+    const content = `[New Messages]\n\n${this._buildDeliveryContent()}`;
     const ctxId = this._allocateContextId();
-    const formatted = `[New Messages]\n\n${content}`;
     // v2 log (source of truth)
     this._appendEntry(
       createUserMessageEntry(
         this._nextLogId("user_message"),
         this._turnCount,
-        formatted,
-        formatted,
+        display,
+        content,
         ctxId,
       ),
       false,
     );
+  }
+
+  /**
+   * Build a one-line display summary of pending messages for TUI.
+   * Must be called before _buildDeliveryContent() which drains the inbox.
+   */
+  private _buildDeliveryDisplaySummary(): string {
+    const counts: Record<string, number> = {};
+    for (const msg of this._inbox) {
+      counts[msg.from] = (counts[msg.from] ?? 0) + 1;
+    }
+    // Count undelivered child session results
+    for (const [id, handle] of this._childSessions) {
+      if (handle.outputRevision > handle.deliveredResultRevision) {
+        counts[id] = (counts[id] ?? 0) + 1;
+      }
+    }
+    const parts = Object.entries(counts).map(
+      ([from, n]) => `${n} from ${from}`,
+    );
+    return parts.length > 0
+      ? `[New Messages: ${parts.join(", ")}]`
+      : "[New Messages]";
   }
 
   /**
@@ -3066,9 +3091,8 @@ export class Session {
       createTurnStart(this._nextLogId("turn_start"), this._turnCount),
       false,
     );
-    const displayText = typeof userContent === "string"
-      ? userContent
-      : "[multimodal input]";
+    // display = original user input (what they typed); content = expanded for API
+    const displayText = userInput;
     // For the log entry, replace inline base64 images with image_ref file paths
     const logContent = this._extractAndSaveImages(userContent);
     this._appendEntry(

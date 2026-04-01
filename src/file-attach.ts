@@ -502,21 +502,22 @@ export function formatContextBlock(files: FileInfo[]): string {
       );
     } else if (fi.projectedDocumentType) {
       const docLabel = fi.projectedDocumentType.toUpperCase();
-      const continueHint =
-        `\nUse read_file on the original path (${fi.path}) to continue reading the extracted Markdown view.`;
       if (fi.isPreview) {
         const shown = Math.min(PREVIEW_CHAR_LIMIT, fi.charCount);
         const pct = fi.charCount
           ? Math.round((shown / fi.charCount) * 100)
           : 0;
+        const previewLines = fi.content.split("\n").length;
+        const continueHint =
+          `\nUse read_file on the original path (${fi.path}) with start_line=${previewLines + 1} to continue reading.`;
         entries.push(
           `[${num}] ${fi.path} (${docLabel}, ${sizeMB} MB; auto-extracted Markdown view, ${fi.charCount} chars, ${fi.lineCount} lines)\n` +
-            `Preview (first ${shown}/${fi.charCount} chars(${pct}%)):\n${fi.content}\n...${continueHint}`,
+            `Preview (first ${shown}/${fi.charCount} chars(${pct}%), through line ${previewLines} of ${fi.lineCount}):\n${fi.content}\n...${continueHint}`,
         );
       } else {
         entries.push(
           `[${num}] ${fi.path} (${docLabel}, ${sizeMB} MB; auto-extracted Markdown view, ${fi.charCount} chars, ${fi.lineCount} lines)\n` +
-            `Full extracted content:\n${fi.content}${continueHint}`,
+            `Full extracted content:\n${fi.content}`,
         );
       }
     } else if (fi.isBinary) {
@@ -525,18 +526,19 @@ export function formatContextBlock(files: FileInfo[]): string {
       );
     } else if (fi.isPreview) {
       let hint: string;
+      const previewLines = fi.content.split("\n").length;
       if (fi.isCode) {
         const shown = Math.min(CODE_LINE_LIMIT, fi.lineCount);
         const pct = fi.lineCount
           ? Math.round((shown / fi.lineCount) * 100)
           : 0;
-        hint = `first ${shown}/${fi.lineCount} lines(${pct}%). Use read_file tool to see full content.`;
+        hint = `first ${shown}/${fi.lineCount} lines(${pct}%), through line ${previewLines} of ${fi.lineCount}. Use read_file with start_line=${previewLines + 1} to continue.`;
       } else {
         const shown = Math.min(PREVIEW_CHAR_LIMIT, fi.charCount);
         const pct = fi.charCount
           ? Math.round((shown / fi.charCount) * 100)
           : 0;
-        hint = `first ${shown}/${fi.charCount} chars(${pct}%). Use read_file tool to see full content.`;
+        hint = `first ${shown}/${fi.charCount} chars(${pct}%), through line ${previewLines} of ${fi.lineCount}. Use read_file with start_line=${previewLines + 1} to continue.`;
       }
       entries.push(
         `[${num}] ${fi.path} (${fi.charCount} chars, ${fi.lineCount} lines)\n` +

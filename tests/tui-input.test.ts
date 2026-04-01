@@ -198,12 +198,12 @@ describe("paste placeholder", () => {
     const p1 = classifyPastedText(multiLineText(16), counter);
     const p2 = classifyPastedText(multiLineText(17), counter);
 
-    expect(p1.text).toBe("[Pasted Text #1 - 16 lines]");
-    expect(p2.text).toBe("[Pasted Text #2 - 17 lines]");
+    expect(p1.text).toBe("[line1 line2 line3 li... Pasted Text #1 - 16 lines]");
+    expect(p2.text).toBe("[line1 line2 line3 li... Pasted Text #2 - 17 lines]");
 
     counter.reset();
     const p3 = classifyPastedText(multiLineText(16), counter);
-    expect(p3.text).toBe("[Pasted Text #1 - 16 lines]");
+    expect(p3.text).toBe("[line1 line2 line3 li... Pasted Text #1 - 16 lines]");
   });
 
   it("collapses only when pasted text exceeds 15 lines", () => {
@@ -217,7 +217,7 @@ describe("paste placeholder", () => {
 
     const p16 = classifyPastedText(sixteen, counter);
     expect(p16.replacedWithPlaceholder).toBe(true);
-    expect(p16.text).toBe("[Pasted Text #1 - 16 lines]");
+    expect(p16.text).toBe("[line1 line2 line3 li... Pasted Text #1 - 16 lines]");
   });
 
   it("uses one-char marker in editor and expands to raw content on submit", () => {
@@ -226,7 +226,7 @@ describe("paste placeholder", () => {
     expect(marker).not.toBeNull();
 
     const markerChar = marker as string;
-    expect(slots.labelFor(markerChar)).toBe("[Pasted Text #1 - 2 lines]");
+    expect(slots.labelFor(markerChar)).toBe("[line1 line2 Pasted Text #1 - 2 lines]");
 
     const editorValue = `a${markerChar}b`;
     expect(editorValue.length).toBe(3);

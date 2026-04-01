@@ -62,11 +62,12 @@ describe("opentui composer tokens", () => {
   });
 
   it("serializes visible token labels back to raw submit text", () => {
-    const visibleText = '@README.md [Pasted Text #1 - 20 lines] done';
+    const pasteLabel = "[line1 line2 line3 li... Pasted Text #1 - 20 lines]";
+    const visibleText = `@README.md ${pasteLabel} done`;
     const fileStart = 0;
     const fileEnd = displayWidthWithNewlines("@README.md");
     const pasteStart = displayWidthWithNewlines("@README.md ");
-    const pasteEnd = pasteStart + displayWidthWithNewlines("[Pasted Text #1 - 20 lines]");
+    const pasteEnd = pasteStart + displayWidthWithNewlines(pasteLabel);
 
     expect(serializeVisibleTextWithTokens(visibleText, [
       { start: fileStart, end: fileEnd, submitText: "@README.md" },

@@ -1,5 +1,22 @@
 export const LONG_PASTE_LINE_THRESHOLD = 15;
 
+const PASTE_PREVIEW_CHARS = 20;
+
+/**
+ * Build the display label for a collapsed paste placeholder.
+ * Format: `[Build a CRM dashboard... Pasted Text #1 - 124 lines]`
+ */
+export function buildPasteLabel(text: string, index: number, lineCount: number): string {
+  const flat = text.replace(/\n/g, " ").trim();
+  let preview = "";
+  if (flat.length > 0) {
+    preview = flat.length > PASTE_PREVIEW_CHARS
+      ? flat.slice(0, PASTE_PREVIEW_CHARS) + "... "
+      : flat + " ";
+  }
+  return `[${preview}Pasted Text #${index} - ${lineCount} lines]`;
+}
+
 export interface PasteDecision {
   text: string;
   lineCount: number;
@@ -42,7 +59,7 @@ export function classifyPastedText(
 
   const index = counter.next();
   return {
-    text: `[Pasted Text #${index} - ${lineCount} lines]`,
+    text: buildPasteLabel(text, index, lineCount),
     lineCount,
     replacedWithPlaceholder: true,
     index,
