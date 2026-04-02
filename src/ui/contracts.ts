@@ -25,8 +25,11 @@ export type SlashCommand = ActualSlashCommand;
 export type CommandOption = ActualCommandOption;
 export type { CommandContext };
 
+import type { InlineImageInput } from "../session.js";
+export type { InlineImageInput };
+
 export interface Session {
-  turn(userInput: string, options?: { signal?: AbortSignal }): Promise<string>;
+  turn(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[] }): Promise<string>;
   close(): Promise<void>;
   requestTurnInterrupt?(): { accepted: boolean; reason?: "compact_in_progress" };
   cancelCurrentTurn?(): void;

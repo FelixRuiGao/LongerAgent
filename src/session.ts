@@ -265,6 +265,16 @@ const COMM_TOOL_NAMES = new Set([
 ]);
 
 // ------------------------------------------------------------------
+// InlineImageInput — clipboard / drag-drop image passed to turn()
+// ------------------------------------------------------------------
+
+export interface InlineImageInput {
+  id: string;
+  base64: string;
+  mediaType: string;
+}
+
+// ------------------------------------------------------------------
 // AgentMessage — message envelope for push delivery & future routing
 // ------------------------------------------------------------------
 
@@ -3037,12 +3047,12 @@ export class Session {
     return finalText;
   }
 
-  async turn(userInput: string, options?: { signal?: AbortSignal }): Promise<string> {
+  async turn(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[] }): Promise<string> {
     return this._withTurnLock(() => this._turnInner(userInput, options));
   }
 
   /** Inner turn logic, called from within the turn lock. */
-  private async _turnInner(userInput: string, options?: { signal?: AbortSignal }): Promise<string> {
+  private async _turnInner(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[] }): Promise<string> {
     this._ensureSessionStorageReady();
     if (this._capabilities.includeSkillTools || this._capabilities.includeSpawnTool) {
       await this._ensureMcp();
@@ -3091,6 +3101,27 @@ export class Session {
       createTurnStart(this._nextLogId("turn_start"), this._turnCount),
       false,
     );
+    // Merge inline images (clipboard paste) into multimodal content
+    const inlineImages = options?.inlineImages;
+    if (inlineImages && inlineImages.length > 0) {
+      const parts: Array<Record<string, unknown>> = [];
+      if (typeof userContent === "string") {
+        if (userContent.trim()) {
+          parts.push({ type: "text", text: userContent });
+        }
+      } else {
+        parts.push(...userContent);
+      }
+      for (const img of inlineImages) {
+        parts.push({
+          type: "image",
+          media_type: img.mediaType,
+          data: img.base64,
+        });
+      }
+      userContent = parts;
+    }
+
     // display = original user input (what they typed); content = expanded for API
     const displayText = userInput;
     // For the log entry, replace inline base64 images with image_ref file paths

@@ -175,6 +175,8 @@ function mapEscapeSequence(seq: string): KeyInputEvent | undefined {
           return keyEvent("ctrl_n", mods);
         case "u":
           return keyEvent("ctrl_u", mods);
+        case "v":
+          return keyEvent("ctrl_v", mods);
         case "w":
           return keyEvent("ctrl_w", mods);
         case "y":
@@ -385,6 +387,12 @@ export class InputProtocolParser {
       if (ch === "\x0c") {
         this.buffer = this.buffer.slice(1);
         events.push(keyEvent("ctrl_l", { ctrl: true }));
+        continue;
+      }
+
+      if (ch === "\x16") {
+        this.buffer = this.buffer.slice(1);
+        events.push(keyEvent("ctrl_v", { ctrl: true }));
         continue;
       }
 

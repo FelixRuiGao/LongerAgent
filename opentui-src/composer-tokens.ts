@@ -19,6 +19,7 @@ export interface ComposerTokenVisuals {
   syntaxStyle: SyntaxStyle;
   fileStyleId: number;
   pasteStyleId: number;
+  imageStyleId: number;
 }
 
 const COMPOSER_TOKEN_TYPE = "composer-token";
@@ -38,10 +39,15 @@ export function createComposerTokenVisuals(colors: {
     fg: colors.yellow,
     bold: true,
   });
+  const imageStyleId = syntaxStyle.registerStyle("composer.token.image", {
+    fg: colors.accent,
+    bold: true,
+  });
   return {
     syntaxStyle,
     fileStyleId,
     pasteStyleId,
+    imageStyleId,
   };
 }
 

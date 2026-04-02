@@ -1,4 +1,4 @@
-export type ComposerTokenKind = "file" | "paste";
+export type ComposerTokenKind = "file" | "paste" | "image";
 
 export interface ComposerTokenMetadata {
   kind: ComposerTokenKind;
@@ -7,6 +7,7 @@ export interface ComposerTokenMetadata {
   path?: string;
   index?: number;
   lineCount?: number;
+  imageId?: string;
 }
 
 export interface ComposerTokenSnapshot extends ComposerTokenMetadata {

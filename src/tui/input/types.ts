@@ -26,6 +26,7 @@ export type InputKey =
   | "ctrl_f"
   | "ctrl_c"
   | "ctrl_l"
+  | "ctrl_v"
   | "ctrl_y";
 
 export interface KeyInputEvent {

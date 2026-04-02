@@ -15,6 +15,9 @@ import { isCommandExitSignal } from "../src/commands.js";
 import { ProgressReporter, type ProgressEvent } from "../src/progress.js";
 import { scanCandidates } from "../src/file-attach.js";
 import { classifyPastedText, TurnPasteCounter } from "../src/ui/input/paste.js";
+import { readClipboardImage } from "../src/clipboard-image.js";
+import { processImage, type ProcessedImage } from "../src/image-compress.js";
+import type { InlineImageInput } from "../src/ui/contracts.js";
 import type {
   PendingAskUi,
   AgentQuestionAnswer,
@@ -77,6 +80,7 @@ import {
   createComposerTokenVisuals,
   ensureComposerTokenType,
   findFileReferenceQuery,
+  getComposerTokenSnapshots,
   getTextDiffRange,
   patchComposerExtmarksForDisplayWidth,
   replaceRangeWithComposerToken,
@@ -333,6 +337,8 @@ export function OpenTuiApp({
   const abortControllerRef = useRef<AbortController | null>(null);
   const suppressComposerSyncRef = useRef(false);
   const pasteCounterRef = useRef(new TurnPasteCounter());
+  const imageCounterRef = useRef(0);
+  const draftImagesRef = useRef(new Map<string, ProcessedImage & { id: string; index: number }>());
   const maybeCollapseLargePasteRef = useRef<(previousValue: string, nextValue: string) => boolean>(() => false);
   const updateInputOverlayRef = useRef<(value: string, cursorOffset: number) => void>(() => { });
   const composerTokenVisualsRef = useRef<ComposerTokenVisuals | null>(null);
@@ -673,6 +679,14 @@ export function OpenTuiApp({
     const nextValue = composer.plainText;
     if (previousValue !== nextValue) {
       maybeCollapseLargePasteRef.current(previousValue, nextValue);
+      // Prune draft images whose composer token was deleted
+      if (draftImagesRef.current.size > 0) {
+        const tokens = getComposerTokenSnapshots(composer, ensureComposerTokenType(composer));
+        const liveImageIds = new Set(tokens.filter((t) => t.kind === "image" && t.imageId).map((t) => t.imageId));
+        for (const id of draftImagesRef.current.keys()) {
+          if (!liveImageIds.has(id)) draftImagesRef.current.delete(id);
+        }
+      }
     }
     const visibleValue = composer.plainText;
     const cursorOffset = composer.cursorOffset;
@@ -956,6 +970,8 @@ export function OpenTuiApp({
 
   const resetTurnPasteState = useCallback(() => {
     pasteCounterRef.current.reset();
+    imageCounterRef.current = 0;
+    draftImagesRef.current.clear();
   }, []);
 
   const maybeCollapseLargePaste = useCallback((previousValue: string, nextValue: string): boolean => {
@@ -1132,13 +1148,13 @@ export function OpenTuiApp({
     };
   }, [session, store, commandRegistry, autoSave, performExit, resolvePromptSecret, resolvePromptSelect, requestOAuthLogin]);
 
-  const runTurn = useCallback(async (input: string) => {
+  const runTurn = useCallback(async (input: string, inlineImages?: InlineImageInput[]) => {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
     setPhase("prefilling");
     try {
-      await session.turn(input, { signal: controller.signal });
+      await session.turn(input, { signal: controller.signal, inlineImages });
       setPhase("idle");
       setContextTokens(session.lastInputTokens);
       setCacheReadTokens(session.lastCacheReadTokens ?? 0);
@@ -1237,6 +1253,19 @@ export function OpenTuiApp({
       }
     }
 
+    // Capture image tokens before clearInput destroys composer state
+    let inlineImages: InlineImageInput[] | undefined;
+    if (draftImagesRef.current.size > 0) {
+      const images: InlineImageInput[] = [];
+      for (const [imageId, img] of draftImagesRef.current) {
+        // Only include images whose placeholder is still in the text
+        if (input.includes(`[Image #${img.index}]`)) {
+          images.push({ id: imageId, base64: img.base64, mediaType: img.mediaType });
+        }
+      }
+      if (images.length > 0) inlineImages = images;
+    }
+
     clearInput();
 
     // Use ref to avoid stale closure — OpenTUI's custom renderer may not
@@ -1275,7 +1304,7 @@ export function OpenTuiApp({
       return;
     }
 
-    await runTurn(input);
+    await runTurn(input, inlineImages);
   }, [
     clearInput,
     pendingAsk,
@@ -1901,6 +1930,55 @@ export function OpenTuiApp({
       scrollRef.current?.scrollBy(scrollRef.current.height / 2);
       event.preventDefault();
       event.stopPropagation();
+      return;
+    }
+
+    // Ctrl+V: paste image from system clipboard
+    if (event.name === "v" && event.ctrl && !event.meta && !event.alt && !event.super) {
+      event.preventDefault();
+      event.stopPropagation();
+      void (async () => {
+        try {
+          const clipResult = await readClipboardImage();
+          if (!clipResult) {
+            showHint("No image in clipboard.");
+            return;
+          }
+          const processed = await processImage(clipResult.buffer, clipResult.mediaType);
+          const idx = ++imageCounterRef.current;
+          const imageId = `img-${idx}`;
+          draftImagesRef.current.set(imageId, { ...processed, id: imageId, index: idx });
+
+          const label = `[Image #${idx}]`;
+          const cmp = inputRef.current;
+          if (cmp) {
+            suppressComposerSyncRef.current = true;
+            try {
+              replaceRangeWithComposerToken(cmp, {
+                rangeStart: cmp.cursorOffset,
+                rangeEnd: cmp.cursorOffset,
+                label,
+                metadata: {
+                  kind: "image",
+                  label,
+                  submitText: label,
+                  imageId,
+                  index: idx,
+                },
+                styleId: composerTokenVisuals.imageStyleId,
+                trailingText: " ",
+              });
+            } finally {
+              suppressComposerSyncRef.current = false;
+            }
+            syncComposerState();
+          }
+          const sizeMB = (processed.sizeBytes / (1024 * 1024)).toFixed(1);
+          showHint(`Image pasted (${processed.width}×${processed.height}, ${sizeMB} MB)`);
+        } catch (err) {
+          showHint(`Image paste failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
       return;
     }
 
