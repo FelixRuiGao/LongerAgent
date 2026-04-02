@@ -307,6 +307,11 @@ pub const CliRenderer = struct {
         self.useAlternateScreen = useAlternateScreen;
         self.terminalSetup = true;
 
+        // Enter alt screen first so that any probe leftovers (e.g. the trailing
+        // 'p' from DECRQM sequences on terminals that don't support them) are
+        // rendered in the alt buffer instead of polluting the main screen.
+        self.setupTerminalWithoutDetection(useAlternateScreen);
+
         var stdoutWriter = std.fs.File.stdout().writer(&self.stdoutBuffer);
         const writer = &stdoutWriter.interface;
 
@@ -314,8 +319,6 @@ pub const CliRenderer = struct {
             logger.warn("Failed to query terminal capabilities", .{});
         };
         writer.flush() catch {};
-
-        self.setupTerminalWithoutDetection(useAlternateScreen);
     }
 
     fn setupTerminalWithoutDetection(self: *CliRenderer, useAlternateScreen: bool) void {
@@ -380,6 +383,7 @@ pub const CliRenderer = struct {
         direct.writeAll(ansi.ANSI.showCursor) catch {};
         direct.flush() catch {};
         std.Thread.sleep(10 * std.time.ns_per_ms);
+
     }
 
     fn addStatSample(self: *CliRenderer, comptime T: type, samples: *std.ArrayListUnmanaged(T), value: T) void {
