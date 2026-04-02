@@ -77,6 +77,8 @@ export interface TextTableOptions extends RenderableOptions<TextTableRenderable>
   columnWidthMode?: TextTableColumnWidthMode
   columnFitter?: TextTableColumnFitter
   cellPadding?: number
+  cellPaddingX?: number
+  cellPaddingY?: number
   showBorders?: boolean
   border?: boolean
   outerBorder?: boolean
@@ -98,6 +100,8 @@ export class TextTableRenderable extends Renderable {
   private _columnWidthMode: TextTableColumnWidthMode
   private _columnFitter: TextTableColumnFitter
   private _cellPadding: number
+  private _cellPaddingX: number | undefined
+  private _cellPaddingY: number | undefined
   private _showBorders: boolean
   private _border: boolean
   private _outerBorder: boolean
@@ -155,6 +159,8 @@ export class TextTableRenderable extends Renderable {
     this._columnWidthMode = options.columnWidthMode ?? this._defaultOptions.columnWidthMode
     this._columnFitter = this.resolveColumnFitter(options.columnFitter)
     this._cellPadding = this.resolveCellPadding(options.cellPadding)
+    this._cellPaddingX = options.cellPaddingX != null ? this.resolveCellPadding(options.cellPaddingX) : undefined
+    this._cellPaddingY = options.cellPaddingY != null ? this.resolveCellPadding(options.cellPaddingY) : undefined
     this._showBorders = options.showBorders ?? this._defaultOptions.showBorders
     this._border = options.border ?? this._defaultOptions.border
     this._hasExplicitOuterBorder = options.outerBorder !== undefined
@@ -229,6 +235,28 @@ export class TextTableRenderable extends Renderable {
     const next = this.resolveCellPadding(value)
     if (this._cellPadding === next) return
     this._cellPadding = next
+    this.invalidateLayoutAndRaster()
+  }
+
+  public get cellPaddingX(): number | undefined {
+    return this._cellPaddingX
+  }
+
+  public set cellPaddingX(value: number | undefined) {
+    const next = value != null ? this.resolveCellPadding(value) : undefined
+    if (this._cellPaddingX === next) return
+    this._cellPaddingX = next
+    this.invalidateLayoutAndRaster()
+  }
+
+  public get cellPaddingY(): number | undefined {
+    return this._cellPaddingY
+  }
+
+  public set cellPaddingY(value: number | undefined) {
+    const next = value != null ? this.resolveCellPadding(value) : undefined
+    if (this._cellPaddingY === next) return
+    this._cellPaddingY = next
     this.invalidateLayoutAndRaster()
   }
 
@@ -1000,15 +1028,16 @@ export class TextTableRenderable extends Renderable {
   private drawCellRange(buffer: OptimizedBuffer, firstRow: number, lastRow: number): void {
     const colOffsets = this._layout.columnOffsets
     const rowOffsets = this._layout.rowOffsets
-    const cellPadding = this._cellPadding
+    const padX = this._cellPaddingX ?? this._cellPadding
+    const padY = this._cellPaddingY ?? this._cellPadding
 
     for (let rowIdx = firstRow; rowIdx <= lastRow; rowIdx++) {
-      const cellY = (rowOffsets[rowIdx] ?? 0) + 1 + cellPadding
+      const cellY = (rowOffsets[rowIdx] ?? 0) + 1 + padY
 
       for (let colIdx = 0; colIdx < this._columnCount; colIdx++) {
         const cell = this._cells[rowIdx]?.[colIdx]
         if (!cell) continue
-        buffer.drawTextBuffer(cell.textBufferView, (colOffsets[colIdx] ?? 0) + 1 + cellPadding, cellY)
+        buffer.drawTextBuffer(cell.textBufferView, (colOffsets[colIdx] ?? 0) + 1 + padX, cellY)
       }
     }
   }
@@ -1102,7 +1131,7 @@ export class TextTableRenderable extends Renderable {
         continue
       }
 
-      const cellTop = (this._layout.rowOffsets[rowIdx] ?? 0) + 1 + this._cellPadding
+      const cellTop = (this._layout.rowOffsets[rowIdx] ?? 0) + 1 + (this._cellPaddingY ?? this._cellPadding)
 
       for (let colIdx = 0; colIdx < this._columnCount; colIdx++) {
         const cell = this._cells[rowIdx]?.[colIdx]
@@ -1113,7 +1142,7 @@ export class TextTableRenderable extends Renderable {
           continue
         }
 
-        const cellLeft = (this._layout.columnOffsets[colIdx] ?? 0) + 1 + this._cellPadding
+        const cellLeft = (this._layout.columnOffsets[colIdx] ?? 0) + 1 + (this._cellPaddingX ?? this._cellPadding)
         let coords: CellSelectionCoords = {
           anchorX: localSelection.anchorX - cellLeft,
           anchorY: localSelection.anchorY - cellTop,
@@ -1301,11 +1330,11 @@ export class TextTableRenderable extends Renderable {
   }
 
   private getHorizontalCellPadding(): number {
-    return this._cellPadding * 2
+    return (this._cellPaddingX ?? this._cellPadding) * 2
   }
 
   private getVerticalCellPadding(): number {
-    return this._cellPadding * 2
+    return (this._cellPaddingY ?? this._cellPadding) * 2
   }
 
   private resolveColumnFitter(value: TextTableColumnFitter | undefined): TextTableColumnFitter {

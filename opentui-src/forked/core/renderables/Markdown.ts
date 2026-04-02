@@ -47,6 +47,14 @@ export interface MarkdownTableOptions {
    */
   cellPadding?: number
   /**
+   * Horizontal padding override for table cells.
+   */
+  cellPaddingX?: number
+  /**
+   * Vertical padding override for table cells.
+   */
+  cellPaddingY?: number
+  /**
    * Enables/disables table border rendering.
    */
   borders?: boolean
@@ -120,6 +128,8 @@ interface ResolvedTableRenderableOptions {
   columnFitter: TextTableColumnFitter
   wrapMode: "none" | "char" | "word"
   cellPadding: number
+  cellPaddingX: number | undefined
+  cellPaddingY: number | undefined
   border: boolean
   outerBorder: boolean
   showBorders: boolean
@@ -717,6 +727,8 @@ export class MarkdownRenderable extends Renderable {
       columnFitter: this._tableOptions?.columnFitter ?? "proportional",
       wrapMode: this._tableOptions?.wrapMode ?? "word",
       cellPadding: this._tableOptions?.cellPadding ?? 0,
+      cellPaddingX: this._tableOptions?.cellPaddingX,
+      cellPaddingY: this._tableOptions?.cellPaddingY,
       border: borders,
       outerBorder: this._tableOptions?.outerBorder ?? borders,
       showBorders: borders,
@@ -734,6 +746,8 @@ export class MarkdownRenderable extends Renderable {
     tableRenderable.columnFitter = options.columnFitter
     tableRenderable.wrapMode = options.wrapMode
     tableRenderable.cellPadding = options.cellPadding
+    tableRenderable.cellPaddingX = options.cellPaddingX
+    tableRenderable.cellPaddingY = options.cellPaddingY
     tableRenderable.border = options.border
     tableRenderable.outerBorder = options.outerBorder
     tableRenderable.showBorders = options.showBorders
@@ -773,6 +787,8 @@ export class MarkdownRenderable extends Renderable {
       columnFitter: options.columnFitter,
       wrapMode: options.wrapMode,
       cellPadding: options.cellPadding,
+      cellPaddingX: options.cellPaddingX,
+      cellPaddingY: options.cellPaddingY,
       border: options.border,
       outerBorder: options.outerBorder,
       showBorders: options.showBorders,

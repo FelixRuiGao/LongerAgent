@@ -52,9 +52,13 @@ export function AssistantEntry({
           concealCode={false}
           width="100%"
           tableOptions={{
+            widthMode: "content",
             borders: true,
             outerBorder: true,
+            borderStyle: "single",
+            borderColor: colors.text,
             wrapMode: "word",
+            cellPaddingX: 1,
             selectable: true,
           }}
         />
