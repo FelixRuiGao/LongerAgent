@@ -1,4 +1,16 @@
+import path from "node:path";
+
 import type { ToolCategory } from "./types.js";
+
+const CWD = process.cwd();
+const CWD_PREFIX = CWD + path.sep;
+
+/** Shorten absolute paths under the project root to relative paths. */
+function shortenPath(p: string): string {
+  if (p.startsWith(CWD_PREFIX)) return p.slice(CWD_PREFIX.length);
+  if (p === CWD) return ".";
+  return p;
+}
 
 export interface ToolDisplayProfile {
   category: ToolCategory;
@@ -21,37 +33,37 @@ function truncateLines(value: unknown, maxLines = 5): string {
 
 export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
   read_file: {
-    category: "file-read",
+    category: "observe",
     displayName: "Read",
-    text: (args) => str(args.path),
+    text: (args) => shortenPath(str(args.path)),
     inlineResult: false,
   },
   list_dir: {
-    category: "file-read",
+    category: "observe",
     displayName: "List",
-    text: (args) => str(args.path, "."),
+    text: (args) => shortenPath(str(args.path, ".")),
     inlineResult: { maxLines: 8 },
   },
   glob: {
-    category: "file-read",
+    category: "observe",
     displayName: "Glob",
     text: (args) => str(args.pattern),
     inlineResult: { maxLines: 8 },
   },
   grep: {
-    category: "file-read",
+    category: "observe",
     displayName: "Search",
     text: (args) => {
       const pattern = str(args.pattern);
       const p = str(args.path);
-      return p ? `"${pattern}" in ${p}` : `"${pattern}"`;
+      return p ? `"${pattern}" in ${shortenPath(p)}` : `"${pattern}"`;
     },
     inlineResult: { maxLines: 8 },
   },
   edit_file: {
-    category: "file-modify",
+    category: "modify",
     displayName: "Edit",
-    text: (args) => str(args.path),
+    text: (args) => shortenPath(str(args.path)),
     suffix: (meta) => {
       const added = meta?.linesAdded;
       const removed = meta?.linesRemoved;
@@ -63,9 +75,9 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     inlineResult: { maxLines: 20 },
   },
   write_file: {
-    category: "file-modify",
+    category: "modify",
     displayName: "Write",
-    text: (args) => str(args.path),
+    text: (args) => shortenPath(str(args.path)),
     suffix: (meta) => {
       const lines = meta?.lineCount;
       return typeof lines === "number" ? `(${lines} lines)` : "";
@@ -73,7 +85,7 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     inlineResult: { maxLines: 20 },
   },
   bash: {
-    category: "execute",
+    category: "modify",
     displayName: "Run",
     text: (args) => truncateLines(args.command),
     suffix: (meta) => {
@@ -83,19 +95,19 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     inlineResult: { maxLines: 12 },
   },
   bash_background: {
-    category: "execute",
+    category: "modify",
     displayName: "Run",
     text: (args) => truncateLines(args.command),
     inlineResult: false,
   },
   bash_output: {
-    category: "execute",
+    category: "modify",
     displayName: "Output",
     text: (args) => str(args.id),
     inlineResult: { maxLines: 12 },
   },
   kill_shell: {
-    category: "execute",
+    category: "modify",
     displayName: "Kill",
     text: (args) => {
       const ids = args.ids;
@@ -105,31 +117,31 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     inlineResult: false,
   },
   web_search: {
-    category: "web",
+    category: "observe",
     displayName: "WebSearch",
     text: (args) => `"${str(args.query)}"`,
     inlineResult: { maxLines: 6 },
   },
   web_fetch: {
-    category: "web",
+    category: "observe",
     displayName: "Fetch",
     text: (args) => str(args.url),
     inlineResult: { maxLines: 8 },
   },
   spawn: {
-    category: "orchestration",
+    category: "orchestrate",
     displayName: "Spawn",
     text: (args) => str(args.id),
     inlineResult: false,
   },
   spawn_file: {
-    category: "orchestration",
+    category: "orchestrate",
     displayName: "Spawn",
     text: (args) => str(args.file),
     inlineResult: false,
   },
   kill_agent: {
-    category: "orchestration",
+    category: "orchestrate",
     displayName: "Kill",
     text: (args) => {
       const ids = args.ids;
@@ -139,13 +151,13 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     inlineResult: false,
   },
   send: {
-    category: "orchestration",
+    category: "orchestrate",
     displayName: "Send",
     text: (args) => str(args.to),
     inlineResult: { maxLines: 4 },
   },
   ask: {
-    category: "orchestration",
+    category: "orchestrate",
     displayName: "Ask",
     text: (args) => {
       const q = str(args.question);
@@ -154,13 +166,13 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     inlineResult: { maxLines: 4 },
   },
   show_context: {
-    category: "internal",
+    category: "observe",
     displayName: "Context",
     text: () => "",
     inlineResult: false,
   },
   distill_context: {
-    category: "internal",
+    category: "observe",
     displayName: "Distill",
     text: (args) => {
       const ops = args.operations;
@@ -170,19 +182,19 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     inlineResult: false,
   },
   check_status: {
-    category: "internal",
+    category: "observe",
     displayName: "Status",
     text: () => "",
     inlineResult: false,
   },
   time: {
-    category: "internal",
+    category: "observe",
     displayName: "Time",
     text: () => "",
     inlineResult: false,
   },
   wait: {
-    category: "orchestration",
+    category: "orchestrate",
     displayName: "Wait",
     text: (args) => {
       const s = args.seconds;
@@ -196,7 +208,7 @@ export const HIDDEN_TOOLS = new Set<string>();
 
 export function getToolProfile(toolName: string): ToolDisplayProfile {
   return TOOL_PROFILES[toolName] ?? {
-    category: "internal" as const,
+    category: "observe" as const,
     displayName: `Using ${toolName}`,
     text: () => "",
     inlineResult: false,

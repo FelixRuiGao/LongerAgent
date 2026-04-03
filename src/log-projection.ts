@@ -63,6 +63,20 @@ function toConversationEntry(
   entry: LogEntry,
   toolElapsedMap?: Map<string, number>,
 ): ConversationEntry {
+  if (entry.type === "turn_end") {
+    const meta = entry.meta as Record<string, unknown>;
+    const status = meta.status as string;
+    const elapsedMs = typeof meta.elapsedMs === "number" ? meta.elapsedMs : 0;
+    const interruptHints = Array.isArray(meta.interruptHints) ? meta.interruptHints as string[] : [];
+    return {
+      kind: "status",
+      text: "",
+      id: entry.id,
+      elapsedMs,
+      meta: { turnEndStatus: status, interruptHints },
+    };
+  }
+
   if (entry.type === "sub_agent_end") {
     const subAgentId = entry.meta["subAgentId"];
     const subAgentName = entry.meta["subAgentName"];
@@ -138,6 +152,10 @@ function toConversationEntry(
   }
 
   if (entry.type === "tool_result") {
+    const resultContent = entry.content as { content?: string } | undefined;
+    if (resultContent?.content) {
+      ce.fullText = resultContent.content;
+    }
     const toolName = entry.meta["toolName"];
     const toolMetadata = entry.meta["toolMetadata"];
     if (toolName || (toolMetadata && typeof toolMetadata === "object")) {

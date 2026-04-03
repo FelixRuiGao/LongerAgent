@@ -232,9 +232,14 @@ export function createTurnEnd(
   id: string,
   turnIndex: number,
   status: "completed" | "interrupted" | "error",
+  elapsedMs?: number,
+  interruptHints?: string[],
 ): LogEntry {
   return baseEntry(id, "turn_end", turnIndex, {
-    meta: { turnIndex, status, timestamp: Date.now() },
+    tuiVisible: true,
+    displayKind: "status",
+    display: "",
+    meta: { turnIndex, status, timestamp: Date.now(), elapsedMs, interruptHints },
   });
 }
 

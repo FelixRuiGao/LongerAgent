@@ -121,6 +121,7 @@ export function OpenTuiScreen({
   onCloseTab,
   contextTokens,
   contextLimit,
+  cacheReadTokens,
   presentationEntries,
   processing,
   markdownMode,
@@ -351,6 +352,7 @@ export function OpenTuiScreen({
         hint={hint}
         contextTokens={contextTokens}
         contextLimit={contextLimit}
+        cacheReadTokens={cacheReadTokens ?? 0}
         contentWidth={conversationColumnWidth}
         colors={theme.colors}
         inputVisibleLines={inputVisibleLines}

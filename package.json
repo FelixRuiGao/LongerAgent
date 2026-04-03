@@ -39,9 +39,6 @@
     "terminal"
   ],
   "scripts": {
-    "docs:dev": "vitepress dev docs-site",
-    "docs:build": "vitepress build docs-site",
-    "docs:preview": "vitepress preview docs-site",
     "build": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});\" && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "dev": "bun run opentui-src/main.tsx",
     "dev:cli": "tsx src/cli.ts",
@@ -49,11 +46,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm build && pnpm test",
-    "gui:install": "cd gui && pnpm install",
-    "gui:build": "cd gui && pnpm build",
-    "gui:dev": "cd gui && pnpm dev",
-    "gui:start": "cd gui && pnpm start"
+    "prepublishOnly": "pnpm build && pnpm test"
   },
   "engines": {
     "node": ">=18.0.0"

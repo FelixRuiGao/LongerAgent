@@ -8,14 +8,14 @@ export function getSystemEntryColor(
     case "error":
       return theme.colors.red;
     case "interrupted":
-    case "compact":
+      return theme.colors.yellow;
     case "info":
-      return theme.colors.orange;
+    case "compact":
     case "sub_agent":
     case "no_reply":
       return theme.colors.dim;
     default:
-      return theme.colors.orange;
+      return theme.colors.dim;
   }
 }
 

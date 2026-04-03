@@ -105,6 +105,8 @@ export interface ConversationEntry {
   queued?: boolean;
   dim?: boolean;
   meta?: Record<string, unknown>;
+  /** Full untruncated result text (tool_result only). */
+  fullText?: string;
 }
 
 export interface LaunchOptions {

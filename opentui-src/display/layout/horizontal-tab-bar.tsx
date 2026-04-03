@@ -47,7 +47,7 @@ function TabButton({
       backgroundColor={undefined}
       border={true}
       borderStyle="rounded"
-      borderColor={isActive ? colors.dim : hovered ? colors.dim : colors.border}
+      borderColor={isActive ? colors.dim : hovered ? colors.dim : "#3e3a48"}
       onMouseOver={() => setHovered(true)}
       onMouseOut={() => setHovered(false)}
       onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onSelect(); }}

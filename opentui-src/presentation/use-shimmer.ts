@@ -4,10 +4,10 @@ import { RGBA } from "../forked/core/lib/RGBA.js";
 import { StyledText } from "../forked/core/lib/styled-text.js";
 import type { TextChunk } from "../forked/core/text-buffer.js";
 
-const SHIMMER_WINDOW = 5;
-const SHIMMER_INTERVAL = 60;
+const SHIMMER_WINDOW = 2;
 const SHIMMER_BASE_BRIGHTNESS = 0.4;
 const SHIMMER_PEAK_BRIGHTNESS = 1.0;
+const SHIMMER_INTERVAL = 100;
 
 function gaussian(x: number, sigma: number): number {
   return Math.exp(-(x * x) / (2 * sigma * sigma));

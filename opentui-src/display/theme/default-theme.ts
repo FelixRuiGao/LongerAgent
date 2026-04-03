@@ -138,14 +138,11 @@ const DEFAULT_DISPLAY_TOKENS: DisplayThemeTokens = {
   },
   presentation: {
     categoryColors: {
-      "file-read": "#86ded4",
-      "file-modify": "#e8c468",
-      execute: "#fb8500",
-      web: "#b4a0ec",
-      orchestration: "#e81860",
-      internal: "#636a76",
+      observe: "#86ded4",
+      modify: "#e8c468",
+      orchestrate: "#b4a0ec",
     },
-    thinkingColor: "#6e4890",
+    thinkingColor: "#9066b8",
     successColor: "#8cc252",
     errorColor: "#f85656",
     toolNameColor: "#86ded4",

@@ -2831,6 +2831,7 @@ export class Session {
     let turnEndStatus: "completed" | "interrupted" | "error" | null = null;
     const turnSignalState = this._installCurrentTurnSignal(signal);
     const activeSignal = turnSignalState.signal;
+    const turnStartMs = performance.now();
     try {
       let reachedLimit = true;
       for (let activationIdx = 0; activationIdx < MAX_ACTIVATIONS_PER_TURN; activationIdx++) {
@@ -3098,8 +3099,13 @@ export class Session {
       }
       if (!this._activeAsk && this._turnCount > 0 && turnEndStatus) {
         this._lastTurnEndStatus = turnEndStatus;
+        const turnElapsedMs = Math.round(performance.now() - turnStartMs);
+        let interruptHints: string[] | undefined;
+        if (turnEndStatus === "interrupted") {
+          interruptHints = this._collectInterruptHints();
+        }
         this._appendEntry(
-          createTurnEnd(this._nextLogId("turn_end"), this._turnCount, turnEndStatus),
+          createTurnEnd(this._nextLogId("turn_end"), this._turnCount, turnEndStatus, turnElapsedMs, interruptHints),
           false,
         );
         this.onSaveRequest?.();
@@ -3364,6 +3370,44 @@ export class Session {
     interruptionEntry.tuiVisible = false;
     interruptionEntry.displayKind = null;
     this._appendEntry(interruptionEntry, false);
+  }
+
+  /**
+   * Scan the current turn's log entries to collect human-readable interrupt hints.
+   * Called after _handleInterruption, before writing turn_end.
+   */
+  private _collectInterruptHints(): string[] {
+    const hints: string[] = [];
+    const turnIdx = this._turnCount;
+    let hasDiscardedReasoning = false;
+    let hasPartialEffects = false;
+    let hasIncompleteArgs = false;
+
+    for (const e of this._log) {
+      if (e.turnIndex !== turnIdx) continue;
+      if (e.type === "reasoning" && e.discarded) {
+        hasDiscardedReasoning = true;
+      }
+      if (e.type === "tool_result" && typeof e.display === "string") {
+        if (e.display.includes("may have had partial effects")) {
+          hasPartialEffects = true;
+        }
+        if (e.display.includes("Incomplete arguments")) {
+          hasIncompleteArgs = true;
+        }
+      }
+    }
+
+    if (hasDiscardedReasoning) {
+      hints.push("Thinking was discarded and not transmitted to the model.");
+    }
+    if (hasPartialEffects) {
+      hints.push("Some tools may have had partial effects.");
+    }
+    if (hasIncompleteArgs) {
+      hints.push("Some tools had incomplete arguments and were not executed.");
+    }
+    return hints;
   }
 
   /**
@@ -5209,6 +5253,29 @@ export class Session {
       handle.status = handle.mode === "oneshot" ? "completed" : "idle";
     }
 
+    // Emit a TUI-visible status entry for sub-agent completion
+    {
+      const label = `#${handle.numericId} ${handle.id}`;
+      const elapsedStr = handle.elapsed > 0 ? ` (${handle.elapsed.toFixed(1)}s)` : "";
+      const outcomeLabel = handle.lastOutcome === "error" ? "error"
+        : handle.lastOutcome === "interrupted" ? "interrupted"
+        : "done";
+      let display = `[${label}] [${outcomeLabel}]${elapsedStr}`;
+      // Append a brief output preview for completed agents
+      if (handle.lastOutcome === "completed" && handle.resultText) {
+        const previewLines = handle.resultText.trim().split("\n").slice(0, 3);
+        const preview = previewLines.join("\n");
+        const truncated = handle.resultText.trim().split("\n").length > 3 ? "\n..." : "";
+        display += `\n${preview}${truncated}`;
+      }
+      this._appendEntry(createStatus(
+        this._nextLogId("status"),
+        this._turnCount,
+        display,
+        "sub_agent_end",
+      ), false);
+    }
+
     // Lifecycle transition: oneshot → archived, persistent → idle
     // NOTE: archived children stay in _childSessions during runtime (Session instance alive,
     // log readable for TUI). Only move to _archivedChildren on close/reset.
@@ -5883,10 +5950,20 @@ export class Session {
   }
 
   private _interruptAllChildTurns(): void {
+    const interrupted: string[] = [];
     for (const handle of this._childSessions.values()) {
       if (handle.lifecycle !== "running") continue;
       handle.abortController?.abort();
       handle.session._recordSessionEvent("interrupted by parent");
+      interrupted.push(`#${handle.numericId} ${handle.id}`);
+    }
+    if (interrupted.length > 0) {
+      this._appendEntry(createStatus(
+        this._nextLogId("status"),
+        this._turnCount,
+        `[Sub-agent${interrupted.length > 1 ? "s" : ""} interrupted: ${interrupted.join(", ")}]`,
+        "sub_agent_interrupted",
+      ), false);
     }
   }
 

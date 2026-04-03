@@ -605,8 +605,10 @@ export function OpenTuiApp({
       // Archived children stay in _childSessions (Session instance alive), so they always
       // appear in snapshots. No need for frozenChildView protection here.
       setPendingAsk(session.getPendingAsk?.() ?? null);
-      setContextTokens(session.lastInputTokens);
-      setCacheReadTokens(session.lastCacheReadTokens ?? 0);
+      if (session.lastInputTokens > 0) {
+        setContextTokens(session.lastInputTokens);
+        setCacheReadTokens(session.lastCacheReadTokens ?? 0);
+      }
     };
 
     syncFromLog();
@@ -642,8 +644,14 @@ export function OpenTuiApp({
     switch (event.action) {
       case "reasoning_chunk":
       case "text_chunk":
-      case "tool_call":
         setPhase("decoding");
+        break;
+      case "tool_call":
+        if (event.extra?.["tool"] === "wait") {
+          setPhase("waiting");
+        } else {
+          setPhase("decoding");
+        }
         break;
       case "tool_result":
         setPhase("prefilling");
@@ -653,8 +661,10 @@ export function OpenTuiApp({
         break;
       case "agent_end":
         setPhase("idle");
-        setContextTokens(session.lastInputTokens);
-        setCacheReadTokens(session.lastCacheReadTokens ?? 0);
+        if (session.lastInputTokens > 0) {
+          setContextTokens(session.lastInputTokens);
+          setCacheReadTokens(session.lastCacheReadTokens ?? 0);
+        }
         break;
       case "ask_requested":
         setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -2368,6 +2378,7 @@ export function OpenTuiApp({
     : modelNameColor;
   const effectiveContextTokens = childSnapshot ? childSnapshot.inputTokens : contextTokens;
   const effectiveContextLimit = childSnapshot ? childSnapshot.contextBudget : session.primaryAgent.modelConfig?.contextLength;
+  const effectiveCacheReadTokens = childSnapshot ? childSnapshot.cacheReadTokens : cacheReadTokens;
   const effectiveProcessing = childSnapshot ? childSnapshot.running : processing;
   const effectiveEntries = presentationEntries;
 
@@ -2383,6 +2394,7 @@ export function OpenTuiApp({
       onToggleSidebar={() => setSidebarExpanded((value) => !value)}
       contextTokens={effectiveContextTokens}
       contextLimit={effectiveContextLimit}
+      cacheReadTokens={effectiveCacheReadTokens}
       presentationEntries={effectiveEntries}
       processing={effectiveProcessing}
       markdownMode={markdownMode}

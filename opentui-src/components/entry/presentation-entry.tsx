@@ -6,6 +6,7 @@ import type { PresentationEntryItemProps } from "../conversation-types.js";
 import { AssistantEntry } from "../../display/entries/assistant-entry.js";
 import { ThinkingEntry } from "./thinking-entry.js";
 import { ToolOperationEntry } from "./tool-operation-entry.js";
+import { ToolGroupEntry } from "./tool-group-entry.js";
 import { UserEntry } from "./user-entry.js";
 import { SystemEntry } from "./system-entry.js";
 import { TurnSummaryEntry } from "./turn-summary-entry.js";
@@ -24,6 +25,13 @@ function PresentationEntryInner(
         colors={colors}
         contentWidth={contentWidth}
         onEntryClick={onEntryClick}
+      />
+    ),
+    tool_group: () => (
+      <ToolGroupEntry
+        entry={entry}
+        colors={colors}
+        contentWidth={contentWidth}
       />
     ),
     assistant: () => (

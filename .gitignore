@@ -27,3 +27,5 @@ buffer_dump/
 crash-diag.log
 tmp_repos/
 experiments/
+gui/
+docs-site/

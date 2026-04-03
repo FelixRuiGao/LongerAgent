@@ -1,38 +1,62 @@
 /** @jsxImportSource @opentui/react */
 
 import React, { useEffect, useRef, useState } from "react";
+import { execSync } from "node:child_process";
+import path from "node:path";
 
 import { RGBA } from "../../forked/core/lib/RGBA.js";
 import type { PresentationEntry, ToolCategory } from "../../presentation/types.js";
-import {
-  useSpinner,
-  TOOL_SPINNER_FRAMES,
-  TOOL_SPINNER_INTERVAL,
-} from "../../presentation/use-spinner.js";
 import { useShimmer } from "../../presentation/use-shimmer.js";
-import { CATEGORY_COLORS } from "../../presentation/colors.js";
 import type { ConversationPalette } from "../conversation-types.js";
 import { InlineResult } from "./inline-result.js";
 import { FileModifyBody } from "./file-modify-body.js";
 import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
 import { getActivityIndicatorColor } from "../../display/entries/entry-variants.js";
 
-// Dim category colors for the left bar — 40% toward background to avoid being too loud.
-const BAR_COLORS: Record<ToolCategory, string> = Object.fromEntries(
-  (Object.entries(CATEGORY_COLORS) as [ToolCategory, string][]).map(([cat, hex]) => {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    const mix = (c: number, bg: number) => Math.round(c * 0.6 + bg * 0.4);
-    const dr = mix(r, 26); const dg = mix(g, 26); const db = mix(b, 28);
-    return [cat, `#${dr.toString(16).padStart(2, "0")}${dg.toString(16).padStart(2, "0")}${db.toString(16).padStart(2, "0")}`];
-  }),
-) as Record<ToolCategory, string>;
+// Left bar colors — muted variants of category colors, pre-computed constants.
+const BAR_COLORS: Record<ToolCategory, string> = {
+  observe: "#5b908a",
+  modify: "#96804a",
+  orchestrate: "#766a99",
+};
 
 // Unified tool name color — all tool names use this single color
 const TOOL_NAME_COLOR = DEFAULT_DISPLAY_THEME.presentation.toolNameColor;
 const TOOL_NAME_RGBA = RGBA.fromHex(TOOL_NAME_COLOR);
 const TOOL_STREAM_MAX_LINES = 10;
+const PATH_TOOL_NAMES = new Set(["Read", "Edit", "Write", "List"]);
+
+function openFile(filePath: string): void {
+  try {
+    const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+    execSync(`open ${JSON.stringify(resolved)}`, { stdio: "ignore" });
+  } catch { /* ignore open failures */ }
+}
+
+/** A file-path text element with hover highlight and click-to-open. */
+function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: string; hoverBg: string }): React.ReactElement {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <box
+      flexShrink={1}
+      backgroundColor={hovered ? hoverBg : undefined}
+      onMouseOver={() => setHovered(true)}
+      onMouseOut={() => setHovered(false)}
+      onMouseDown={(e: any) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (text) openFile(text);
+      }}
+    >
+      <text
+        fg={baseColor}
+        underline
+        content={text}
+        wrapMode="truncate"
+      />
+    </box>
+  );
+}
 
 function buildSectionPreview(text: string, maxLines: number): { text: string; truncated: boolean } {
   const lines = text.split("\n");
@@ -75,12 +99,11 @@ function ToolOperationEntryInner(
 ): React.ReactElement {
   const active = entry.state === "active";
 
-  const spinner = useSpinner(TOOL_SPINNER_FRAMES, TOOL_SPINNER_INTERVAL, active);
   const displayName = entry.toolDisplayName ?? "Tool";
   const shimmer = useShimmer(displayName, TOOL_NAME_RGBA, active);
 
   const indicator = active
-    ? spinner
+    ? "›"
     : entry.state === "error"
       ? "✖"
       : "✔";
@@ -122,7 +145,7 @@ function ToolOperationEntryInner(
     && entry.toolInlineResult
     && entry.state !== "active";
 
-  const category = entry.toolCategory ?? "internal";
+  const category = entry.toolCategory ?? "observe";
   const barColor = BAR_COLORS[category];
   const hasBody = showFileModify || showStreamBody || showInlineResult;
 
@@ -146,6 +169,8 @@ function ToolOperationEntryInner(
         <text content="  " flexShrink={0} />
         {isWait && active ? (
           <text fg={colors.dim} content={`${waitElapsed}s  Timeout: ${toolText} (Send a message to interrupt)`} flexShrink={0} />
+        ) : PATH_TOOL_NAMES.has(displayName) && toolText && !active ? (
+          <ClickablePath text={toolText} baseColor={colors.dim} hoverBg={colors.border} />
         ) : (
           <text fg={colors.dim} content={toolText} wrapMode="char" flexGrow={1} flexShrink={1} />
         )}

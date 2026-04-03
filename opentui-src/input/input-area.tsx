@@ -31,6 +31,7 @@ interface InputAreaProps {
   hint: string | null;
   contextTokens: number;
   contextLimit: number | undefined;
+  cacheReadTokens: number;
   /** Width of the content column (terminal width minus screen padding). */
   contentWidth: number;
   colors: ConversationPalette;
@@ -56,6 +57,7 @@ interface InputAreaProps {
 function getPhaseLabel(phase: ActivityPhase): string {
   switch (phase) {
     case "decoding": return "Decoding";
+    case "waiting": return "Waiting";
     case "asking": return "Asking";
     case "prefilling":
     default: return "Prefilling";
@@ -65,6 +67,7 @@ function getPhaseLabel(phase: ActivityPhase): string {
 function getPhaseSpinnerConfig(phase: ActivityPhase): { frames: readonly string[]; interval: number } {
   switch (phase) {
     case "decoding": return { frames: DECODING_SPINNER_FRAMES, interval: DECODING_SPINNER_INTERVAL };
+    case "waiting": return { frames: AWAITING_SPINNER_FRAMES, interval: AWAITING_SPINNER_INTERVAL };
     case "asking": return { frames: AWAITING_SPINNER_FRAMES, interval: AWAITING_SPINNER_INTERVAL };
     case "prefilling":
     default: return { frames: PREFILL_SPINNER_FRAMES, interval: PREFILL_SPINNER_INTERVAL };
@@ -74,6 +77,7 @@ function getPhaseSpinnerConfig(phase: ActivityPhase): { frames: readonly string[
 function getPhaseColor(phase: ActivityPhase, colors: ConversationPalette): string {
   switch (phase) {
     case "decoding": return colors.generatingStatus;
+    case "waiting": return colors.waitingStatus;
     case "asking": return colors.waitingStatus;
     case "prefilling":
     default: return colors.dim;
@@ -94,6 +98,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     hint,
     contextTokens,
     contextLimit,
+    cacheReadTokens,
     contentWidth,
     colors,
     inputVisibleLines,
@@ -125,9 +130,10 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
   const phaseLabel = getPhaseLabel(phase);
   const phaseColor = getPhaseColor(phase, colors);
 
+  const cacheLabel = cacheReadTokens > 0 ? ` (${formatCompactTokensShort(cacheReadTokens)} cached)` : "";
   const contextText = contextLimit
-    ? `${formatCompactTokensShort(contextTokens)}/${formatCompactTokensShort(contextLimit)}`
-    : formatCompactTokensShort(contextTokens);
+    ? `${formatCompactTokensShort(contextTokens)}/${formatCompactTokensShort(contextLimit)}${cacheLabel}`
+    : `${formatCompactTokensShort(contextTokens)}${cacheLabel}`;
 
   return (
     <box flexDirection="column" gap={0} flexShrink={0}>

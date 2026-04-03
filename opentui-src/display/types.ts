@@ -11,6 +11,7 @@ export type ActivityPhase =
   | "idle"
   | "prefilling"
   | "decoding"
+  | "waiting"
   | "asking"
   | "closing"
   | "cancelling"

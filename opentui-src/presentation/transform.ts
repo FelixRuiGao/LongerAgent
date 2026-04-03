@@ -102,6 +102,40 @@ function transformAssistant(
   };
 }
 
+function isTurnEndEntry(entry: ReconciledConversationEntry): boolean {
+  return entry.entry.meta?.turnEndStatus !== undefined;
+}
+
+function formatElapsedMs(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function transformTurnEnd(entry: ReconciledConversationEntry): PresentationEntry {
+  const meta = getMeta(entry);
+  const status = meta.turnEndStatus as string;
+  const elapsedMs = typeof entry.entry.elapsedMs === "number" ? entry.entry.elapsedMs : 0;
+  const interruptHints = Array.isArray(meta.interruptHints) ? meta.interruptHints as string[] : [];
+  const elapsedStr = formatElapsedMs(elapsedMs);
+
+  const text = status === "interrupted"
+    ? `Interrupted · ${elapsedStr}`
+    : `Worked for ${elapsedStr}`;
+
+  return {
+    id: entry.id,
+    contentVersion: entry.contentVersion,
+    kind: "turn_summary",
+    state: "done",
+    turnSummaryText: text,
+    turnSummaryInterrupted: status === "interrupted",
+    turnSummaryHints: interruptHints.length > 0 ? interruptHints : undefined,
+  };
+}
+
 function transformSystem(entry: ReconciledConversationEntry): PresentationEntry {
   const kind = entry.entry.kind;
   let severity: PresentationEntry["systemSeverity"] = "info";
@@ -232,7 +266,7 @@ function buildToolOperation(
     toolStartedAt: callEntry.entry.startedAt,
     toolElapsedMs: callEntry.entry.elapsedMs,
     toolInlineResult: inlineResult,
-    toolResultFullText: resultEntry?.entry.text,
+    toolResultFullText: resultEntry?.entry.fullText ?? resultEntry?.entry.text,
     toolStreamSections,
     toolRepairedFromPartial,
     toolExecState,
@@ -242,6 +276,90 @@ function buildToolOperation(
     fileModifyData,
     sourceEntries,
   };
+}
+
+// ------------------------------------------------------------------
+// Explore grouping
+// ------------------------------------------------------------------
+
+/** Tools eligible for explore grouping (file-read category). */
+const EXPLORE_TOOLS = new Set(["Read", "List", "Glob", "Search"]);
+
+function isExploreTool(entry: PresentationEntry): boolean {
+  return entry.kind === "tool_operation"
+    && entry.toolCategory === "observe"
+    && EXPLORE_TOOLS.has(entry.toolDisplayName ?? "");
+}
+
+const TOOL_UNIT: Record<string, string> = {
+  Read: "file",
+  List: "dir",
+  Glob: "pattern",
+  Search: "query",
+};
+
+function toolUnit(name: string, count: number): string {
+  const singular = TOOL_UNIT[name] ?? "op";
+  if (count === 1) return singular;
+  // queries for query, otherwise just append "s"
+  if (singular.endsWith("y")) return singular.slice(0, -1) + "ies";
+  return singular + "s";
+}
+
+function buildGroupSummary(entries: PresentationEntry[]): string {
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    const name = e.toolDisplayName ?? "?";
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const parts = [...counts.entries()].map(([name, count]) =>
+    `${name} ${count} ${toolUnit(name, count)}`,
+  );
+  return `Explore  (${parts.join(", ")})`;
+}
+
+function buildExploreGroup(entries: PresentationEntry[]): PresentationEntry {
+  const last = entries[entries.length - 1];
+  const active = last.state === "active";
+  const hasError = entries.every((e) => e.state === "error");
+  const maxVersion = Math.max(...entries.map((e) => e.contentVersion));
+
+  return {
+    id: `explore-group:${entries[0].id}`,
+    contentVersion: maxVersion,
+    kind: "tool_group",
+    state: active ? "active" : hasError ? "error" : "done",
+    groupEntries: entries,
+    groupSummary: buildGroupSummary(entries),
+    groupActive: active,
+    groupLatestToolName: last.toolDisplayName,
+    groupLatestToolText: last.toolText,
+  };
+}
+
+/**
+ * In-place: replace consecutive runs of explore tool_operations with
+ * a single tool_group entry. Minimum group size: 2 (single tools stay as-is).
+ */
+function collapseExploreGroups(result: PresentationEntry[]): void {
+  let i = 0;
+  while (i < result.length) {
+    if (!isExploreTool(result[i])) {
+      i++;
+      continue;
+    }
+    // Found start of a potential group — scan forward.
+    const start = i;
+    while (i < result.length && isExploreTool(result[i])) {
+      i++;
+    }
+    const groupLen = i - start;
+    if (groupLen >= 2) {
+      const group = buildExploreGroup(result.slice(start, i));
+      result.splice(start, groupLen, group);
+      i = start + 1;
+    }
+  }
 }
 
 // ------------------------------------------------------------------
@@ -329,14 +447,19 @@ export function presentationTransform(
       }
 
       default: {
-        result.push(transformSystem(entry));
+        if (isTurnEndEntry(entry)) {
+          result.push(transformTurnEnd(entry));
+        } else {
+          result.push(transformSystem(entry));
+        }
         i++;
         break;
       }
     }
   }
 
-  // 3. Activity bridging — removed. Replaced by system active indicator in input area.
+  // 3. Explore grouping — collapse consecutive file-read tool_operations into tool_group entries.
+  collapseExploreGroups(result);
 
   // 4. Memo optimization: reuse previous PresentationEntry by id+contentVersion
   for (let j = 0; j < result.length; j++) {
