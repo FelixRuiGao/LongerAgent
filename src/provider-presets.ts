@@ -42,8 +42,10 @@ const KIMI_MODELS = [
 ] satisfies ProviderPresetModel[];
 
 const GLM_MODELS = [
+  { key: "glm-5.1", id: "glm-5.1", label: "GLM-5.1" },
   { key: "glm-5", id: "glm-5", label: "GLM-5" },
   { key: "glm-5-turbo", id: "glm-5-turbo", label: "GLM-5 Turbo" },
+  { key: "glm-5v-turbo", id: "glm-5v-turbo", label: "GLM-5V Turbo" },
   { key: "glm-4.7", id: "glm-4.7", label: "GLM-4.7" },
 ] satisfies ProviderPresetModel[];
 
@@ -221,6 +223,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       // GLM / Zhipu (Z.ai)
       { key: "z-ai/glm-5", id: "z-ai/glm-5", label: "GLM-5" },
       { key: "z-ai/glm-5-turbo", id: "z-ai/glm-5-turbo", label: "GLM-5 Turbo" },
+      { key: "z-ai/glm-5v-turbo", id: "z-ai/glm-5v-turbo", label: "GLM-5V Turbo" },
       { key: "z-ai/glm-4.7", id: "z-ai/glm-4.7", label: "GLM-4.7" },
     ],
   },

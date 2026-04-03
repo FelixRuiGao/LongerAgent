@@ -420,14 +420,9 @@ function thinkingOptions(ctx: CommandOptionsContext): CommandOption[] {
   const session = ctx.session;
   const model = session.currentModelName ?? "";
   const levels = getThinkingLevels(model);
-  const current = session.thinkingLevel ?? "default";
+  const current = session.thinkingLevel ?? "";
 
   const opts: CommandOption[] = [];
-  // "default" is always available as reset option
-  opts.push({
-    label: current === "default" ? "default  (current)" : "default",
-    value: "default",
-  });
   for (const level of levels) {
     const isCurrent = current === level;
     opts.push({
@@ -456,13 +451,6 @@ async function cmdThinking(ctx: CommandContext, args: string): Promise<void> {
         `Available levels for ${displayModel}: ${levels.join(", ")}`,
       );
     }
-    return;
-  }
-
-  if (trimmed === "default") {
-    session.thinkingLevel = "default";
-    persistGlobalPreferences(ctx);
-    ctx.showMessage("Thinking level reset to provider default.");
     return;
   }
 
@@ -949,6 +937,9 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/mcp", description: "Show MCP server status and tools", handler: cmdMcp });
   registry.register({ name: "/rename", description: "Rename current session", handler: cmdRename });
   registry.register({ name: "/codex", description: "OpenAI ChatGPT login", handler: cmdCodex, options: codexOptions });
+  registry.register({ name: "/raw", description: "Toggle markdown raw/rendered mode", handler: cmdRaw });
+  registry.register({ name: "/agents", description: "Show agent list", handler: cmdAgents });
+  registry.register({ name: "/sidebar", description: "Toggle sidebar (open/close/auto)", handler: cmdSidebar });
   return registry;
 }
 
@@ -1119,4 +1110,36 @@ export function reRegisterSkillCommands(
     registry.unregister("/" + skill.name);
   }
   registerSkillCommands(registry, newSkills);
+}
+
+// ------------------------------------------------------------------
+// /raw command — toggle markdown raw/rendered mode
+// ------------------------------------------------------------------
+
+async function cmdRaw(ctx: CommandContext): Promise<void> {
+  // The TUI intercepts this status message to toggle markdown mode.
+  ctx.showMessage("__toggle_markdown_raw__");
+}
+
+// ------------------------------------------------------------------
+// /agents command — open agent list modal
+// ------------------------------------------------------------------
+
+async function cmdAgents(ctx: CommandContext): Promise<void> {
+  // The TUI intercepts this status message to open the agent list.
+  ctx.showMessage("__open_agent_list__");
+}
+
+// ------------------------------------------------------------------
+// /sidebar command — toggle sidebar mode (open/close/auto)
+// ------------------------------------------------------------------
+
+async function cmdSidebar(ctx: CommandContext, args: string): Promise<void> {
+  const mode = args.trim().toLowerCase();
+  if (mode === "open" || mode === "close" || mode === "auto") {
+    ctx.showMessage(`__sidebar_mode__:${mode}`);
+  } else {
+    // Toggle: cycle auto → open → close → auto
+    ctx.showMessage("__sidebar_toggle__");
+  }
 }

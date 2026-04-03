@@ -36,7 +36,7 @@ function createChildSnapshot(
     template: "default",
     mode: "persistent",
     teamId: null,
-    lifecycle: "live",
+    lifecycle: "idle",
     phase: "idle",
     outcome: "none",
     running: false,
@@ -46,6 +46,13 @@ function createChildSnapshot(
     recentEvents: [],
     pendingInboxCount: 0,
     lastActivityAt: 0,
+    inputTokens: 0,
+    contextBudget: 200000,
+    modelConfigName: "test-model",
+    modelProvider: "test",
+    activeLogEntryId: null,
+    turnElapsed: 0,
+    cacheReadTokens: 0,
     ...overrides,
   };
 }

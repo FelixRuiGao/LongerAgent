@@ -42,6 +42,7 @@ function OverlayFrame({ theme, width = "100%", height, children }: OverlayFrameP
       height={height}
       flexDirection="column"
       flexShrink={0}
+      border={false}
     >
       {children}
     </PanelSurface>
@@ -101,7 +102,7 @@ export function CommandOverlayView(
   const visibleItems = overlay.items.slice(start, end);
 
   return (
-    <OverlayFrame theme={theme} height={visibleItems.length + 2}>
+    <OverlayFrame theme={theme} height={visibleItems.length}>
       {visibleItems.map((item, index) => {
         const actualIndex = start + index;
         return (
@@ -141,7 +142,7 @@ export function CommandPickerView(
   const path = getCommandPickerPath(picker);
   const { start, end } = getCommandPickerVisibleRange(picker);
   const visibleOptions = level.options.slice(start, end);
-  const pickerHeight = 1 + visibleOptions.length + 2;
+  const pickerHeight = 1 + visibleOptions.length;
   const title = path.length > 0
     ? `${picker.commandName} › ${path.join(" › ")}`
     : picker.commandName;
@@ -183,7 +184,7 @@ export function CheckboxPickerView(
 
   const { start, end } = getCheckboxPickerVisibleRange(picker);
   const visibleItems = picker.items.slice(start, end);
-  const pickerHeight = 1 + visibleItems.length + 1 + 2;
+  const pickerHeight = 1 + visibleItems.length + 1;
 
   return (
     <OverlayFrame theme={theme} height={pickerHeight}>
@@ -232,7 +233,7 @@ export function PromptSelectView(
   const visibleOptions = prompt.options.slice(start, end);
   const selectedOption = prompt.options[Math.max(0, Math.min(prompt.selected, prompt.options.length - 1))];
   const description = selectedOption?.description?.trim();
-  const promptHeight = 1 + visibleOptions.length + (description ? 1 : 0) + 2;
+  const promptHeight = 1 + visibleOptions.length + (description ? 1 : 0);
 
   return (
     <OverlayFrame theme={theme} height={promptHeight}>
@@ -272,7 +273,7 @@ export function PromptSecretView(
 ): React.ReactElement | null {
   if (!prompt) return null;
 
-  const promptHeight = Math.max(5, prompt.message.split("\n").length + 4);
+  const promptHeight = Math.max(3, prompt.message.split("\n").length + 2);
 
   return (
     <OverlayFrame theme={theme} height={promptHeight}>
@@ -313,7 +314,7 @@ export function OAuthOverlayView(
       "Device code (SSH / headless)",
     ];
     return (
-      <OverlayFrame theme={theme} height={options.length + 4}>
+      <OverlayFrame theme={theme} height={options.length + 2}>
         <text fg={theme.colors.yellow} content="OpenAI ChatGPT Login" />
         {options.map((label, index) => (
           <OverlayOptionRow
@@ -350,7 +351,7 @@ export function OAuthOverlayView(
   }
 
   return (
-    <OverlayFrame theme={theme} height={lines.length + 4}>
+    <OverlayFrame theme={theme} height={lines.length + 2}>
       <text fg={theme.colors.yellow} content="OpenAI ChatGPT Login" />
       {lines.map((line, index) => (
         <text key={`oauth-line-${index}`} fg={theme.colors.text} content={truncateToWidth(line, contentWidth)} />

@@ -8,6 +8,7 @@ import type { AgentQuestionItem } from "../../../src/ask.js";
 import type { CommandPickerState } from "../../../src/ui/command-picker.js";
 import type { CheckboxPickerState } from "../../../src/ui/checkbox-picker.js";
 import type { PresentationEntry } from "../../presentation/types.js";
+import type { ChildSessionSnapshot } from "../../../src/session-tree-types.js";
 import type { ComposerTokenVisuals } from "../../composer-tokens.js";
 import { PresentationPanel } from "../../components/entry/presentation-panel.js";
 import { DetailThinkingTab } from "../../components/entry/detail-thinking-tab.js";
@@ -32,6 +33,8 @@ import {
   PromptSecretView,
   PromptSelectView,
 } from "../overlays/views.js";
+import { AgentListModal } from "../overlays/agent-list-modal.js";
+import { RightSidebar, type SidebarMode } from "../../sidebar/right-sidebar.js";
 import { computePickerMaxVisible } from "./metrics.js";
 import { HorizontalTabBar } from "./horizontal-tab-bar.js";
 import { shortenPath } from "../utils/format.js";
@@ -91,7 +94,22 @@ export interface OpenTuiScreenProps {
   keyBindings: readonly KeyBinding[];
   onSubmit: () => void;
   onModelClick: () => void;
+  onAgentIndicatorClick?: () => void;
+  runningAgentCount?: number;
+  idleAgentCount?: number;
+  archivedAgentCount?: number;
+  agentListOpen?: boolean;
+  agentListAgents?: readonly ChildSessionSnapshot[];
+  agentListSelectedIndex?: number;
+  onAgentListClose?: () => void;
+  onAgentListSelect?: (agentId: string) => void;
   onBackgroundMouseDown: () => void;
+  sidebarMode?: SidebarMode;
+  activeShells?: Array<{ id: string; command: string; status: string }>;
+  /** Pre-rendered context usage card for sidebar */
+  sidebarContextSection?: React.ReactNode;
+  /** Pre-rendered codex usage card for sidebar */
+  sidebarCodexSection?: React.ReactNode;
 }
 
 export function OpenTuiScreen({
@@ -146,17 +164,42 @@ export function OpenTuiScreen({
   keyBindings,
   onSubmit,
   onModelClick,
+  onAgentIndicatorClick,
+  runningAgentCount,
+  idleAgentCount,
+  archivedAgentCount,
+  agentListOpen,
+  agentListAgents,
+  agentListSelectedIndex,
+  onAgentListClose,
+  onAgentListSelect,
   onBackgroundMouseDown,
+  sidebarMode = "auto",
+  activeShells = [],
+  sidebarContextSection,
+  sidebarCodexSection,
 }: OpenTuiScreenProps): React.ReactElement {
   const conversationColumnWidth = terminal.width - (theme.spacing.screenPaddingX * 2);
   const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
-  const pickerContentWidth = terminal.width - 10;
   const pickerMaxVisible = computePickerMaxVisible(terminal.height, theme.layout);
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const isDetailTab = activeTab?.kind === "detail-thinking" || activeTab?.kind === "detail-tool";
+  // Detail entry lookup: live entries → frozenEntry fallback
   const detailEntry = isDetailTab
-    ? presentationEntries.find((entry) => activeTabId === `detail:${entry.id}`)
+    ? (presentationEntries.find((entry) => activeTabId === `detail:${entry.id}`)
+       ?? activeTab?.frozenEntry
+       ?? null) as typeof presentationEntries[number] | null
     : null;
+
+  // Sidebar visibility: hidden in child page, respects mode + terminal width
+  const isChildPage = selectedChildId !== null;
+  const sidebarVisible = !isChildPage && (
+    sidebarMode === "open" ||
+    (sidebarMode === "auto" && terminal.width >= theme.layout.minTerminalWidthForSidebar)
+  );
+  const sidebarWidth = theme.layout.sidebarMinWidth;
+  const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
+  const pickerContentWidth = terminal.width - effectiveSidebarWidth - 10;
 
   // Logo disappears once user sends the first message
   const hasUserMessage = presentationEntries.some((e) => e.kind === "user");
@@ -188,32 +231,34 @@ export function OpenTuiScreen({
       {/* Spacer between tab bar and content */}
       <box height={1} />
 
-      {/* Main content area */}
-      <box flexDirection="column" flexGrow={1} gap={0}>
-        {detailEntry && activeTab?.kind === "detail-thinking" ? (
-          <DetailThinkingTab entry={detailEntry} colors={theme.colors} scrollRef={scrollRef} />
-        ) : detailEntry && activeTab?.kind === "detail-tool" ? (
-          <DetailToolTab
-            entry={detailEntry}
-            colors={theme.colors}
-            contentWidth={conversationContentWidth}
-            scrollRef={scrollRef}
-          />
-        ) : (
-          <PresentationPanel
-            items={presentationEntries}
-            processing={processing}
-            contentWidth={conversationContentWidth}
-            markdownMode={markdownMode}
-            colors={theme.colors}
-            markdownStyle={theme.markdownStyle}
-            scrollRef={scrollRef}
-            selectedChildId={selectedChildId}
-            showLogoInScroll={showLogoInScroll}
-            branding={theme.branding}
-            onEntryClick={onEntryClick}
-          />
-        )}
+      {/* Content area: main column + optional right sidebar */}
+      <box flexDirection="row" flexGrow={1} gap={0}>
+        {/* Main content column */}
+        <box flexDirection="column" flexGrow={1} gap={0}>
+          {detailEntry && activeTab?.kind === "detail-thinking" ? (
+            <DetailThinkingTab entry={detailEntry} colors={theme.colors} scrollRef={scrollRef} />
+          ) : detailEntry && activeTab?.kind === "detail-tool" ? (
+            <DetailToolTab
+              entry={detailEntry}
+              colors={theme.colors}
+              contentWidth={Math.max(20, conversationContentWidth - effectiveSidebarWidth)}
+              scrollRef={scrollRef}
+            />
+          ) : (
+            <PresentationPanel
+              items={presentationEntries}
+              processing={processing}
+              contentWidth={Math.max(20, conversationContentWidth - effectiveSidebarWidth)}
+              markdownMode={markdownMode}
+              colors={theme.colors}
+              markdownStyle={theme.markdownStyle}
+              scrollRef={scrollRef}
+              selectedChildId={selectedChildId}
+              showLogoInScroll={showLogoInScroll}
+              branding={theme.branding}
+              onEntryClick={onEntryClick}
+            />
+          )}
 
         {pendingAsk ? (
           <AskPanelView
@@ -273,7 +318,24 @@ export function OpenTuiScreen({
           theme={theme}
           contentWidth={pickerContentWidth}
         />
+        </box>
+        {/* End main content column */}
+
+        {/* Right sidebar */}
+        <RightSidebar
+          visible={sidebarVisible}
+          width={sidebarWidth}
+          colors={theme.colors}
+          cwd={process.cwd()}
+          activeShells={activeShells}
+          contextSection={sidebarContextSection}
+          codexSection={sidebarCodexSection}
+        />
       </box>
+      {/* End content row */}
+
+      {/* Spacer between content and input */}
+      <box height={1} />
 
       {/* Input area */}
       <InputArea
@@ -297,10 +359,26 @@ export function OpenTuiScreen({
         keyBindings={keyBindings}
         onSubmit={onSubmit}
         onModelClick={onModelClick}
+        onAgentIndicatorClick={onAgentIndicatorClick}
+        runningAgentCount={runningAgentCount}
+        idleAgentCount={idleAgentCount}
+        archivedAgentCount={archivedAgentCount}
         commandPicker={Boolean(commandPicker)}
         checkboxPicker={Boolean(checkboxPicker)}
         promptSelect={Boolean(promptSelect)}
         promptSecret={Boolean(promptSecret)}
+      />
+
+      {/* Agent list modal (absolute positioned, above everything) */}
+      <AgentListModal
+        visible={agentListOpen ?? false}
+        agents={agentListAgents ?? []}
+        selectedIndex={agentListSelectedIndex ?? 0}
+        terminalWidth={terminal.width}
+        terminalHeight={terminal.height}
+        colors={theme.colors}
+        onClose={onAgentListClose ?? (() => {})}
+        onSelect={onAgentListSelect ?? (() => {})}
       />
     </box>
   );

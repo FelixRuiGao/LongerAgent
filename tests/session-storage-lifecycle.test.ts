@@ -539,7 +539,7 @@ describe("session storage lifecycle", () => {
           template: "explorer",
           mode: "persistent",
           teamId: null,
-          lifecycle: "live",
+          lifecycle: "idle",
           outcome: "completed",
           order: 1,
         }],
@@ -671,7 +671,7 @@ describe("session storage lifecycle", () => {
         template: "explorer",
         mode: "persistent",
         teamId: null,
-        lifecycle: "live",
+        lifecycle: "running",
         status: "working",
         phase: "thinking",
         session: { _recordSessionEvent: vi.fn() },
@@ -691,6 +691,9 @@ describe("session storage lifecycle", () => {
         lastOutcome: "none",
         lastActivityAt: Date.now(),
         order: 1,
+        suspended: false,
+        settlePromise: null,
+        settleResolve: null,
       });
       (session as any)._childSessions.set("finished-agent", {
         id: "finished-agent",
@@ -698,7 +701,7 @@ describe("session storage lifecycle", () => {
         template: "explorer",
         mode: "oneshot",
         teamId: null,
-        lifecycle: "completed",
+        lifecycle: "archived",
         status: "completed",
         phase: "idle",
         session: { _recordSessionEvent: vi.fn() },
@@ -718,6 +721,9 @@ describe("session storage lifecycle", () => {
         lastOutcome: "completed",
         lastActivityAt: Date.now(),
         order: 2,
+        suspended: false,
+        settlePromise: null,
+        settleResolve: null,
       });
       (session as any)._activeShells.set("shell-1", {
         id: "shell-1",

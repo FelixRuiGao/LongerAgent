@@ -394,7 +394,7 @@ describe("resume command", () => {
             template: "explorer",
             mode: "persistent",
             teamId: null,
-            lifecycle: "live",
+            lifecycle: "idle",
             outcome: "completed",
             order: 1,
           },
@@ -427,7 +427,7 @@ describe("resume command", () => {
       expect.objectContaining({
         id: "repo-mapper",
         mode: "persistent",
-        lifecycle: "live",
+        lifecycle: "idle",
       }),
     ]);
     expect(showMessage).not.toHaveBeenCalledWith(expect.stringContaining("Failed to restore session"));

@@ -89,8 +89,10 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
   "kimi-k2-thinking": 256_000,
   "kimi-k2-instruct": 128_000,
   // GLM (Zhipu AI)
+  "glm-5.1": 204_800,
   "glm-5": 200_000,
   "glm-5-turbo": 200_000,
+  "glm-5v-turbo": 204_800,
   "glm-4.7": 200_000,
   "glm-4.7-flash": 200_000,
   // MiniMax
@@ -117,6 +119,8 @@ export const KNOWN_MULTIMODAL_MODELS: Set<string> = new Set([
   "claude-haiku-4-5",
   "claude-opus-4-5-20251101", "claude-opus-4-6", "claude-sonnet-4-6",
   "claude-haiku-4.5", "claude-opus-4.6", "claude-sonnet-4.6",
+  // GLM (Zhipu AI) — vision
+  "glm-5v-turbo",
   // Kimi
   "kimi-k2.5",
 ]);
@@ -132,7 +136,7 @@ export const KNOWN_THINKING_MODELS: Set<string> = new Set([
   // Kimi
   "kimi-k2.5", "kimi-k2-thinking",
   // GLM
-  "glm-5", "glm-5-turbo", "glm-4.7", "glm-4.7-flash",
+  "glm-5.1", "glm-5", "glm-5-turbo", "glm-5v-turbo", "glm-4.7", "glm-4.7-flash",
   // MiniMax
   "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
   "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
@@ -190,8 +194,10 @@ export const KNOWN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "kimi-k2-thinking": 65_536,
   "kimi-k2-instruct": 65_536,
   // GLM (Zhipu AI)
+  "glm-5.1": 131_072,
   "glm-5": 128_000,
   "glm-5-turbo": 128_000,
+  "glm-5v-turbo": 131_072,
   "glm-4.7": 128_000,
   "glm-4.7-flash": 128_000,
   // MiniMax
@@ -230,9 +236,9 @@ export const KNOWN_THINKING_LEVELS: Record<string, string[]> = {
   "gpt-5.4-nano": ["none", "low", "medium", "high", "xhigh"],
   // Anthropic — adaptive + effort (4.6)
   "claude-opus-4-6":   ["off", "low", "medium", "high", "max"],
-  "claude-sonnet-4-6": ["off", "low", "medium", "high", "max"],
+  "claude-sonnet-4-6": ["off", "low", "medium", "high"],
   "claude-opus-4.6":   ["off", "low", "medium", "high", "max"],
-  "claude-sonnet-4.6": ["off", "low", "medium", "high", "max"],
+  "claude-sonnet-4.6": ["off", "low", "medium", "high"],
   // Anthropic — manual extended thinking (4.5 and earlier)
   "claude-opus-4-1-20250805":   ["off", "low", "medium", "high"],
   "claude-sonnet-4-5-20250929": ["off", "low", "medium", "high"],
@@ -241,9 +247,10 @@ export const KNOWN_THINKING_LEVELS: Record<string, string[]> = {
   "claude-haiku-4.5": ["off", "low", "medium", "high"],
   "claude-opus-4-5-20251101":   ["off", "low", "medium", "high"],
   // GLM
-  "glm-5": ["off", "on"], "glm-5-turbo": ["off", "on"], "glm-4.7": ["off", "on"], "glm-4.7-flash": ["off", "on"],
+  "glm-5.1": ["off", "on"], "glm-5": ["off", "on"], "glm-5-turbo": ["off", "on"], "glm-5v-turbo": ["off", "on"],
+  "glm-4.7": ["off", "on"], "glm-4.7-flash": ["off", "on"],
   // Kimi
-  "kimi-k2.5": ["off", "on"], "kimi-k2-thinking": ["off", "on"],
+  "kimi-k2.5": ["off", "on"], "kimi-k2-thinking": ["on"],
   // MiniMax (not configurable)
   "MiniMax-M2.1": ["on"], "MiniMax-M2.1-highspeed": ["on"],
   "MiniMax-M2.5": ["on"], "MiniMax-M2.5-highspeed": ["on"],
@@ -258,6 +265,12 @@ export function getThinkingLevels(model: string): string[] {
   return KNOWN_THINKING_LEVELS[model]
     ?? KNOWN_THINKING_LEVELS[normalizeModelId(model)]
     ?? [];
+}
+
+/** Return the highest (last) thinking level for a model, or undefined if not a thinking model. */
+export function getHighestThinkingLevel(model: string): string | undefined {
+  const levels = getThinkingLevels(model);
+  return levels.length > 0 ? levels[levels.length - 1] : undefined;
 }
 
 // ------------------------------------------------------------------

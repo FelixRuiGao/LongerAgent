@@ -38,7 +38,7 @@ const DEFAULT_DISPLAY_TOKENS: DisplayThemeTokens = {
   },
   spacing: {
     screenPaddingX: 2,
-    screenPaddingY: 1,
+    screenPaddingY: 0,
     screenGap: 1,
     sectionGap: 1,
     contentInset: 2,

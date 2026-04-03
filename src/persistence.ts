@@ -321,7 +321,7 @@ export class SessionStore {
           modelProvider: raw.model_provider ?? undefined,
           modelSelectionKey: raw.model_selection_key ?? undefined,
           modelId: raw.model_id ?? undefined,
-          thinkingLevel: raw.thinking_level ?? "default",
+          thinkingLevel: raw.thinking_level ?? "",
           accentColor: raw.accent_color ?? undefined,
           disabledSkills: Array.isArray(raw.disabled_skills) ? raw.disabled_skills : undefined,
           providerEnvVars: raw.provider_env_vars ?? undefined,
@@ -538,6 +538,8 @@ export interface LogSessionMeta {
   compactCount: number;
   thinkingLevel: string;
   childSessions?: ChildSessionMetaRecord[];
+  /** Root session's frozen inbox (persisted on close for snapshot/restore). */
+  inbox?: import("./session-tree-types.js").AgentMessage[];
 }
 
 /** Local inference server config (oMLX, LM Studio, etc.) */
@@ -577,7 +579,7 @@ export function createGlobalTuiPreferences(
     modelProvider: undefined,
     modelSelectionKey: undefined,
     modelId: undefined,
-    thinkingLevel: "default",
+    thinkingLevel: "",
     ...partial,
   };
 }
@@ -599,7 +601,7 @@ export function createLogSessionMeta(
     title: undefined,
     turnCount: 0,
     compactCount: 0,
-    thinkingLevel: "default",
+    thinkingLevel: "",
     childSessions: undefined,
     ...partial,
   };
@@ -776,7 +778,7 @@ export function loadLog(dir: string): LoadLogResult {
     title: raw.title ?? undefined,
     turnCount: raw.turn_count ?? 0,
     compactCount: raw.compact_count ?? 0,
-    thinkingLevel: raw.thinking_level ?? "default",
+    thinkingLevel: raw.thinking_level ?? "",
     childSessions: Array.isArray(raw.child_sessions) ? raw.child_sessions as ChildSessionMetaRecord[] : undefined,
   };
 

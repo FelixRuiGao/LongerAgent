@@ -16,6 +16,7 @@ interface PanelSurfaceProps {
   paddingRight?: number;
   paddingTop?: number;
   paddingBottom?: number;
+  border?: boolean;
   children: React.ReactNode;
 }
 
@@ -31,12 +32,13 @@ export function PanelSurface({
   paddingRight,
   paddingTop,
   paddingBottom,
+  border = true,
   children,
 }: PanelSurfaceProps): React.ReactElement {
   return (
     <box
-      border
-      borderColor={colors.border}
+      border={border}
+      borderColor={border ? colors.border : undefined}
       width={width}
       height={height}
       flexDirection={flexDirection}

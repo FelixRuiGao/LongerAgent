@@ -40,10 +40,17 @@ interface InputAreaProps {
   keyBindings: readonly KeyBinding[];
   onSubmit: () => void;
   onModelClick: () => void;
+  onAgentIndicatorClick?: () => void;
   commandPicker: boolean;
   checkboxPicker: boolean;
   promptSelect: boolean;
   promptSecret: boolean;
+  /** Number of running child agents. */
+  runningAgentCount?: number;
+  /** Number of idle child agents. */
+  idleAgentCount?: number;
+  /** Number of archived child agents. */
+  archivedAgentCount?: number;
 }
 
 function getPhaseLabel(phase: ActivityPhase): string {
@@ -99,12 +106,16 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     checkboxPicker,
     promptSelect,
     promptSecret,
+    runningAgentCount = 0,
+    idleAgentCount = 0,
+    archivedAgentCount = 0,
+    onAgentIndicatorClick,
   } = props;
 
   const placeholder = pendingAsk
     ? "ask pending..."
     : selectedChildId
-      ? "Esc to return to primary session"
+      ? "Esc/^C close or interrupt · Opt+←→ switch tabs · Opt+↑ main"
       : "message or /command";
 
   const focused = phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !selectedChildId;
@@ -120,18 +131,30 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
 
   return (
     <box flexDirection="column" gap={0} flexShrink={0}>
-      {/* Top row: activity indicator (left) + model name (right) */}
+      {/* Top row: activity indicator (left) + agent indicator (center) + model name (right) */}
       <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
         {processing ? (
-          <box flexDirection="row" flexGrow={1}>
+          <box flexDirection="row" flexShrink={0}>
             <text fg={phaseColor} content={`${activeSpinner} ${phaseLabel}`} />
             {elapsed > 0 ? (
               <text fg={colors.dim} content={` ${formatElapsed(elapsed)}`} />
             ) : null}
           </box>
-        ) : (
-          <box flexGrow={1} />
-        )}
+        ) : null}
+
+        {/* Agent indicator: only show running count */}
+        {runningAgentCount > 0 && !selectedChildId ? (
+          <box
+            flexDirection="row"
+            flexShrink={0}
+            paddingLeft={processing ? 2 : 0}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onAgentIndicatorClick?.(); }}
+          >
+            <text fg={colors.workingStatus} content={`${runningAgentCount} agent${runningAgentCount > 1 ? "s" : ""} running`} />
+          </box>
+        ) : null}
+
+        <box flexGrow={1} />
         <box
           onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onModelClick(); }}
         >
@@ -173,15 +196,13 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
         />
       </box>
 
-      {/* Bottom row: cwd (left) + context (right) */}
+      {/* Bottom row: hint (left) + context (right) */}
       <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
-        <text fg={colors.muted} content={cwd} wrapMode="truncate" flexGrow={1} flexShrink={1} />
         {hint ? (
-          <>
-            <text fg={colors.dim} content="  " flexShrink={0} />
-            <text fg={colors.dim} content={hint} flexShrink={0} />
-          </>
-        ) : null}
+          <text fg={colors.dim} content={hint} wrapMode="truncate" flexGrow={1} flexShrink={1} />
+        ) : (
+          <box flexGrow={1} />
+        )}
         <text fg={colors.dim} content={`  ${contextText}`} flexShrink={0} />
       </box>
     </box>

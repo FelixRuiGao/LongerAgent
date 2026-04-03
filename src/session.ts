@@ -35,7 +35,7 @@ import type {
 import { createEphemeralLogState } from "./ephemeral-log.js";
 import { isCompactMarker, allocateContextId, stripContextTags, ContextTagStripBuffer } from "./context-rendering.js";
 import { generateShowContext } from "./show-context.js";
-import { getThinkingLevels, getModelMaxOutputTokens, type Config, type ModelConfig } from "./config.js";
+import { getThinkingLevels, getHighestThinkingLevel, getModelMaxOutputTokens, type Config, type ModelConfig } from "./config.js";
 import type { MCPClientManager } from "./mcp-client.js";
 import { ProgressEvent, type ProgressLevel, type ProgressReporter } from "./progress.js";
 import { ToolResult } from "./providers/base.js";
@@ -123,6 +123,8 @@ import {
   type SessionCapabilities,
 } from "./session-capabilities.js";
 import type {
+  AgentMessage,
+  ArchivedChildRecord,
   ChildSessionLifecycle,
   ChildSessionMetaRecord,
   ChildSessionMode,
@@ -278,12 +280,6 @@ export interface InlineImageInput {
 // AgentMessage — message envelope for push delivery & future routing
 // ------------------------------------------------------------------
 
-interface AgentMessage {
-  from: string;        // "user" | "system" | agent name
-  to: string;          // "main" | agent name (for team routing)
-  content: string;
-  timestamp: number;
-}
 
 // ------------------------------------------------------------------
 // ChildSessionHandle — tracked nested child session state
@@ -315,6 +311,11 @@ interface ChildSessionHandle {
   lastOutcome: ChildSessionOutcome;
   lastActivityAt: number;
   order: number;
+  /** Set by suspendAllChildSessions / archiveAllChildSessions to prevent zombie _finishChildTurn callbacks. */
+  suspended: boolean;
+  /** Resolve when _finishChildTurn completes. Created in _startChildTurn, resolved in _finishChildTurn. */
+  settlePromise: Promise<void> | null;
+  settleResolve: (() => void) | null;
 }
 
 interface AgentTeam {
@@ -356,6 +357,8 @@ interface PreparedChildRestore {
 interface PreparedSessionRestore {
   rootState: Session;
   children: PreparedChildRestore[];
+  archivedRecords?: ArchivedChildRecord[];
+  rootInbox?: AgentMessage[];
   warnings: string[];
 }
 
@@ -483,6 +486,7 @@ export class Session {
 
   // Session tree / child sessions
   private _childSessions = new Map<string, ChildSessionHandle>();
+  private _archivedChildren = new Map<string, ArchivedChildRecord>();
   private _teams = new Map<string, AgentTeam>();
   private _subAgentCounter = 0;
   private _activeShells = new Map<string, BackgroundShellEntry>();
@@ -518,9 +522,9 @@ export class Session {
 
   // Thinking level + accent
   private _persistedModelSelection: PersistedModelSelection = {};
-  private _preferredThinkingLevel = "default";
+  private _preferredThinkingLevel = "";
   private _preferredAccentColor?: string;
-  private _thinkingLevel = "default";
+  private _thinkingLevel = "none";
 
   /** Stable key for OpenAI prompt cache routing affinity. */
   private _promptCacheKey: string;
@@ -607,9 +611,9 @@ export class Session {
       .map((handle) => this._buildChildSessionSnapshot(handle))
       .sort((a, b) => {
         const rank = (snapshot: ChildSessionSnapshot): number => {
-          if (snapshot.lifecycle === "live" && snapshot.running) return 0;
-          if (snapshot.lifecycle === "live") return 1;
-          if (snapshot.lifecycle === "completed") return 2;
+          if (snapshot.lifecycle === "running") return 0;
+          if (snapshot.lifecycle === "idle") return 1;
+          if (snapshot.lifecycle === "archived") return 2;
           return 3;
         };
         const ra = rank(a);
@@ -659,10 +663,6 @@ export class Session {
     const logRevision = typeof (session as any).getLogRevision === "function"
       ? (session as any).getLogRevision() as number
       : 0;
-    const lifecycle =
-      handle.lifecycle === "terminated" ? "terminated" :
-      handle.lifecycle === "completed" ? "completed" :
-      "live";
     const phase = currentTurnRunning ? sessionPhase : "idle";
     const outcome =
       handle.lastOutcome !== "none"
@@ -681,7 +681,7 @@ export class Session {
       template: handle.template,
       mode: handle.mode,
       teamId: handle.teamId,
-      lifecycle,
+      lifecycle: handle.lifecycle,
       phase,
       outcome,
       running: currentTurnRunning,
@@ -691,6 +691,16 @@ export class Session {
       recentEvents: [...recentEventsSource],
       pendingInboxCount,
       lastActivityAt: handle.lastActivityAt,
+      // Child page chrome fields
+      inputTokens: session.lastInputTokens,
+      contextBudget: session.contextBudget,
+      modelConfigName: session.primaryAgent?.modelConfig?.name ?? "",
+      modelProvider: session.primaryAgent?.modelConfig?.provider ?? "",
+      activeLogEntryId: session.activeLogEntryId,
+      turnElapsed: handle.startTime > 0 && currentTurnRunning
+        ? (performance.now() - handle.startTime) / 1000
+        : handle.elapsed,
+      cacheReadTokens: session.lastCacheReadTokens,
     };
   }
 
@@ -719,7 +729,7 @@ export class Session {
     const snapshots = this._getStatusSourceSnapshots();
     if (snapshots.length === 0) return "No sub-sessions.";
     const lines = snapshots
-      .filter((snapshot) => snapshot.lifecycle === "live" || snapshot.outcome !== "none")
+      .filter((snapshot) => snapshot.lifecycle === "running" || snapshot.lifecycle === "idle" || snapshot.outcome !== "none")
       .map((snapshot) => {
         const tools = `${snapshot.lifetimeToolCallCount} tool${snapshot.lifetimeToolCallCount === 1 ? "" : "s"}`;
         const tokens = snapshot.lastTotalTokens > 0 ? formatTokenCount(snapshot.lastTotalTokens) : "0";
@@ -1432,7 +1442,7 @@ export class Session {
     this._askHistory = [];
     this._pendingTurnState = null;
     if (this._childSessions.size > 0) {
-      this._forceKillAllAgents();
+      this._archiveAllChildSessions();
     }
     if (this._activeShells.size > 0) {
       this._forceKillAllShells();
@@ -1489,8 +1499,16 @@ export class Session {
     shadow._restoreFromLogUnsafe(meta, clonedEntries, clonedAllocator, { restoreChildren: false });
 
     const warnings: string[] = [];
-    const children = this._prepareChildRestores(meta.childSessions ?? [], warnings);
-    return { rootState: shadow, children, warnings };
+    const allChildMeta = meta.childSessions ?? [];
+    // Restore ALL children as full Session instances (including archived) so
+    // TUI can display them and read their logs. _archivedChildren is only
+    // populated on close/reset, not on restore.
+    const children = this._prepareChildRestores(allChildMeta, warnings);
+
+    // Root inbox from meta
+    const rootInbox = meta.inbox ?? [];
+
+    return { rootState: shadow, children, rootInbox, warnings };
   }
 
   commitPreparedRestore(prepared: PreparedSessionRestore): string[] {
@@ -1546,9 +1564,15 @@ export class Session {
       : null;
 
     this._childSessions = new Map();
+    this._archivedChildren = new Map();
     this._teams = new Map();
     this._subAgentCounter = 0;
     warnings.push(...this._commitPreparedChildren(prepared.children));
+
+    // Restore root inbox from meta
+    if (prepared.rootInbox && prepared.rootInbox.length > 0) {
+      this._inbox = [...prepared.rootInbox];
+    }
 
     this._bumpLogRevision();
     this._notifyLogListeners();
@@ -1620,7 +1644,7 @@ export class Session {
       modelId: meta.modelId,
     });
     const restoredModelConfig = this.config.getModel(restoredSelection.selectedConfigName);
-    const restoredThinkingPreference = meta.thinkingLevel ?? "default";
+    const restoredThinkingPreference = meta.thinkingLevel ?? "";
 
     this._resetTransientState();
     this.primaryAgent.replaceModelConfig(restoredModelConfig);
@@ -1757,6 +1781,8 @@ export class Session {
     for (const prepared of children) {
       const teamId = prepared.record.teamId ?? null;
       if (!teamId) continue;
+      // Only add to team if not archived
+      if (prepared.record.lifecycle === "archived") continue;
       let team = this._teams.get(teamId);
       if (!team) {
         team = { id: teamId, members: new Set() };
@@ -1782,14 +1808,19 @@ export class Session {
         handle.lastActivityAt = Date.now();
         handle.resultText = this._extractLatestAssistantText(handle.session.log);
         handle.status =
-          record.lifecycle === "terminated"
+          record.lifecycle === "archived"
             ? "terminated"
-            : record.lifecycle === "completed"
-              ? (record.outcome === "error" ? "error" : record.outcome === "interrupted" ? "interrupted" : "completed")
+            : record.lifecycle === "idle"
+              ? "idle"
               : "idle";
 
+        // Restore inbox if persisted
+        if (record.inbox && record.inbox.length > 0) {
+          (handle.session as Session)._inbox = [...record.inbox];
+        }
+
         this._childSessions.set(record.id, handle);
-        if (record.teamId) {
+        if (record.teamId && record.lifecycle !== "archived") {
           this._teams.get(record.teamId)?.members.add(record.id);
         }
       } catch (e) {
@@ -1926,6 +1957,8 @@ export class Session {
   private _restoreChildSessionsFromLog(childSessions: ChildSessionMetaRecord[], warnings?: string[]): void {
     if (childSessions.length === 0) return;
 
+    // Restore ALL children as full Session instances (including archived)
+    // so TUI can display them and read their logs.
     const ordered = [...childSessions].sort((a, b) => (a.order ?? a.numericId) - (b.order ?? b.numericId));
     for (const record of ordered) {
       let agent: Agent;
@@ -1976,12 +2009,12 @@ export class Session {
       handle.lastOutcome = record.outcome ?? "none";
       handle.lastActivityAt = Date.now();
       handle.resultText = this._extractLatestAssistantText(handle.session.log);
-      handle.status =
-        record.lifecycle === "terminated"
-          ? "terminated"
-          : record.lifecycle === "completed"
-            ? (record.outcome === "error" ? "error" : record.outcome === "interrupted" ? "interrupted" : "completed")
-            : "idle";
+      handle.status = "idle";
+
+      // Restore inbox if persisted
+      if (record.inbox && record.inbox.length > 0) {
+        (handle.session as Session)._inbox = [...record.inbox];
+      }
 
       this._childSessions.set(record.id, handle);
       if (record.teamId) {
@@ -2006,6 +2039,32 @@ export class Session {
    * Returns meta + entries suitable for saveLog().
    */
   getLogForPersistence(): { meta: LogSessionMeta; entries: readonly LogEntry[] } {
+    // Include both active and archived children in persistence meta
+    const childSessionsMeta: ChildSessionMetaRecord[] = [
+      ...[...this._childSessions.values()].map((handle) => ({
+        id: handle.id,
+        numericId: handle.numericId,
+        template: handle.template,
+        mode: handle.mode,
+        teamId: handle.teamId,
+        lifecycle: handle.lifecycle,
+        outcome: handle.lastOutcome,
+        order: handle.order,
+        inbox: (handle.session as Session)._inbox.length > 0
+          ? [...(handle.session as Session)._inbox]
+          : undefined,
+      })),
+      ...[...this._archivedChildren.values()].map((record) => ({
+        id: record.id,
+        numericId: record.numericId,
+        template: record.template,
+        mode: record.mode,
+        teamId: record.teamId,
+        lifecycle: "archived" as ChildSessionLifecycle,
+        outcome: record.outcome,
+        order: record.order,
+      })),
+    ];
     return {
       meta: createLogSessionMeta({
         createdAt: this._createdAt,
@@ -2019,16 +2078,8 @@ export class Session {
         thinkingLevel: this._thinkingLevel,
         title: this._title,
         summary: this._generateSummary(),
-        childSessions: [...this._childSessions.values()].map((handle) => ({
-          id: handle.id,
-          numericId: handle.numericId,
-          template: handle.template,
-          mode: handle.mode,
-          teamId: handle.teamId,
-          lifecycle: handle.lifecycle,
-          outcome: handle.lastOutcome,
-          order: handle.order,
-        })),
+        childSessions: childSessionsMeta,
+        inbox: this._inbox.length > 0 ? [...this._inbox] : undefined,
       }),
       entries: this._log,
     };
@@ -2164,7 +2215,7 @@ export class Session {
   getActiveAgentIds(): Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> {
     const result: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> = [];
     for (const snapshot of this.getChildSessionSnapshots()) {
-      const status = snapshot.running ? "working" : snapshot.lifecycle === "live" ? "idle" : snapshot.lifecycle;
+      const status = snapshot.running ? "working" : snapshot.lifecycle === "running" ? "working" : snapshot.lifecycle;
       result.push({
         id: snapshot.id,
         status,
@@ -2442,10 +2493,16 @@ export class Session {
   }
 
   private _resolveThinkingLevelForModel(modelName: string, preferredLevel: string): string {
-    if (!preferredLevel || preferredLevel === "default") return "default";
     const levels = getThinkingLevels(modelName);
-    if (levels.length === 0) return "default";
-    return levels.includes(preferredLevel) ? preferredLevel : "default";
+    const highest = levels.length > 0 ? levels[levels.length - 1] : undefined;
+    // Non-thinking model — no thinking level to set
+    if (!highest) return "none";
+    // No preference or legacy "default" — use highest
+    if (!preferredLevel || preferredLevel === "default") return highest;
+    // Preferred level valid for this model — use it
+    if (levels.includes(preferredLevel)) return preferredLevel;
+    // Preferred level not available on this model — use highest
+    return highest;
   }
 
   /** Input tokens from the most recent provider response. */
@@ -2473,6 +2530,11 @@ export class Session {
 
   set lastCacheReadTokens(value: number) {
     this._lastCacheReadTokens = value;
+  }
+
+  /** Effective context budget: contextLength × contextRatio. */
+  get contextBudget(): number {
+    return Math.round((this.primaryAgent?.modelConfig?.contextLength ?? 0) * this._contextRatio);
   }
 
   appendStatusMessage(text: string, statusType = "status"): void {
@@ -3736,7 +3798,7 @@ export class Session {
       (roundIndex) => getRoundContextId(roundIndex),
       this._buildCompactCheck(),
       onTokenUpdate,
-      this._thinkingLevel === "default" ? undefined : this._thinkingLevel,
+      this._thinkingLevel === "none" ? undefined : this._thinkingLevel,
       this._promptCacheKey,
       this._compactInProgress ? undefined : (() => this.onSaveRequest?.()),
       this._beforeToolExecute,
@@ -5034,7 +5096,7 @@ export class Session {
       template: templateLabel,
       mode,
       teamId,
-      lifecycle: "live",
+      lifecycle: "idle",
       status: "idle",
       phase: "idle",
       session: null as unknown as Session,
@@ -5054,6 +5116,9 @@ export class Session {
       lastOutcome: "none",
       lastActivityAt: Date.now(),
       order: opts?.order ?? numericId,
+      suspended: false,
+      settlePromise: null,
+      settleResolve: null,
     };
 
     const childSession = new Session({
@@ -5100,11 +5165,16 @@ export class Session {
   private _startChildTurn(handle: ChildSessionHandle, input: string): void {
     handle.startTime = performance.now();
     handle.status = "working";
-    handle.lifecycle = "live";
+    handle.lifecycle = "running";
     handle.phase = "thinking";
     handle.lastActivityAt = Date.now();
+    handle.suspended = false;
     const abortController = new AbortController();
     handle.abortController = abortController;
+    // Create settle promise so close() can wait for this turn to finish
+    handle.settlePromise = new Promise<void>((resolve) => {
+      handle.settleResolve = resolve;
+    });
     handle.turnPromise = handle.session.turn(input, { signal: abortController.signal });
     void handle.turnPromise.then(
       () => this._finishChildTurn(handle, undefined),
@@ -5113,66 +5183,80 @@ export class Session {
   }
 
   private _finishChildTurn(handle: ChildSessionHandle, error?: unknown): void {
+    // Zombie callback guard: if close/suspend already handled this handle, bail out.
+    if (handle.suspended) {
+      const resolve = handle.settleResolve;
+      handle.settleResolve = null;
+      resolve?.();
+      return;
+    }
+
     handle.elapsed = handle.startTime > 0 ? (performance.now() - handle.startTime) / 1000 : 0;
     handle.abortController = null;
     handle.turnPromise = null;
     handle.lastActivityAt = Date.now();
 
-    if (handle.lifecycle === "terminated") {
-      handle.status = "terminated";
-      handle.lastOutcome = "interrupted";
-      this._saveChildSession(handle);
-      return;
-    }
-
-    if (error) {
+    // Determine outcome from error / endStatus
+    const endStatus = error ? "error" : handle.session.lastTurnEndStatus;
+    if (error || endStatus === "error") {
       handle.lastOutcome = "error";
       handle.status = "error";
-      if (handle.mode === "oneshot") {
-        handle.lifecycle = "completed";
-      }
-      this._saveChildSession(handle);
-      return;
-    }
-
-    const endStatus = handle.session.lastTurnEndStatus;
-    if (endStatus === "error") {
-      handle.lastOutcome = "error";
-      handle.status = "error";
-      if (handle.mode === "oneshot") {
-        handle.lifecycle = "completed";
-      }
-      this._saveChildSession(handle);
-      return;
-    }
-
-    if (endStatus === "interrupted") {
+    } else if (endStatus === "interrupted") {
       handle.lastOutcome = "interrupted";
-      if (handle.mode === "oneshot") {
-        handle.lifecycle = "completed";
-        handle.status = "interrupted";
-      } else {
-        handle.status = "idle";
-      }
-      this._saveChildSession(handle);
-      const queued = handle.session._takeQueuedMessagesAsTurnInput();
-      if (handle.mode === "persistent" && queued) {
-        this._startChildTurn(handle, queued);
-      }
-      return;
-    }
-
-    handle.lastOutcome = "completed";
-    if (handle.mode === "oneshot") {
-      handle.lifecycle = "completed";
-      handle.status = "completed";
+      handle.status = handle.mode === "oneshot" ? "interrupted" : "idle";
     } else {
-      handle.status = "idle";
+      handle.lastOutcome = "completed";
+      handle.status = handle.mode === "oneshot" ? "completed" : "idle";
     }
-    this._saveChildSession(handle);
-    const queued = handle.session._takeQueuedMessagesAsTurnInput();
-    if (handle.mode === "persistent" && queued) {
-      this._startChildTurn(handle, queued);
+
+    // Lifecycle transition: oneshot → archived, persistent → idle
+    // NOTE: archived children stay in _childSessions during runtime (Session instance alive,
+    // log readable for TUI). Only move to _archivedChildren on close/reset.
+    if (handle.mode === "oneshot") {
+      handle.lifecycle = "archived";
+      this._saveChildSession(handle);
+    } else {
+      handle.lifecycle = "idle";
+      this._saveChildSession(handle);
+      // Persistent: check for queued messages and start a new turn
+      const queued = handle.session._takeQueuedMessagesAsTurnInput();
+      if (queued) {
+        // Resolve settle before starting next turn (current turn is done)
+        const resolve = handle.settleResolve;
+        handle.settleResolve = null;
+        resolve?.();
+        this._startChildTurn(handle, queued);
+        return;
+      }
+    }
+
+    // Resolve settle promise
+    const resolve = handle.settleResolve;
+    handle.settleResolve = null;
+    resolve?.();
+  }
+
+  /** Move a handle from _childSessions to _archivedChildren, releasing the Session instance. */
+  private _archiveHandle(handle: ChildSessionHandle): void {
+    this._archivedChildren.set(handle.id, {
+      id: handle.id,
+      numericId: handle.numericId,
+      template: handle.template,
+      mode: handle.mode,
+      teamId: handle.teamId,
+      outcome: handle.lastOutcome,
+      order: handle.order,
+      sessionDir: handle.sessionDir,
+      artifactsDir: handle.artifactsDir,
+    });
+    this._childSessions.delete(handle.id);
+    // Remove from team roster
+    if (handle.teamId) {
+      const team = this._teams.get(handle.teamId);
+      if (team) {
+        team.members.delete(handle.id);
+        if (team.members.size === 0) this._teams.delete(handle.teamId);
+      }
     }
   }
 
@@ -5184,19 +5268,27 @@ export class Session {
     if (handle.mode !== "persistent") {
       return new ToolResult({ content: `Agent '${childId}' is one-shot and cannot receive messages.` });
     }
-    if (handle.lifecycle === "terminated") {
-      return new ToolResult({ content: `Agent '${childId}' has been terminated.` });
-    }
-    if (handle.lifecycle === "completed") {
-      return new ToolResult({ content: `Agent '${childId}' has already completed and is read-only.` });
+    if (handle.lifecycle === "archived") {
+      // Persistent archived child still in _childSessions — revive in-place
+      if (handle.mode === "persistent") {
+        handle.lastActivityAt = Date.now();
+        (handle.session as Session)._inbox.push(msg);
+        const queuedInput = handle.session._takeQueuedMessagesAsTurnInput();
+        if (queuedInput) {
+          this._startChildTurn(handle, queuedInput);
+        }
+        return new ToolResult({ content: `Agent '${childId}' revived and message sent.` });
+      }
+      return new ToolResult({ content: `Agent '${childId}' is a one-shot agent and cannot receive messages.` });
     }
 
     handle.lastActivityAt = Date.now();
-    if (handle.status === "working") {
+    if (handle.lifecycle === "running") {
       handle.session._deliverMessage(msg);
       return new ToolResult({ content: `Message sent to '${childId}'.` });
     }
 
+    // idle — queue message and start turn
     (handle.session as Session)._inbox.push(msg);
     const queuedInput = handle.session._takeQueuedMessagesAsTurnInput();
     if (queuedInput) {
@@ -5208,8 +5300,7 @@ export class Session {
   interruptChildSession(childId: string): { accepted: boolean; reason?: string } {
     const handle = this._childSessions.get(childId);
     if (!handle) return { accepted: false, reason: "not_found" };
-    if (handle.lifecycle !== "live") return { accepted: false, reason: "not_live" };
-    if (handle.status !== "working") return { accepted: false, reason: "idle" };
+    if (handle.lifecycle !== "running") return { accepted: false, reason: "not_live" };
     handle.abortController?.abort();
     return { accepted: true };
   }
@@ -5491,22 +5582,30 @@ export class Session {
 
     const killed: string[] = [];
     const notFound: string[] = [];
+    const alreadyArchived: string[] = [];
 
     for (const name of ids) {
       const handle = this._childSessions.get(name);
       if (!handle) {
-        notFound.push(name);
+        // Already archived or never existed
+        if (this._archivedChildren.has(name)) {
+          alreadyArchived.push(name);
+        } else {
+          notFound.push(name);
+        }
         continue;
       }
 
       handle.abortController?.abort();
-      handle.lifecycle = "terminated";
+      handle.lifecycle = "archived";
       handle.status = "terminated";
       handle.lastOutcome = "interrupted";
       handle.lastActivityAt = Date.now();
       handle.session._recordSessionEvent("terminated by parent");
       this._saveChildSession(handle);
-
+      // Don't _archiveHandle here — keep in _childSessions so TUI can still read log.
+      // Actual move to _archivedChildren happens on close/reset.
+      // But do remove from team roster.
       if (handle.teamId) {
         const team = this._teams.get(handle.teamId);
         if (team) {
@@ -5521,7 +5620,7 @@ export class Session {
           step: this._turnCount,
           agent: name,
           action: "agent_killed",
-          message: `  [#${handle.numericId} ${name}] terminated`,
+          message: `  [#${handle.numericId} ${name}] archived`,
           level: "normal" as ProgressLevel,
           timestamp: Date.now() / 1000,
           usage: {},
@@ -5532,7 +5631,8 @@ export class Session {
 
     const parts: string[] = [];
     if (killed.length) parts.push(`Killed: ${killed.join(", ")}.`);
-    if (notFound.length) parts.push(`Not found (may have already completed): ${notFound.join(", ")}.`);
+    if (alreadyArchived.length) parts.push(`Already archived: ${alreadyArchived.join(", ")}.`);
+    if (notFound.length) parts.push(`Not found: ${notFound.join(", ")}.`);
     return new ToolResult({ content: parts.join(" ") });
   }
 
@@ -5540,18 +5640,19 @@ export class Session {
   // send tool — async message to interactive/team agent
   // ==================================================================
 
-  private _execSend(args: Record<string, unknown>): ToolResult {
+  private async _execSend(args: Record<string, unknown>): Promise<ToolResult> {
     const to = ((args["to"] as string) ?? "").trim();
     const content = ((args["content"] as string) ?? "").trim();
     if (!to || !content) {
       return new ToolResult({ content: "Error: 'to' and 'content' are required." });
     }
 
-    // send to "all" — broadcast to all child sessions
+    // send to "all" — broadcast to running + idle persistent agents (does NOT revive archived)
     if (to === "all") {
       let count = 0;
       for (const [childId, handle] of this._childSessions) {
-        if (handle.mode !== "persistent" || handle.lifecycle !== "live") continue;
+        if (handle.mode !== "persistent") continue;
+        if (handle.lifecycle !== "running" && handle.lifecycle !== "idle") continue;
         this._sendMessageToChild(childId, { from: "main", to: childId, content, timestamp: Date.now() });
         count++;
       }
@@ -5561,7 +5662,76 @@ export class Session {
       return new ToolResult({ content: `Message broadcast to ${count} agent(s).` });
     }
 
+    // Direct send — may revive archived persistent agent
+    if (!this._childSessions.has(to)) {
+      const archived = this._archivedChildren.get(to);
+      if (archived) {
+        if (archived.mode !== "persistent") {
+          return new ToolResult({ content: `Agent '${to}' is a one-shot agent and cannot be revived.` });
+        }
+        try {
+          await this._reviveArchivedChild(archived, content);
+          return new ToolResult({ content: `Agent '${to}' revived from archive and message sent.` });
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          return new ToolResult({ content: `Failed to revive agent '${to}': ${reason}` });
+        }
+      }
+    }
+
     return this._sendMessageToChild(to, { from: "main", to, content, timestamp: Date.now() });
+  }
+
+  /** Revive an archived persistent child: rebuild Session, restore log, start turn. */
+  private async _reviveArchivedChild(record: ArchivedChildRecord, messageContent: string): Promise<void> {
+    let agent: Agent;
+    if (this.agentTemplates[record.template]) {
+      agent = this._createSubAgentFromPredefined(record.template, record.id);
+    } else {
+      agent = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id);
+    }
+
+    const handle = this._instantiateChildSession(
+      record.id,
+      record.template,
+      record.mode,
+      record.teamId,
+      agent,
+      { numericId: record.numericId, order: record.order },
+    );
+
+    // Restore log from disk
+    const loaded = loadLog(record.sessionDir);
+    const repaired = validateAndRepairLog(loaded.entries);
+    handle.session.restoreFromLog(loaded.meta, repaired.entries, loaded.idAllocator);
+    handle.lifecycle = "idle";
+    handle.lastOutcome = record.outcome;
+    handle.lastActivityAt = Date.now();
+    handle.resultText = this._extractLatestAssistantText(handle.session.log);
+
+    // Move from archived to active
+    this._childSessions.set(record.id, handle);
+    this._archivedChildren.delete(record.id);
+
+    // Restore team membership if applicable
+    if (record.teamId) {
+      let team = this._teams.get(record.teamId);
+      if (!team) {
+        team = { id: record.teamId, members: new Set() };
+        this._teams.set(record.teamId, team);
+      }
+      team.members.add(record.id);
+    }
+
+    // Deliver message and start turn
+    handle.session._inbox.push({ from: "main", to: record.id, content: messageContent, timestamp: Date.now() });
+    const queuedInput = handle.session._takeQueuedMessagesAsTurnInput();
+    if (queuedInput) {
+      this._startChildTurn(handle, queuedInput);
+    }
+
+    // Trigger root save since child references changed
+    this.onSaveRequest?.();
   }
 
   private async _execCheckStatus(_args: Record<string, unknown>): Promise<ToolResult> {
@@ -5691,14 +5861,14 @@ export class Session {
   private _hasActiveAgents(): boolean {
     const childSessions = this._childSessions ?? new Map<string, ChildSessionHandle>();
     for (const entry of childSessions.values()) {
-      if (entry.lifecycle === "live" && entry.status === "working") return true;
+      if (entry.lifecycle === "running") return true;
     }
     return false;
   }
 
   private _getWorkingChildHandles(): ChildSessionHandle[] {
     return [...this._childSessions.values()].filter((handle) => {
-      return handle.lifecycle === "live" && handle.status === "working" && handle.turnPromise !== null;
+      return handle.lifecycle === "running" && handle.turnPromise !== null;
     });
   }
 
@@ -5714,43 +5884,109 @@ export class Session {
 
   private _interruptAllChildTurns(): void {
     for (const handle of this._childSessions.values()) {
-      if (handle.lifecycle !== "live" || handle.status !== "working") continue;
+      if (handle.lifecycle !== "running") continue;
       handle.abortController?.abort();
       handle.session._recordSessionEvent("interrupted by parent");
     }
   }
 
-  private _forceKillAllAgents(): void {
-    for (const [name, entry] of this._childSessions) {
-      if (entry.status === "working") {
-        entry.abortController?.abort();
-        // Normalize the child's log before persisting — the child's async
-        // catch block hasn't run yet, so dangling tool_calls / active state
-        // would be persisted as-is without this.
-        (entry.session as any)._normalizeInterruptedTurnFromLog(
+  /**
+   * Suspend all child sessions for close(). Preserves lifecycle semantics:
+   * - running persistent → normalize + idle
+   * - running oneshot → normalize + archived
+   * - idle persistent → stays idle
+   * Saves log + inbox for all non-archived children.
+   */
+  private _suspendAllChildSessions(): void {
+    const toArchive: string[] = [];
+    for (const [name, handle] of this._childSessions) {
+      handle.suspended = true;
+      if (handle.lifecycle === "running") {
+        handle.abortController?.abort();
+        // Normalize the child's log before persisting
+        (handle.session as any)._normalizeInterruptedTurnFromLog(
           "Parent session was interrupted by the user.",
         );
+        handle.lastOutcome = "interrupted";
+        if (handle.mode === "oneshot") {
+          handle.lifecycle = "archived";
+          handle.status = "interrupted";
+          toArchive.push(name);
+        } else {
+          handle.lifecycle = "idle";
+          handle.status = "idle";
+        }
+        handle.lastActivityAt = Date.now();
         if (this._progress) {
           this._progress.emit({
             step: this._turnCount,
             agent: name,
-            action: "agent_killed",
-            message: `  [#${entry.numericId} ${name}] terminated`,
+            action: "agent_suspended",
+            message: `  [#${handle.numericId} ${name}] suspended (${handle.lifecycle})`,
             level: "normal" as ProgressLevel,
             timestamp: Date.now() / 1000,
             usage: {},
-            extra: { sub_agent_id: entry.numericId },
+            extra: { sub_agent_id: handle.numericId },
           });
         }
       }
-      entry.lifecycle = "terminated";
-      entry.status = "terminated";
-      entry.lastOutcome = "interrupted";
-      entry.lastActivityAt = Date.now();
-      this._saveChildSession(entry);
+      this._saveChildSession(handle);
+    }
+    // Move oneshot-archived handles out of _childSessions after iteration
+    for (const id of toArchive) {
+      const handle = this._childSessions.get(id);
+      if (handle) this._archiveHandle(handle);
+    }
+  }
+
+  /**
+   * Archive all child sessions unconditionally. Used by _resetTransientState() for /new.
+   * All children → archived regardless of mode or current lifecycle.
+   */
+  private _archiveAllChildSessions(): void {
+    for (const [name, handle] of this._childSessions) {
+      handle.suspended = true;
+      if (handle.lifecycle === "running") {
+        handle.abortController?.abort();
+        (handle.session as any)._normalizeInterruptedTurnFromLog(
+          "Session was reset by user.",
+        );
+        handle.lastOutcome = handle.lastOutcome === "none" ? "interrupted" : handle.lastOutcome;
+      }
+      handle.lifecycle = "archived";
+      handle.status = "terminated";
+      handle.lastActivityAt = Date.now();
+      this._saveChildSession(handle);
+    }
+    // Move all to archived map
+    for (const [_name, handle] of this._childSessions) {
+      this._archivedChildren.set(handle.id, {
+        id: handle.id,
+        numericId: handle.numericId,
+        template: handle.template,
+        mode: handle.mode,
+        teamId: handle.teamId,
+        outcome: handle.lastOutcome,
+        order: handle.order,
+        sessionDir: handle.sessionDir,
+        artifactsDir: handle.artifactsDir,
+      });
     }
     this._childSessions.clear();
     this._teams.clear();
+  }
+
+  /** Wait for all running child turns to settle, with timeout. */
+  private async _waitForAllChildTurnsSettled(): Promise<void> {
+    const SETTLE_TIMEOUT_MS = 3000;
+    const settlePromises = [...this._childSessions.values()]
+      .filter((h) => h.settlePromise)
+      .map((h) => h.settlePromise!);
+    if (settlePromises.length === 0) return;
+    await Promise.race([
+      Promise.all(settlePromises),
+      new Promise<void>((resolve) => setTimeout(resolve, SETTLE_TIMEOUT_MS)),
+    ]);
   }
 
   private _cleanupNonInteractiveAgents(): void {
@@ -6218,10 +6454,32 @@ export class Session {
   // ==================================================================
 
   async close(): Promise<void> {
+    // 1. Freeze inboxes before interrupt (interrupt clears _inbox)
+    const frozenRootInbox = [...this._inbox];
+    const frozenChildInboxes = new Map<string, AgentMessage[]>();
+    for (const [id, handle] of this._childSessions) {
+      frozenChildInboxes.set(id, [...(handle.session as Session)._inbox]);
+    }
+
+    // 2-3. Interrupt root turn and wait for it to complete
     this.requestTurnInterrupt();
     await this.waitForTurnComplete();
-    this._forceKillAllAgents();
+
+    // 4-5. Abort running child turns and wait for them to settle
+    this._interruptAllChildTurns();
+    await this._waitForAllChildTurnsSettled();
+
+    // 6. Suspend all child sessions (preserves lifecycle)
+    this._suspendAllChildSessions();
+
+    // 7. Persist root session (inbox is frozen)
+    // The frozen inbox will be included via getLogForPersistence if caller saves
+    this._inbox = frozenRootInbox;
+
+    // 8. Kill all shells
     this._forceKillAllShells();
+
+    // 9. Close MCP connections
     if (this._mcpManager) {
       try {
         await this._mcpManager.closeAll();

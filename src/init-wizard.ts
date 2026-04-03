@@ -60,7 +60,7 @@ function loadExistingPreferences(homeDir: string): GlobalTuiPreferences | null {
       modelProvider: raw.model_provider ?? undefined,
       modelSelectionKey: raw.model_selection_key ?? undefined,
       modelId: raw.model_id ?? undefined,
-      thinkingLevel: raw.thinking_level ?? "default",
+      thinkingLevel: raw.thinking_level ?? "",
       accentColor: raw.accent_color ?? undefined,
       disabledSkills: Array.isArray(raw.disabled_skills) ? raw.disabled_skills : undefined,
       providerEnvVars: raw.provider_env_vars ?? undefined,
@@ -87,7 +87,7 @@ function savePreferences(homeDir: string, prefs: GlobalTuiPreferences): void {
       model_provider: prefs.modelProvider ?? null,
       model_selection_key: prefs.modelSelectionKey ?? null,
       model_id: prefs.modelId ?? null,
-      thinking_level: prefs.thinkingLevel ?? "default",
+      thinking_level: prefs.thinkingLevel ?? "",
       accent_color: prefs.accentColor ?? null,
       disabled_skills: prefs.disabledSkills ?? null,
       provider_env_vars: prefs.providerEnvVars ?? null,
@@ -564,7 +564,7 @@ export async function runInitWizard(): Promise<WizardResult> {
   // Merge with existing preferences (keep accent color, thinking level, etc.)
   const prefs: GlobalTuiPreferences = {
     version: 1,
-    thinkingLevel: existing?.thinkingLevel ?? "default",
+    thinkingLevel: existing?.thinkingLevel ?? "",
     accentColor: existing?.accentColor,
     disabledSkills: existing?.disabledSkills,
     providerEnvVars,

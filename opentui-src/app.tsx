@@ -88,6 +88,7 @@ import {
   type ComposerTokenVisuals,
 } from "./composer-tokens.js";
 import { DEFAULT_DISPLAY_THEME, type DisplayTheme } from "./display/theme/index.js";
+import { ContextUsageCard, CodexUsageCard } from "./display/panels/usage-cards.js";
 import {
   type ActivityPhase,
   type CommandOverlayState,
@@ -234,44 +235,46 @@ export function OpenTuiApp({
   const presentationEntries = usePresentationEntries({ session, selectedChildId, childSessions, processing });
   const turnElapsed = useTurnTimer(processing);
 
+  // Agent list modal state
+  const [agentListOpen, setAgentListOpen] = useState(false);
+  const [agentListSelectedIndex, setAgentListSelectedIndex] = useState(0);
+
+  // Frozen child view — protects display when viewed child becomes archived
+  const [frozenChildView, setFrozenChildView] = useState<{
+    snapshot: ChildSessionSnapshot;
+    entries: readonly import("./presentation/types.js").PresentationEntry[];
+  } | null>(null);
+
   // Tab state for sidebar
   const [tabs, setTabs] = useState<TabState[]>([
     { id: "main", label: "Main Session", icon: "●", closeable: false, kind: "main" },
   ]);
   const [activeTabId, setActiveTabId] = useState("main");
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [sidebarMode, setSidebarMode] = useState<"open" | "close" | "auto">("auto");
 
-  // Sync child sessions → tabs
+  // Sync child session tabs — child tabs are now temporary (created on enter, removed on exit).
+  // Only clean up tabs for children that no longer exist and aren't frozen.
   useEffect(() => {
     setTabs((prev) => {
-      const existingChildIds = new Set(prev.filter((t) => t.kind === "child").map((t) => t.id));
       const currentChildIds = new Set(childSessions.map((s) => s.id));
-
-      // Add new child tabs
-      const newTabs = childSessions
-        .filter((s) => !existingChildIds.has(s.id))
-        .map((s): TabState => ({
-          id: s.id,
-          label: s.id,
-          icon: "◎",
-          closeable: false,
-          kind: "child",
-        }));
-
-      // Remove dead child tabs (keep main + detail tabs)
-      const filtered = prev.filter(
-        (t) => t.kind !== "child" || currentChildIds.has(t.id),
-      );
-
-      return newTabs.length > 0 ? [...filtered, ...newTabs] : filtered;
+      return prev.filter((t) => {
+        if (t.kind !== "child") return true;
+        // Extract child id from tab id (format: "child:{agentId}")
+        const childId = t.id.startsWith("child:") ? t.id.slice(6) : t.id;
+        // Keep if child still active, or if user is viewing it (frozen view handles archived)
+        return currentChildIds.has(childId) || (selectedChildId === childId) || (frozenChildView !== null && selectedChildId === childId);
+      });
     });
-  }, [childSessions]);
+  }, [childSessions, selectedChildId, frozenChildView]);
 
   // Derive selectedChildId from active tab
+  // Tab id format is "child:{agentId}" — strip prefix to get the raw session id
   useEffect(() => {
     const activeTab = tabs.find((t) => t.id === activeTabId);
     if (activeTab?.kind === "child") {
-      setSelectedChildId(activeTab.id);
+      const childId = activeTab.id.startsWith("child:") ? activeTab.id.slice(6) : activeTab.id;
+      setSelectedChildId(childId);
     } else {
       setSelectedChildId(null);
     }
@@ -285,22 +288,35 @@ export function OpenTuiApp({
       if (activeTabId === tabId) {
         setActiveTabId(next[Math.max(0, idx - 1)]?.id ?? "main");
       }
+      // If closing a child tab, clear selectedChildId
+      if (tabId.startsWith("child:")) {
+        setSelectedChildId(null);
+      }
       return next;
     });
   }, [activeTabId]);
 
   const openDetailTab = useCallback((entry: import("./presentation/types.js").PresentationEntry) => {
     const tabId = `detail:${entry.id}`;
+    const sourceKey = selectedChildId ? `child:${selectedChildId}` : "main";
     setTabs((prev) => {
       if (prev.some((t) => t.id === tabId)) return prev;
       const kind = entry.kind === "thinking" ? "detail-thinking" as const : "detail-tool" as const;
       const label = entry.kind === "thinking"
         ? "Thinking"
         : `${entry.toolDisplayName ?? "Tool"} ${entry.toolText ?? ""}`.trim();
-      return [...prev, { id: tabId, label, icon: "◇", closeable: true, kind }];
+      return [...prev, {
+        id: tabId,
+        label,
+        icon: "◇",
+        closeable: true,
+        kind,
+        sourceSessionKey: sourceKey,
+        detailEntryId: entry.id,
+      }];
     });
     setActiveTabId(tabId);
-  }, []);
+  }, [selectedChildId]);
 
   const [hint, setHint] = useState<string | null>(null);
   const [markdownMode, setMarkdownMode] = useState<"rendered" | "raw">("rendered");
@@ -586,9 +602,8 @@ export function OpenTuiApp({
     const syncFromLog = () => {
       const nextChildSessions = session.getChildSessionSnapshots?.() ?? [];
       setChildSessions((previous) => sameChildSessionList(previous, nextChildSessions) ? previous : nextChildSessions);
-      if (selectedChildId && !nextChildSessions.some((snapshot) => snapshot.id === selectedChildId)) {
-        setSelectedChildId(null);
-      }
+      // Archived children stay in _childSessions (Session instance alive), so they always
+      // appear in snapshots. No need for frozenChildView protection here.
       setPendingAsk(session.getPendingAsk?.() ?? null);
       setContextTokens(session.lastInputTokens);
       setCacheReadTokens(session.lastCacheReadTokens ?? 0);
@@ -1092,6 +1107,34 @@ export function OpenTuiApp({
       commandRegistry,
       autoSave,
       showMessage: (message: string) => {
+        // Intercept magic messages from /raw and /agents commands
+        if (message === "__toggle_markdown_raw__") {
+          setMarkdownMode((current) => {
+            const next = current === "rendered" ? "raw" : "rendered";
+            showHint(next === "raw" ? "Markdown raw: ON" : "Markdown raw: OFF");
+            return next;
+          });
+          return;
+        }
+        if (message === "__open_agent_list__") {
+          setAgentListSelectedIndex(0);
+          setAgentListOpen(true);
+          return;
+        }
+        if (message.startsWith("__sidebar_mode__:")) {
+          const mode = message.slice(17) as "open" | "close" | "auto";
+          setSidebarMode(mode);
+          showHint(`Sidebar: ${mode}`);
+          return;
+        }
+        if (message === "__sidebar_toggle__") {
+          setSidebarMode((current) => {
+            const next = current === "auto" ? "open" : current === "open" ? "close" : "auto";
+            showHint(`Sidebar: ${next}`);
+            return next;
+          });
+          return;
+        }
         session.appendStatusMessage?.(message);
       },
       resetUiState: () => {
@@ -1229,9 +1272,25 @@ export function OpenTuiApp({
     return serializeComposerText(composer, ensureComposerTokenType(composer));
   }, [draftValue]);
 
+  const UI_ONLY_COMMANDS = new Set(["/agents", "/raw", "/sidebar"]);
+
   const handleSubmit = useCallback(async (submittedValue: string) => {
     const input = submittedValue.trim();
     if (!input) return;
+
+    // UI-only commands: always intercept, even when processing
+    if (input.startsWith("/")) {
+      const cmdToken = input.split(/\s/)[0];
+      if (UI_ONLY_COMMANDS.has(cmdToken)) {
+        clearInput();
+        const command = commandRegistry.lookup(cmdToken);
+        if (command) {
+          const args = input.slice(cmdToken.length).trim();
+          try { await command.handler(buildCommandContext(), args); } catch { /* ignore */ }
+        }
+        return;
+      }
+    }
 
     if (pendingAsk) {
       showHint("Ask resolution is not implemented in this prototype yet.");
@@ -1982,12 +2041,112 @@ export function OpenTuiApp({
       return;
     }
 
-    if (selectedChildId && event.name === "escape") {
-      setSelectedChildId(null);
-      showHint("Back to primary session");
+    // Option+Left / Option+Right: switch to adjacent tab
+    // Ghostty sends Esc+b / Esc+f (word movement) for Option+Left/Right
+    const isOptLeft = (event.meta && event.name === "left") || (event.meta && event.name === "b");
+    const isOptRight = (event.meta && event.name === "right") || (event.meta && event.name === "f");
+    if (isOptLeft || isOptRight) {
+      const currentIdx = tabs.findIndex((t) => t.id === activeTabId);
+      if (currentIdx !== -1) {
+        const nextIdx = isOptLeft
+          ? (currentIdx - 1 + tabs.length) % tabs.length
+          : (currentIdx + 1) % tabs.length;
+        if (nextIdx !== currentIdx) {
+          setActiveTabId(tabs[nextIdx].id);
+        }
+      }
       event.preventDefault();
       event.stopPropagation();
       return;
+    }
+
+    // Option+Up: go to Main Session
+    if (event.meta && event.name === "up") {
+      setActiveTabId("main");
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    // Esc / Ctrl+C on sub-pages: interrupt running agent OR close tab
+    if ((event.name === "escape" || (event.name === "c" && event.ctrl)) && activeTabId !== "main") {
+      // If viewing a running child agent, interrupt it first
+      if (selectedChildId) {
+        const snapshot = childSessions.find((s) => s.id === selectedChildId);
+        if (snapshot?.lifecycle === "running") {
+          const decision = session.interruptChildSession?.(selectedChildId) ?? { accepted: false, reason: "unsupported" };
+          if (decision.accepted) {
+            if (event.name === "c" && event.ctrl) {
+              session.deliverMessage?.(
+                "system",
+                `${selectedChildId} was interrupted early by the user. Ask the user for next steps if more information is needed.`,
+              );
+            }
+            showHint(`Interrupted ${selectedChildId}`);
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+      // Not a running agent (or not a child tab at all) — close tab, jump to adjacent
+      const currentIdx = tabs.findIndex((t) => t.id === activeTabId);
+      const currentTab = tabs[currentIdx];
+      if (currentTab?.closeable) {
+        const remaining = tabs.filter((t) => t.id !== activeTabId);
+        const jumpIdx = Math.min(currentIdx, remaining.length - 1);
+        const jumpTab = remaining[Math.max(0, jumpIdx)];
+        setTabs(remaining);
+        setActiveTabId(jumpTab?.id ?? "main");
+        if (activeTabId.startsWith("child:")) {
+          setSelectedChildId(null);
+        }
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    // Esc on main page: interrupt current turn (no exit behavior)
+    if (event.name === "escape" && activeTabId === "main") {
+      if (commandPicker) {
+        setCommandPicker(null);
+        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (checkboxPicker) {
+        setCheckboxPicker(null);
+        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (commandOverlay.visible) {
+        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (processingRef.current) {
+        const decision = session.requestTurnInterrupt
+          ? session.requestTurnInterrupt()
+          : (session.cancelCurrentTurn?.(), { accepted: true as const });
+        if (decision.accepted) {
+          abortControllerRef.current?.abort();
+          setPhase("cancelling");
+        } else {
+          showHint(
+            decision.reason === "compact_in_progress"
+              ? "Interrupt is disabled during compact phase"
+              : "Interrupt is currently disabled.",
+          );
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
     }
 
     if (event.name === "c" && event.ctrl) {
@@ -2008,27 +2167,6 @@ export function OpenTuiApp({
 
       if (commandOverlay.visible) {
         setCommandOverlay(EMPTY_COMMAND_OVERLAY);
-        return;
-      }
-
-      if (selectedChildId) {
-        const decision = session.interruptChildSession?.(selectedChildId) ?? { accepted: false, reason: "unsupported" };
-        if (decision.accepted) {
-          session.deliverMessage?.(
-            "system",
-            `${selectedChildId} was interrupted early by the user. Ask the user for next steps if more information is needed.`,
-          );
-          showHint(`Interrupted ${selectedChildId}`);
-        } else {
-          const reason = decision.reason === "idle"
-            ? `${selectedChildId} is already idle`
-            : decision.reason === "not_live"
-              ? `${selectedChildId} is not running`
-              : decision.reason === "not_found"
-                ? `${selectedChildId} not found`
-                : "Child interrupt is unavailable";
-          showHint(reason);
-        }
         return;
       }
 
@@ -2077,12 +2215,41 @@ export function OpenTuiApp({
       return;
     }
 
+    // Agent list modal keyboard handling
+    if (agentListOpen) {
+      if (event.name === "escape") {
+        setAgentListOpen(false);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.name === "up") {
+        setAgentListSelectedIndex((i) => (i - 1 + childSessions.length) % childSessions.length);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.name === "down") {
+        setAgentListSelectedIndex((i) => (i + 1) % childSessions.length);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.name === "return") {
+        const agent = childSessions[agentListSelectedIndex];
+        if (agent) enterChildSession(agent.id);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      // Block all other keys while modal is open
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     if (event.name === "g" && event.ctrl) {
-      setMarkdownMode((current) => {
-        const next = current === "rendered" ? "raw" : "rendered";
-        showHint(next === "raw" ? "Markdown raw: ON" : "Markdown raw: OFF");
-        return next;
-      });
+      openAgentList();
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -2160,6 +2327,50 @@ export function OpenTuiApp({
   const modelName = modelDescriptor?.compactScopedLabel ?? "unknown";
   const modelNameColor = resolveModelNameColor(modelDescriptor, theme);
 
+  // Agent counts for indicator — all 3 states
+  const runningAgentCount = childSessions.filter((s) => s.lifecycle === "running").length;
+  const idleAgentCount = childSessions.filter((s) => s.lifecycle === "idle").length;
+  const archivedAgentCount = childSessions.filter((s) => s.lifecycle === "archived").length;
+
+  const openAgentList = useCallback(() => {
+    if (childSessions.length === 0) {
+      showHint("No agents spawned");
+      return;
+    }
+    setAgentListSelectedIndex(0);
+    setAgentListOpen(true);
+  }, [childSessions.length, showHint]);
+
+  const enterChildSession = useCallback((agentId: string) => {
+    setAgentListOpen(false);
+    setSelectedChildId(agentId);
+    // Create temporary child tab
+    const tabId = `child:${agentId}`;
+    setTabs((prev) => {
+      if (prev.some((t) => t.id === tabId)) return prev;
+      return [...prev, { id: tabId, label: agentId, icon: "◎", closeable: true, kind: "child" as const }];
+    });
+    setActiveTabId(tabId);
+  }, []);
+
+  // Data source switching: use child snapshot when viewing a child page
+  const childSnapshot = selectedChildId
+    ? (childSessions.find((s) => s.id === selectedChildId) ?? null)
+    : null;
+
+  const effectivePhase: ActivityPhase = childSnapshot
+    ? (childSnapshot.running ? "decoding" : "idle")
+    : phase;
+  const effectiveElapsed = childSnapshot ? childSnapshot.turnElapsed : turnElapsed;
+  const effectiveModelName = childSnapshot ? (childSnapshot.modelConfigName || modelName) : modelName;
+  const effectiveModelColor = childSnapshot
+    ? (theme.presentation.modelProviderColors[childSnapshot.modelProvider] ?? modelNameColor)
+    : modelNameColor;
+  const effectiveContextTokens = childSnapshot ? childSnapshot.inputTokens : contextTokens;
+  const effectiveContextLimit = childSnapshot ? childSnapshot.contextBudget : session.primaryAgent.modelConfig?.contextLength;
+  const effectiveProcessing = childSnapshot ? childSnapshot.running : processing;
+  const effectiveEntries = presentationEntries;
+
   return (
     <OpenTuiScreen
       theme={theme}
@@ -2170,10 +2381,10 @@ export function OpenTuiApp({
       onCloseTab={handleCloseTab}
       sidebarExpanded={sidebarExpanded}
       onToggleSidebar={() => setSidebarExpanded((value) => !value)}
-      contextTokens={contextTokens}
-      contextLimit={session.primaryAgent.modelConfig?.contextLength}
-      presentationEntries={presentationEntries}
-      processing={processing}
+      contextTokens={effectiveContextTokens}
+      contextLimit={effectiveContextLimit}
+      presentationEntries={effectiveEntries}
+      processing={effectiveProcessing}
       markdownMode={markdownMode}
       scrollRef={scrollRef}
       selectedChildId={selectedChildId}
@@ -2205,10 +2416,10 @@ export function OpenTuiApp({
       onPromptSelectItemClick={clickPromptSelectItem}
       onPromptSecretSubmit={submitPromptSecret}
       inputRef={inputRef}
-      phase={phase}
-      modelName={modelName}
-      modelColor={modelNameColor}
-      turnElapsed={turnElapsed}
+      phase={effectivePhase}
+      modelName={effectiveModelName}
+      modelColor={effectiveModelColor}
+      turnElapsed={effectiveElapsed}
       hint={hint}
       inputVisibleLines={inputVisibleLines}
       composerTokenVisuals={composerTokenVisuals}
@@ -2221,10 +2432,30 @@ export function OpenTuiApp({
         void handleSubmit(getSerializedComposerInput());
       }}
       onModelClick={() => void handleSubmit("/model")}
+      onAgentIndicatorClick={openAgentList}
+      runningAgentCount={runningAgentCount}
+      idleAgentCount={idleAgentCount}
+      archivedAgentCount={archivedAgentCount}
+      agentListOpen={agentListOpen}
+      agentListAgents={childSessions}
+      agentListSelectedIndex={agentListSelectedIndex}
+      onAgentListClose={() => setAgentListOpen(false)}
+      onAgentListSelect={enterChildSession}
+      sidebarMode={sidebarMode}
+      sidebarContextSection={
+        <ContextUsageCard
+          contextTokens={effectiveContextTokens}
+          contextLimit={effectiveContextLimit}
+          cacheReadTokens={cacheReadTokens}
+          theme={theme}
+        />
+      }
+      sidebarCodexSection={codexUsage ? <CodexUsageCard snapshot={codexUsage} theme={theme} /> : undefined}
       onBackgroundMouseDown={() => {
         if (commandOverlay.visible) setCommandOverlay(EMPTY_COMMAND_OVERLAY);
         if (commandPicker) setCommandPicker(null);
         if (checkboxPicker) setCheckboxPicker(null);
+        if (agentListOpen) setAgentListOpen(false);
       }}
     />
   );

@@ -1,0 +1,89 @@
+/** @jsxImportSource @opentui/react */
+
+import React from "react";
+
+import type { ConversationPalette } from "../components/conversation-types.js";
+import { shortenPath } from "../display/utils/format.js";
+
+export type SidebarMode = "open" | "close" | "auto";
+
+export interface RightSidebarProps {
+  visible: boolean;
+  width: number;
+  colors: ConversationPalette;
+  cwd: string;
+  activeShells?: Array<{ id: string; command: string; status: string }>;
+  /** Pre-rendered context usage card (ContextUsageCard from usage-cards.tsx) */
+  contextSection?: React.ReactNode;
+  /** Pre-rendered codex usage card (CodexUsageCard from usage-cards.tsx) */
+  codexSection?: React.ReactNode;
+}
+
+function RightSidebarInner({
+  visible,
+  width,
+  colors,
+  cwd,
+  activeShells = [],
+  contextSection,
+  codexSection,
+}: RightSidebarProps): React.ReactElement | null {
+  if (!visible) return null;
+
+  return (
+    <box
+      width={width}
+      minWidth={width}
+      maxWidth={width}
+      flexDirection="column"
+      border={["left"] as any}
+      borderColor={colors.border}
+      borderStyle="single"
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={1}
+    >
+      {/* Context usage (reuses ContextUsageCard) */}
+      {contextSection ? (
+        <box flexDirection="column" width="100%">
+          {contextSection}
+        </box>
+      ) : null}
+
+      {/* Codex usage (reuses CodexUsageCard) */}
+      {codexSection ? (
+        <>
+          <box height={1} />
+          <box flexDirection="column" width="100%">
+            {codexSection}
+          </box>
+        </>
+      ) : null}
+
+      {/* Active shells */}
+      {activeShells.length > 0 ? (
+        <>
+          <box height={1} />
+          <box flexDirection="column" width="100%">
+            <text fg={colors.dim} bold content="SHELLS" />
+            {activeShells.map((shell) => (
+              <text
+                key={shell.id}
+                fg={shell.status === "running" ? colors.green : colors.muted}
+                content={`${shell.status === "running" ? "●" : "○"} ${shell.command.slice(0, width - 6)}`}
+                wrapMode="truncate"
+              />
+            ))}
+          </box>
+        </>
+      ) : null}
+
+      {/* Project path — pinned to bottom */}
+      <box flexDirection="column" width="100%" flexGrow={1} justifyContent="flex-end">
+        <text fg={colors.muted} content={shortenPath(cwd)} wrapMode="truncate" />
+      </box>
+    </box>
+  );
+}
+
+export const RightSidebar = React.memo(RightSidebarInner);
