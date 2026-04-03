@@ -4939,11 +4939,12 @@ export class Session {
       } else {
         entry.status = "failed";
       }
-      const statusText = entry.status === "killed"
-        ? `was killed (${signal ?? "TERM"})`
-        : entry.status === "exited"
-          ? "completed successfully"
-          : `failed (exit ${code ?? 1})`;
+      // Skip notification for explicit kills — the kill_shell tool result
+      // already reports the outcome synchronously.
+      if (entry.explicitKill) return;
+      const statusText = entry.status === "exited"
+        ? "completed successfully"
+        : `failed (exit ${code ?? 1})`;
       this._deliverMessage({
         from: "system", to: "main", timestamp: Date.now(),
         content: `Background shell '${shellId}' ${statusText}. Use \`bash_output(id="${shellId}")\` to inspect logs at ${logPath}.`,
@@ -5009,7 +5010,7 @@ export class Session {
     });
   }
 
-  private _execKillShell(args: Record<string, unknown>): ToolResult {
+  private async _execKillShell(args: Record<string, unknown>): Promise<ToolResult> {
     const idsArg = this._argRequiredStringArray("kill_shell", args, "ids");
     if (idsArg instanceof ToolResult) return idsArg;
     const signalArg = this._argOptionalString("kill_shell", args, "signal");
@@ -5017,7 +5018,10 @@ export class Session {
     const rawSignal = (signalArg?.trim() || "SIGTERM").toUpperCase();
     const signal = (rawSignal.startsWith("SIG") ? rawSignal : `SIG${rawSignal}`) as NodeJS.Signals;
 
+    const KILL_WAIT_MS = 3_000;
     const parts: string[] = [];
+    const waitPromises: Promise<void>[] = [];
+
     for (const id of idsArg) {
       const entry = this._activeShells.get(id);
       if (!entry) {
@@ -5031,11 +5035,39 @@ export class Session {
       entry.explicitKill = true;
       try {
         entry.process.kill(signal);
-        parts.push(`'${id}': sent ${signal}.`);
       } catch (e) {
         parts.push(`'${id}': failed to send ${signal} (${e}).`);
+        continue;
       }
+      // Wait for exit or timeout, then SIGKILL if still alive.
+      const idx = parts.length;
+      parts.push(""); // placeholder
+      waitPromises.push(
+        new Promise<void>((resolve) => {
+          if (entry.status !== "running") {
+            parts[idx] = `'${id}': ${entry.status} (exit ${entry.exitCode ?? entry.signal ?? "?"}).`;
+            resolve();
+            return;
+          }
+          const onClose = () => { clearTimeout(timer); resolve(); };
+          const timer = setTimeout(() => {
+            entry.process.removeListener("close", onClose);
+            try { entry.process.kill("SIGKILL"); } catch { /* best effort */ }
+            parts[idx] = `'${id}': SIGKILL after ${KILL_WAIT_MS}ms timeout.`;
+            // Wait briefly for SIGKILL to take effect
+            entry.process.once("close", () => resolve());
+            setTimeout(resolve, 500); // fallback if close never fires
+          }, KILL_WAIT_MS);
+          entry.process.once("close", () => {
+            clearTimeout(timer);
+            parts[idx] = `'${id}': ${entry.status} (${entry.signal ?? `exit ${entry.exitCode}`}).`;
+            resolve();
+          });
+        }),
+      );
     }
+
+    await Promise.all(waitPromises);
     return new ToolResult({ content: parts.join(" ") || "No shells specified." });
   }
 
