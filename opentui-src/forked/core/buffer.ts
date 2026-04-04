@@ -416,8 +416,10 @@ export class OptimizedBuffer {
     shouldFill?: boolean
     title?: string
     titleAlignment?: "left" | "center" | "right"
+    titleColor?: RGBA
     dividerRatio?: number
     dividerTitle?: string
+    dividerTitleColor?: RGBA
   }): void {
     this.guard()
     const style = parseBorderStyle(options.borderStyle, "single")
@@ -425,18 +427,20 @@ export class OptimizedBuffer {
 
     const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left")
 
-    // When a divider is present, truncate the left title so it doesn't bleed past the divider
-    let effectiveTitle = options.title ?? null
+    // When titleColor is set or a divider is present, we handle the left title in JS instead of Zig
     const hasDivider = options.dividerRatio != null && options.dividerRatio > 0 && options.dividerRatio < 1
-    if (hasDivider && effectiveTitle) {
-      // Left section width: from left border to divider (exclusive), minus padding (2 on each side)
-      const dividerX = Math.round(options.width * options.dividerRatio)
-      const leftPadding = 2 // Zig uses 2-cell padding before and after title
-      const maxTitleLen = dividerX - leftPadding * 2
+    const jsDrawsLeftTitle = !!(options.titleColor || hasDivider)
+    let leftTitleText = options.title ?? null
+
+    if (leftTitleText && hasDivider) {
+      // Truncate left title so it doesn't bleed past the divider
+      const dividerCol = Math.round(options.width * options.dividerRatio!)
+      const leftPadding = 2 // matches Zig's 2-cell padding before and after title
+      const maxTitleLen = dividerCol - leftPadding * 2
       if (maxTitleLen < 1) {
-        effectiveTitle = null
-      } else if (effectiveTitle.length > maxTitleLen) {
-        effectiveTitle = effectiveTitle.slice(0, Math.max(1, maxTitleLen - 1)) + "…"
+        leftTitleText = null
+      } else if (leftTitleText.length > maxTitleLen) {
+        leftTitleText = leftTitleText.slice(0, Math.max(1, maxTitleLen - 1)) + "…"
       }
     }
 
@@ -450,8 +454,20 @@ export class OptimizedBuffer {
       packedOptions,
       options.borderColor,
       options.backgroundColor,
-      effectiveTitle,
+      // If JS will draw the title (custom color or divider), tell Zig to draw full border with no title
+      jsDrawsLeftTitle ? null : leftTitleText,
     )
+
+    // Draw left title from JS when we need a custom color
+    if (jsDrawsLeftTitle && leftTitleText && leftTitleText.length > 0) {
+      const sides = getBorderSides(options.border)
+      if (sides.top) {
+        const titlePadding = 2
+        const titleStartX = options.x + titlePadding
+        const titleFg = options.titleColor ?? options.borderColor
+        this.drawText(leftTitleText, titleStartX, options.y, titleFg, options.backgroundColor)
+      }
+    }
 
     // Draw vertical divider after the base box is rendered
     if (hasDivider) {
@@ -497,9 +513,8 @@ export class OptimizedBuffer {
           const titleText = options.dividerTitle.length <= availableWidth
             ? options.dividerTitle
             : options.dividerTitle.slice(0, Math.max(1, availableWidth - 1)) + "…"
-          // Overwrite the horizontal border chars in the title region with spaces first,
-          // then draw the title text. Since drawText overwrites cells, we just draw directly.
-          this.drawText(titleText, titleStartX, options.y, fg, bg)
+          const dividerTitleFg = options.dividerTitleColor ?? fg
+          this.drawText(titleText, titleStartX, options.y, dividerTitleFg, bg)
         }
       }
     }

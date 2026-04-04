@@ -28,10 +28,14 @@ export interface BoxOptions<TRenderable extends Renderable = BoxRenderable> exte
   gap?: number | `${number}%`
   rowGap?: number | `${number}%`
   columnGap?: number | `${number}%`
+  /** Custom color for the left title text (defaults to borderColor) */
+  titleColor?: ColorInput
   /** Vertical divider position as a ratio (0–1) of box width */
   dividerRatio?: number
   /** Title text displayed after the divider on the top border */
   dividerTitle?: string
+  /** Custom color for the divider title text (defaults to borderColor) */
+  dividerTitleColor?: ColorInput
 }
 
 function isGapType(value: any): value is number | undefined {
@@ -56,8 +60,10 @@ export class BoxRenderable extends Renderable {
   public shouldFill: boolean
   protected _title?: string
   protected _titleAlignment: "left" | "center" | "right"
+  protected _titleColor?: RGBA
   protected _dividerRatio?: number
   protected _dividerTitle?: string
+  protected _dividerTitleColor?: RGBA
 
   protected _defaultOptions = {
     backgroundColor: "transparent",
@@ -93,8 +99,10 @@ export class BoxRenderable extends Renderable {
     this.shouldFill = options.shouldFill ?? this._defaultOptions.shouldFill
     this._title = options.title
     this._titleAlignment = options.titleAlignment || this._defaultOptions.titleAlignment
+    this._titleColor = options.titleColor ? parseColor(options.titleColor) : undefined
     this._dividerRatio = options.dividerRatio
     this._dividerTitle = options.dividerTitle
+    this._dividerTitleColor = options.dividerTitleColor ? parseColor(options.dividerTitleColor) : undefined
 
     this.applyYogaBorders()
 
@@ -216,6 +224,18 @@ export class BoxRenderable extends Renderable {
     }
   }
 
+  public get titleColor(): RGBA | undefined {
+    return this._titleColor
+  }
+
+  public set titleColor(value: RGBA | string | undefined) {
+    const newColor = value ? parseColor(value) : undefined
+    if (this._titleColor !== newColor) {
+      this._titleColor = newColor
+      this.requestRender()
+    }
+  }
+
   public get dividerRatio(): number | undefined {
     return this._dividerRatio
   }
@@ -238,6 +258,18 @@ export class BoxRenderable extends Renderable {
     }
   }
 
+  public get dividerTitleColor(): RGBA | undefined {
+    return this._dividerTitleColor
+  }
+
+  public set dividerTitleColor(value: RGBA | string | undefined) {
+    const newColor = value ? parseColor(value) : undefined
+    if (this._dividerTitleColor !== newColor) {
+      this._dividerTitleColor = newColor
+      this.requestRender()
+    }
+  }
+
   protected renderSelf(buffer: OptimizedBuffer): void {
     const currentBorderColor = this._focused ? this._focusedBorderColor : this._borderColor
 
@@ -254,8 +286,10 @@ export class BoxRenderable extends Renderable {
       shouldFill: this.shouldFill,
       title: this._title,
       titleAlignment: this._titleAlignment,
+      titleColor: this._titleColor,
       dividerRatio: this._dividerRatio,
       dividerTitle: this._dividerTitle,
+      dividerTitleColor: this._dividerTitleColor,
     })
   }
 

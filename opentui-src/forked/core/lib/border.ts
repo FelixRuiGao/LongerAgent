@@ -111,10 +111,14 @@ export interface BoxDrawOptions {
   shouldFill?: boolean
   title?: string
   titleAlignment?: "left" | "center" | "right"
+  /** Custom color for the left title text (defaults to borderColor) */
+  titleColor?: ColorInput
   /** Vertical divider position as a ratio (0–1) of box width */
   dividerRatio?: number
   /** Title text displayed after the divider on the top border */
   dividerTitle?: string
+  /** Custom color for the divider title text (defaults to borderColor) */
+  dividerTitleColor?: ColorInput
 }
 
 export interface BorderSidesConfig {
