@@ -435,15 +435,21 @@ export class OptimizedBuffer {
     let leftTitleText = options.title ?? null
 
     if (leftTitleText && hasDivider) {
-      // Truncate left title so it doesn't bleed past the divider
+      // Truncate left title so it doesn't bleed past the divider.
+      // Reserve 2 extra chars for the spaces we wrap around the title.
       const dividerCol = Math.round(options.width * options.dividerRatio!)
       const leftPadding = 2 // matches Zig's 2-cell padding before and after title
-      const maxTitleLen = dividerCol - leftPadding * 2
+      const maxTitleLen = dividerCol - leftPadding * 2 - 2
       if (maxTitleLen < 1) {
         leftTitleText = null
       } else if (leftTitleText.length > maxTitleLen) {
         leftTitleText = leftTitleText.slice(0, Math.max(1, maxTitleLen - 1)) + "…"
       }
+    }
+
+    // Wrap with spaces for visual separation from ── border segments
+    if (leftTitleText) {
+      leftTitleText = ` ${leftTitleText} `
     }
 
     this.lib.bufferDrawBox(
@@ -468,11 +474,11 @@ export class OptimizedBuffer {
         const titlePadding = 2
         const titleStartX = options.x + titlePadding
         const titleFg = options.titleColor!
-        // Write each character individually with setCellWithAlphaBlending
-        // to ensure proper overwrite of the ─ border chars
+        // Use setCell (not setCellWithAlphaBlending) to directly overwrite ─ border chars.
+        // blendCells preserves underlying chars when bg is transparent.
         for (let i = 0; i < leftTitleText.length; i++) {
-          this.setCellWithAlphaBlending(
-            titleStartX + i, options.y, leftTitleText[i], titleFg, options.borderColor,
+          this.setCell(
+            titleStartX + i, options.y, leftTitleText[i], titleFg, options.backgroundColor,
           )
         }
       }
@@ -515,19 +521,22 @@ export class OptimizedBuffer {
       if (options.dividerTitle && sides.top && options.dividerTitle.length > 0) {
         const titlePadding = 2
         const titleStartX = dividerX + titlePadding
-        // Available space: from titleStartX to right border (exclusive), minus padding on the right
+        // Available space: from titleStartX to right border (exclusive), minus padding on the right.
+        // Reserve 2 extra chars for the spaces we wrap around the title.
         const rightBorderX = options.x + options.width - 1
-        const availableWidth = rightBorderX - titleStartX - titlePadding
+        const availableWidth = rightBorderX - titleStartX - titlePadding - 2
         if (availableWidth >= 1) {
-          const titleText = options.dividerTitle.length <= availableWidth
+          let titleText = options.dividerTitle.length <= availableWidth
             ? options.dividerTitle
             : options.dividerTitle.slice(0, Math.max(1, availableWidth - 1)) + "…"
+          // Wrap with spaces for visual separation from ── border segments
+          titleText = ` ${titleText} `
           const dividerTitleFg = options.dividerTitleColor ?? fg
-          // Write each character individually with setCellWithAlphaBlending
-          // to ensure proper overwrite of the ─ border chars
+          // Use setCell (not setCellWithAlphaBlending) to directly overwrite ─ border chars.
+          // blendCells preserves underlying chars when bg is transparent.
           for (let i = 0; i < titleText.length; i++) {
-            this.setCellWithAlphaBlending(
-              titleStartX + i, options.y, titleText[i], dividerTitleFg, fg,
+            this.setCell(
+              titleStartX + i, options.y, titleText[i], dividerTitleFg, bg,
             )
           }
         }

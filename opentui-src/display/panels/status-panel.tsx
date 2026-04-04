@@ -1,0 +1,234 @@
+/** @jsxImportSource @opentui/react */
+
+import React from "react";
+import { StyledText, RGBA } from "@opentui/core";
+import { createTextAttributes } from "../../forked/core/utils.js";
+import type { TextChunk } from "../../forked/core/text-buffer.js";
+
+import type { PlanCheckpoint } from "../../../src/plan-state.js";
+import type { ChildSessionSnapshot } from "../../../src/session-tree-types.js";
+import type { ConversationPalette } from "../../components/conversation-types.js";
+import { SelectableRow } from "../primitives/selectable-row.js";
+import { formatCompactTokensShort } from "../utils/format.js";
+
+// ── Color spec ──────────────────────────────────────────────
+const TITLE_COLOR = "#8ab4f8";
+
+const TODO_COLORS = {
+  doneMark: RGBA.fromHex("#4e6a88"),
+  doneText: RGBA.fromHex("#4a4a58"),
+  activeMark: RGBA.fromHex("#8ab4f8"),
+  activeText: RGBA.fromHex("#d0d6e0"),
+  pendingMark: RGBA.fromHex("#5a6a80"),
+  pendingText: RGBA.fromHex("#7a8098"),
+} as const;
+
+const ATTRS_STRIKE = createTextAttributes({ strikethrough: true });
+
+// ── Glyphs ──────────────────────────────────────────────────
+const MARK_DONE = "✓";
+const MARK_ACTIVE = "▶";
+const MARK_PENDING = "▷";
+
+function chunk(text: string, fg?: RGBA, attributes?: number): TextChunk {
+  return { __isChunk: true as const, text, fg, attributes };
+}
+
+// ── Types ───────────────────────────────────────────────────
+
+export interface StatusPanelProps {
+  agents: readonly ChildSessionSnapshot[];
+  showAgents: boolean;
+  todos: readonly PlanCheckpoint[];
+  showTodos: boolean;
+  colors: ConversationPalette;
+  contentWidth: number;
+  onAgentClick?: (agentId: string) => void;
+}
+
+// ── Agent rows (modal style) ────────────────────────────────
+
+function lifecycleIcon(lifecycle: string): string {
+  switch (lifecycle) {
+    case "running": return "●";
+    case "idle": return "○";
+    default: return "◌";
+  }
+}
+
+function lifecycleLabel(lifecycle: string): string {
+  switch (lifecycle) {
+    case "running": return "running";
+    case "idle": return "idle";
+    default: return "done";
+  }
+}
+
+function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSessionSnapshot[]; colors: ConversationPalette; onAgentClick?: (agentId: string) => void }): React.ReactElement {
+  return (
+    <box flexDirection="column" gap={0} flexGrow={1}>
+      {agents.map((agent) => {
+        const isActive = agent.lifecycle === "running";
+        const statusColor = isActive ? colors.workingStatus : "#5a6078";
+        const nameColor = isActive ? colors.text : "#7a8098";
+        const descColor = isActive ? colors.dim : "#5a6078";
+        const icon = lifecycleIcon(agent.lifecycle);
+        const label = lifecycleLabel(agent.lifecycle);
+        const statsLine = `└ ${agent.lifetimeToolCallCount} tools, ${formatCompactTokensShort(agent.lastTotalTokens)} tokens`;
+
+        return (
+          <SelectableRow
+            key={agent.id}
+            hoverBackgroundColor={colors.border}
+            onPress={onAgentClick ? () => onAgentClick(agent.id) : undefined}
+          >
+            <box flexDirection="column" width="100%">
+              <box flexDirection="row" width="100%">
+                <text fg={statusColor} content={`${icon} `} flexShrink={0} />
+                <text fg={nameColor} content={agent.id} flexShrink={1} wrapMode="truncate" />
+                <text fg={statusColor} content={` [${label}]`} flexShrink={0} />
+                <box flexGrow={1} />
+              </box>
+              <box flexDirection="row" width="100%" paddingLeft={2}>
+                <text fg={descColor} content={statsLine} wrapMode="truncate" />
+              </box>
+            </box>
+          </SelectableRow>
+        );
+      })}
+    </box>
+  );
+}
+
+// ── Todo rows (plan-panel style) ────────────────────────────
+
+function buildCheckpointStyledText(cp: PlanCheckpoint): StyledText {
+  switch (cp.status) {
+    case "done":
+      return new StyledText([
+        chunk(`${MARK_DONE} `, TODO_COLORS.doneMark),
+        chunk(cp.text, TODO_COLORS.doneText, ATTRS_STRIKE),
+      ]);
+    case "active":
+      return new StyledText([
+        chunk(`${MARK_ACTIVE} `, TODO_COLORS.activeMark),
+        chunk(cp.text, TODO_COLORS.activeText),
+      ]);
+    default:
+      return new StyledText([
+        chunk(`${MARK_PENDING} `, TODO_COLORS.pendingMark),
+        chunk(cp.text, TODO_COLORS.pendingText),
+      ]);
+  }
+}
+
+function TodoRows({ todos }: { todos: readonly PlanCheckpoint[] }): React.ReactElement {
+  const nonDone = todos.filter((cp) => cp.status !== "done");
+  const done = todos.filter((cp) => cp.status === "done");
+  const sorted = [...nonDone, ...done];
+
+  return (
+    <box flexDirection="column" gap={0} flexGrow={1}>
+      {sorted.map((cp, i) => (
+        <text
+          key={i}
+          content={buildCheckpointStyledText(cp)}
+          wrapMode="truncate"
+        />
+      ))}
+    </box>
+  );
+}
+
+// ── Main panel ──────────────────────────────────────────────
+
+function StatusPanelInner({
+  agents,
+  showAgents,
+  todos,
+  showTodos,
+  colors,
+  onAgentClick,
+}: StatusPanelProps): React.ReactElement | null {
+  const openTodos = todos.filter((cp) => cp.status !== "done");
+  const doneCount = todos.length - openTodos.length;
+  const runningCount = agents.filter((a) => a.lifecycle === "running").length;
+
+  const hasAgents = agents.length > 0 && showAgents;
+  const hasTodos = openTodos.length > 0 && showTodos;
+
+  if (!hasAgents && !hasTodos) return null;
+
+  const agentParts: string[] = [];
+  if (runningCount > 0) agentParts.push(`${runningCount} running`);
+  const doneAgentCount = agents.length - runningCount;
+  if (doneAgentCount > 0) agentParts.push(`${doneAgentCount} done`);
+  const agentTitle = `Agents (${agentParts.join(", ")})`;
+
+  const todoParts: string[] = [];
+  if (openTodos.length > 0) todoParts.push(`${openTodos.length} pending`);
+  if (doneCount > 0) todoParts.push(`${doneCount} done`);
+  const todoTitle = `Todos (${todoParts.join(", ")})`;
+
+  if (hasAgents && hasTodos) {
+    return (
+      <box
+        width="100%"
+        flexShrink={0}
+        border={true}
+        borderStyle="rounded"
+        borderColor={colors.dim}
+        title={agentTitle}
+        titleColor={TITLE_COLOR}
+        dividerRatio={0.4}
+        dividerTitle={todoTitle}
+        dividerTitleColor={TITLE_COLOR}
+        flexDirection="row"
+        gap={0}
+      >
+        <box width="40%" flexShrink={0} paddingLeft={1} paddingRight={1}>
+          <AgentRows agents={agents} colors={colors} onAgentClick={onAgentClick} />
+        </box>
+        <box flexGrow={1} paddingLeft={2} paddingRight={1}>
+          <TodoRows todos={todos} />
+        </box>
+      </box>
+    );
+  }
+
+  if (hasAgents) {
+    return (
+      <box
+        width="100%"
+        flexShrink={0}
+        border={true}
+        borderStyle="rounded"
+        borderColor={colors.dim}
+        title={agentTitle}
+        titleColor={TITLE_COLOR}
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        <AgentRows agents={agents} colors={colors} onAgentClick={onAgentClick} />
+      </box>
+    );
+  }
+
+  return (
+    <box
+      width="100%"
+      flexShrink={0}
+      border={true}
+      borderStyle="rounded"
+      borderColor={colors.dim}
+      title={todoTitle}
+      titleColor={TITLE_COLOR}
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      <TodoRows todos={todos} />
+    </box>
+  );
+}
+
+export const StatusPanel = React.memo(StatusPanelInner);

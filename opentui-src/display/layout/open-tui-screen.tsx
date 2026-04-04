@@ -106,14 +106,20 @@ export interface OpenTuiScreenProps {
   onBackgroundMouseDown: () => void;
   sidebarMode?: SidebarMode;
   activeShells?: Array<{ id: string; command: string; status: string }>;
-  /** Pre-rendered plan panel (pinned above conversation) */
-  planPanel?: React.ReactNode;
+  /** Pre-rendered status panel (agents + todos, between conversation and input) */
+  statusPanel?: React.ReactNode;
   /** Pre-rendered plan panel for sidebar (deprecated) */
   sidebarPlanSection?: React.ReactNode;
   /** Pre-rendered context usage card for sidebar */
   sidebarContextSection?: React.ReactNode;
   /** Pre-rendered codex usage card for sidebar */
   sidebarCodexSection?: React.ReactNode;
+  todoOpenCount?: number;
+  todoDoneCount?: number;
+  todoPanelOpen?: boolean;
+  onTodoClick?: () => void;
+  agentsPanelOpen?: boolean;
+  onAgentsPanelClick?: () => void;
 }
 
 export function OpenTuiScreen({
@@ -181,10 +187,16 @@ export function OpenTuiScreen({
   onBackgroundMouseDown,
   sidebarMode = "close",
   activeShells = [],
-  planPanel,
+  statusPanel,
   sidebarPlanSection,
   sidebarContextSection,
   sidebarCodexSection,
+  todoOpenCount,
+  todoDoneCount,
+  todoPanelOpen,
+  onTodoClick,
+  agentsPanelOpen,
+  onAgentsPanelClick,
 }: OpenTuiScreenProps): React.ReactElement {
   const conversationColumnWidth = terminal.width - (theme.spacing.screenPaddingX * 2);
   const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
@@ -242,8 +254,6 @@ export function OpenTuiScreen({
       <box flexDirection="row" flexGrow={1} gap={0}>
         {/* Main content column */}
         <box flexDirection="column" flexGrow={1} gap={0}>
-          {/* Plan panel — pinned above conversation */}
-          {planPanel}
           {detailEntry && activeTab?.kind === "detail-thinking" ? (
             <DetailThinkingTab entry={detailEntry} colors={theme.colors} scrollRef={scrollRef} />
           ) : detailEntry && activeTab?.kind === "detail-tool" ? (
@@ -344,8 +354,11 @@ export function OpenTuiScreen({
       </box>
       {/* End content row */}
 
-      {/* Spacer between content and input */}
+      {/* Spacer below conversation — always present */}
       <box height={1} />
+
+      {/* Status panel (agents + todos) between content and input */}
+      {statusPanel}
 
       {/* Input area */}
       <InputArea
@@ -378,6 +391,12 @@ export function OpenTuiScreen({
         checkboxPicker={Boolean(checkboxPicker)}
         promptSelect={Boolean(promptSelect)}
         promptSecret={Boolean(promptSecret)}
+        todoOpenCount={todoOpenCount}
+        todoDoneCount={todoDoneCount}
+        todoPanelOpen={todoPanelOpen}
+        onTodoClick={onTodoClick}
+        agentsPanelOpen={agentsPanelOpen}
+        onAgentsPanelClick={onAgentsPanelClick}
       />
 
       {/* Agent list modal (absolute positioned, above everything) */}

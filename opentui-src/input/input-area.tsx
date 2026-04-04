@@ -52,6 +52,18 @@ interface InputAreaProps {
   idleAgentCount?: number;
   /** Number of archived child agents. */
   archivedAgentCount?: number;
+  /** Number of open (non-done) todo items. */
+  todoOpenCount?: number;
+  /** Number of done todo items. */
+  todoDoneCount?: number;
+  /** Whether the todo panel is currently expanded. */
+  todoPanelOpen?: boolean;
+  /** Toggle the todo panel. */
+  onTodoClick?: () => void;
+  /** Whether the agents panel is currently expanded. */
+  agentsPanelOpen?: boolean;
+  /** Toggle the agents panel. */
+  onAgentsPanelClick?: () => void;
 }
 
 function getPhaseLabel(phase: ActivityPhase): string {
@@ -115,6 +127,12 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     idleAgentCount = 0,
     archivedAgentCount = 0,
     onAgentIndicatorClick,
+    todoOpenCount = 0,
+    todoDoneCount = 0,
+    todoPanelOpen = false,
+    onTodoClick,
+    agentsPanelOpen = false,
+    onAgentsPanelClick,
   } = props;
 
   const placeholder = pendingAsk
@@ -148,16 +166,43 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
           </box>
         ) : null}
 
-        {/* Agent indicator: only show running count */}
-        {runningAgentCount > 0 && !selectedChildId ? (
+        {/* Agent indicator: show whenever agents exist */}
+        {(runningAgentCount + idleAgentCount + archivedAgentCount) > 0 && !selectedChildId ? (
           <box
             flexDirection="row"
             flexShrink={0}
             paddingLeft={processing ? 2 : 0}
-            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onAgentIndicatorClick?.(); }}
+            backgroundColor={agentsPanelOpen ? "#3a3058" : "#2a2640"}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onAgentsPanelClick?.(); }}
           >
-            <text fg={colors.workingStatus} content={`${runningAgentCount} agent${runningAgentCount > 1 ? "s" : ""} running`} />
+            <text fg="#b4a0ec" content={(() => {
+              const parts: string[] = [];
+              if (runningAgentCount > 0) parts.push(`${runningAgentCount} running`);
+              const doneAgents = idleAgentCount + archivedAgentCount;
+              if (doneAgents > 0) parts.push(`${doneAgents} done`);
+              return ` Agents (${parts.join(", ")}) `;
+            })()} />
           </box>
+        ) : null}
+
+        {/* Todo indicator: show whenever checkpoints exist */}
+        {(todoOpenCount + todoDoneCount) > 0 && !selectedChildId ? (
+          <>
+          {((runningAgentCount + idleAgentCount + archivedAgentCount) > 0 || processing) ? <box width={1} /> : null}
+          <box
+            flexDirection="row"
+            flexShrink={0}
+            backgroundColor={todoPanelOpen ? "#1a3838" : "#1a2a2e"}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onTodoClick?.(); }}
+          >
+            <text fg="#86ded4" content={(() => {
+              const parts: string[] = [];
+              if (todoOpenCount > 0) parts.push(`${todoOpenCount} pending`);
+              if (todoDoneCount > 0) parts.push(`${todoDoneCount} done`);
+              return ` Todos (${parts.join(", ")}) `;
+            })()} />
+          </box>
+          </>
         ) : null}
 
         <box flexGrow={1} />

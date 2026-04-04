@@ -89,7 +89,7 @@ import {
 } from "./composer-tokens.js";
 import { DEFAULT_DISPLAY_THEME, type DisplayTheme } from "./display/theme/index.js";
 import { ContextUsageCard, CodexUsageCard } from "./display/panels/usage-cards.js";
-import { PlanPanel } from "./display/panels/plan-panel.js";
+import { StatusPanel } from "./display/panels/status-panel.js";
 import { usePlan } from "./presentation/use-plan.js";
 import {
   type ActivityPhase,
@@ -237,7 +237,8 @@ export function OpenTuiApp({
   const presentationEntries = usePresentationEntries({ session, selectedChildId, childSessions, processing });
   const turnElapsed = useTurnTimer(processing);
   const planCheckpoints = usePlan(session);
-  const [planExpanded, setPlanExpanded] = useState(true);
+  const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
+  const [todoPanelOpen, setTodoPanelOpen] = useState(false);
 
   // Agent list modal state
   const [agentListOpen, setAgentListOpen] = useState(false);
@@ -2269,10 +2270,11 @@ export function OpenTuiApp({
       return;
     }
 
-    // Ctrl+O: toggle plan panel expand/collapse
+    // Ctrl+O: toggle todo panel expand/collapse
     if (event.name === "o" && event.ctrl) {
-      if (planCheckpoints.length > 0) {
-        setPlanExpanded((prev) => !prev);
+      const openTodos = planCheckpoints.filter((cp) => cp.status !== "done");
+      if (openTodos.length > 0) {
+        setTodoPanelOpen((prev) => !prev);
       }
       event.preventDefault();
       event.stopPropagation();
@@ -2468,16 +2470,29 @@ export function OpenTuiApp({
       onAgentListClose={() => setAgentListOpen(false)}
       onAgentListSelect={enterChildSession}
       sidebarMode={sidebarMode}
-      planPanel={
-        planCheckpoints.length > 0
-          ? <PlanPanel
-              checkpoints={planCheckpoints}
-              expanded={planExpanded}
-              contentWidth={terminal.width - (theme.spacing.screenPaddingX * 2)}
-              onToggle={() => setPlanExpanded((p) => !p)}
-            />
-          : undefined
-      }
+      statusPanel={(() => {
+        const showAgents = agentsPanelOpen && childSessions.length > 0;
+        const openTodos = planCheckpoints.filter((cp) => cp.status !== "done");
+        const showTodos = todoPanelOpen && openTodos.length > 0;
+        if (!showAgents && !showTodos) return undefined;
+        return (
+          <StatusPanel
+            agents={childSessions}
+            showAgents={showAgents}
+            todos={planCheckpoints}
+            showTodos={showTodos}
+            colors={theme.colors}
+            contentWidth={terminal.width - (theme.spacing.screenPaddingX * 2)}
+            onAgentClick={enterChildSession}
+          />
+        );
+      })()}
+      todoOpenCount={planCheckpoints.filter((cp) => cp.status !== "done").length}
+      todoDoneCount={planCheckpoints.filter((cp) => cp.status === "done").length}
+      todoPanelOpen={todoPanelOpen}
+      onTodoClick={() => setTodoPanelOpen((p) => !p)}
+      agentsPanelOpen={agentsPanelOpen}
+      onAgentsPanelClick={() => setAgentsPanelOpen((p) => !p)}
       sidebarPlanSection={undefined}
       sidebarContextSection={
         <ContextUsageCard
