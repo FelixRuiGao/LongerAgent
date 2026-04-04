@@ -68,6 +68,7 @@ import {
   parseReferences,
 } from "./file-attach.js";
 import { SafePathError, safePath } from "./security/path.js";
+import { parsePlanFile, formatPlanSnapshot, PLAN_FILENAME, type PlanCheckpoint } from "./plan-state.js";
 import {
   AskPendingError,
   ASK_CUSTOM_OPTION_LABEL,
@@ -483,6 +484,10 @@ export class Session {
   private _projectRoot: string;
   private _sessionArtifactsOverride: string;
   private _systemData: string;
+
+  // Plan state (parsed from {SESSION_ARTIFACTS}/plan.md)
+  private _planState: PlanCheckpoint[] = [];
+  private _planListeners: (() => void)[] = [];
 
   // Session tree / child sessions
   private _childSessions = new Map<string, ChildSessionHandle>();
@@ -1574,6 +1579,9 @@ export class Session {
       this._inbox = [...prepared.rootInbox];
     }
 
+    // Restore plan state from plan.md if it exists
+    this._refreshPlanState();
+
     this._bumpLogRevision();
     this._notifyLogListeners();
     return warnings;
@@ -2123,7 +2131,13 @@ export class Session {
     // 5. Reset MCP connection flag (will reconnect on next turn)
     this._mcpConnected = false;
 
-    // 6. Re-init conversation LAST (fresh session state, storage may still be lazy)
+    // 6. Clear plan state
+    if (this._planState.length > 0) {
+      this._planState = [];
+      this._notifyPlanListeners();
+    }
+
+    // 7. Re-init conversation LAST (fresh session state, storage may still be lazy)
     // _initConversation also resets _log and _idAllocator
     this._initConversation();
   }
@@ -2147,13 +2161,38 @@ export class Session {
       return result;
     };
 
+    /** Wrap a file-mutating executor: refresh plan state when the target is plan.md. */
+    const withPlanHook = (inner: ToolExecutor): ToolExecutor => {
+      return (args) => {
+        const filePath = String((args as Record<string, unknown>)["path"] ?? "");
+        const isPlan = filePath && this._isPlanFilePath(filePath);
+        const result = inner(args);
+        if (!isPlan) return result;
+
+        // Tag result and refresh plan state AFTER the file write completes.
+        const finalize = (r: ToolResult | string): ToolResult => {
+          this._refreshPlanState();
+          if (r instanceof ToolResult) {
+            r.metadata.planFileOperation = true;
+            return r;
+          }
+          return new ToolResult({ content: String(r), metadata: { planFileOperation: true } });
+        };
+
+        if (result instanceof Promise) {
+          return result.then(finalize);
+        }
+        return finalize(result as ToolResult | string);
+      };
+    };
+
     return {
       read_file: scopedBuiltin("read_file"),
       list_dir: scopedBuiltin("list_dir"),
       glob: scopedBuiltin("glob"),
       grep: scopedBuiltin("grep"),
-      edit_file: scopedBuiltin("edit_file"),
-      write_file: writeFileWithReload,
+      edit_file: withPlanHook(scopedBuiltin("edit_file")),
+      write_file: withPlanHook(writeFileWithReload),
       web_fetch: (args) => executeTool("web_fetch", args),
       bash: (args) => executeTool("bash", args, {
         projectRoot: this._projectRoot,
@@ -2403,6 +2442,61 @@ export class Session {
 
   getDisplayName(): string {
     return this._title || this._generateSummary();
+  }
+
+  // ==================================================================
+  // Plan state
+  // ==================================================================
+
+  getPlanState(): PlanCheckpoint[] {
+    return this._planState;
+  }
+
+  subscribePlan(listener: () => void): () => void {
+    this._planListeners.push(listener);
+    return () => {
+      const idx = this._planListeners.indexOf(listener);
+      if (idx !== -1) this._planListeners.splice(idx, 1);
+    };
+  }
+
+  private _notifyPlanListeners(): void {
+    for (const listener of this._planListeners) {
+      listener();
+    }
+  }
+
+  /**
+   * Resolve the plan file path. Returns undefined if artifacts dir
+   * is not yet available (session storage not created).
+   */
+  private _getPlanFilePath(): string | undefined {
+    const dir = this._sessionArtifactsOverride
+      || this._getArtifactsDirIfAvailable();
+    if (!dir) return undefined;
+    return join(dir, PLAN_FILENAME);
+  }
+
+  /**
+   * Read and parse the plan file if it exists.
+   * Updates _planState and notifies listeners if changed.
+   */
+  private _refreshPlanState(): void {
+    const planPath = this._getPlanFilePath();
+    if (!planPath || !existsSync(planPath)) {
+      if (this._planState.length > 0) {
+        this._planState = [];
+        this._notifyPlanListeners();
+      }
+      return;
+    }
+    try {
+      const content = readFileSync(planPath, "utf-8");
+      this._planState = parsePlanFile(content);
+      this._notifyPlanListeners();
+    } catch {
+      // File read error — leave state unchanged.
+    }
   }
 
   // ==================================================================
@@ -4303,6 +4397,13 @@ export class Session {
     return resolved === resolve(globalPath) || resolved === resolve(projectPath);
   }
 
+  /** Check if a file path refers to the plan file (SESSION_ARTIFACTS/plan.md). */
+  private _isPlanFilePath(filePath: string): boolean {
+    const planPath = this._getPlanFilePath();
+    if (!planPath) return false;
+    return resolve(filePath) === resolve(planPath);
+  }
+
   private _readAgentsMd(): string {
     const parts: string[] = [];
 
@@ -4714,7 +4815,10 @@ export class Session {
       false,
     );
     const currentMarkerIdx = this._log.length - 1;
-    const contContent = `${continuationPrompt}\n\n[Contexts before this point have been compacted.]`;
+    // Append plan snapshot to compact context so plan state survives compaction.
+    const planSnapshot = formatPlanSnapshot(this._planState);
+    const planSuffix = planSnapshot ? `\n\n${planSnapshot}` : "";
+    const contContent = `${continuationPrompt}\n\n[Contexts before this point have been compacted.]${planSuffix}`;
     this._appendEntry(
       createCompactContext(
         this._nextLogId("compact_context"),

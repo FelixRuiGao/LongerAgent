@@ -28,6 +28,10 @@ export interface BoxOptions<TRenderable extends Renderable = BoxRenderable> exte
   gap?: number | `${number}%`
   rowGap?: number | `${number}%`
   columnGap?: number | `${number}%`
+  /** Vertical divider position as a ratio (0–1) of box width */
+  dividerRatio?: number
+  /** Title text displayed after the divider on the top border */
+  dividerTitle?: string
 }
 
 function isGapType(value: any): value is number | undefined {
@@ -52,6 +56,8 @@ export class BoxRenderable extends Renderable {
   public shouldFill: boolean
   protected _title?: string
   protected _titleAlignment: "left" | "center" | "right"
+  protected _dividerRatio?: number
+  protected _dividerTitle?: string
 
   protected _defaultOptions = {
     backgroundColor: "transparent",
@@ -87,6 +93,8 @@ export class BoxRenderable extends Renderable {
     this.shouldFill = options.shouldFill ?? this._defaultOptions.shouldFill
     this._title = options.title
     this._titleAlignment = options.titleAlignment || this._defaultOptions.titleAlignment
+    this._dividerRatio = options.dividerRatio
+    this._dividerTitle = options.dividerTitle
 
     this.applyYogaBorders()
 
@@ -208,6 +216,28 @@ export class BoxRenderable extends Renderable {
     }
   }
 
+  public get dividerRatio(): number | undefined {
+    return this._dividerRatio
+  }
+
+  public set dividerRatio(value: number | undefined) {
+    if (this._dividerRatio !== value) {
+      this._dividerRatio = value
+      this.requestRender()
+    }
+  }
+
+  public get dividerTitle(): string | undefined {
+    return this._dividerTitle
+  }
+
+  public set dividerTitle(value: string | undefined) {
+    if (this._dividerTitle !== value) {
+      this._dividerTitle = value
+      this.requestRender()
+    }
+  }
+
   protected renderSelf(buffer: OptimizedBuffer): void {
     const currentBorderColor = this._focused ? this._focusedBorderColor : this._borderColor
 
@@ -224,6 +254,8 @@ export class BoxRenderable extends Renderable {
       shouldFill: this.shouldFill,
       title: this._title,
       titleAlignment: this._titleAlignment,
+      dividerRatio: this._dividerRatio,
+      dividerTitle: this._dividerTitle,
     })
   }
 

@@ -59,6 +59,26 @@ function isToolResultInterrupted(entry: ReconciledConversationEntry): boolean {
   return entry.entry.text.startsWith("[Interrupted]");
 }
 
+/**
+ * Check if a tool_call + its optional result represent a plan file operation.
+ * Plan file operations are tagged with planFileOperation in toolMetadata.
+ */
+function isPlanFileOperation(
+  callEntry: ReconciledConversationEntry,
+  nextEntry: ReconciledConversationEntry | undefined,
+): boolean {
+  // Check if the result entry has the planFileOperation flag
+  if (nextEntry?.entry.kind === "tool_result") {
+    const resultMeta = (nextEntry.entry.meta as Record<string, unknown>) ?? {};
+    const toolMetadata = resultMeta.toolMetadata as Record<string, unknown> | undefined;
+    if (toolMetadata?.planFileOperation === true) return true;
+  }
+  // Also check the call entry meta (for streaming scenarios where result not yet available)
+  const callMeta = getMeta(callEntry);
+  if ((callMeta.toolMetadata as Record<string, unknown> | undefined)?.planFileOperation === true) return true;
+  return false;
+}
+
 // ------------------------------------------------------------------
 // Transform functions
 // ------------------------------------------------------------------
@@ -384,10 +404,11 @@ export function presentationTransform(
     const entry = entries[i];
     const kind = entry.entry.kind;
 
-    // 1. Skip hidden tools (wait)
+    // 1. Skip hidden tools (wait) and plan file operations
     if (kind === "tool_call") {
       const toolName = getToolName(entry);
-      if (HIDDEN_TOOLS.has(toolName)) {
+      const isPlanOp = isPlanFileOperation(entry, entries[i + 1]);
+      if (HIDDEN_TOOLS.has(toolName) || isPlanOp) {
         i++;
         if (i < entries.length && entries[i].entry.kind === "tool_result") {
           i++;

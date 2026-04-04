@@ -35,7 +35,7 @@ import {
 } from "../overlays/views.js";
 import { AgentListModal } from "../overlays/agent-list-modal.js";
 import { RightSidebar, type SidebarMode } from "../../sidebar/right-sidebar.js";
-import { computePickerMaxVisible } from "./metrics.js";
+import { computePickerMaxVisible, getSidebarWidth } from "./metrics.js";
 import { HorizontalTabBar } from "./horizontal-tab-bar.js";
 import { shortenPath } from "../utils/format.js";
 
@@ -106,6 +106,10 @@ export interface OpenTuiScreenProps {
   onBackgroundMouseDown: () => void;
   sidebarMode?: SidebarMode;
   activeShells?: Array<{ id: string; command: string; status: string }>;
+  /** Pre-rendered plan panel (pinned above conversation) */
+  planPanel?: React.ReactNode;
+  /** Pre-rendered plan panel for sidebar (deprecated) */
+  sidebarPlanSection?: React.ReactNode;
   /** Pre-rendered context usage card for sidebar */
   sidebarContextSection?: React.ReactNode;
   /** Pre-rendered codex usage card for sidebar */
@@ -175,8 +179,10 @@ export function OpenTuiScreen({
   onAgentListClose,
   onAgentListSelect,
   onBackgroundMouseDown,
-  sidebarMode = "auto",
+  sidebarMode = "close",
   activeShells = [],
+  planPanel,
+  sidebarPlanSection,
   sidebarContextSection,
   sidebarCodexSection,
 }: OpenTuiScreenProps): React.ReactElement {
@@ -198,7 +204,7 @@ export function OpenTuiScreen({
     sidebarMode === "open" ||
     (sidebarMode === "auto" && terminal.width >= theme.layout.minTerminalWidthForSidebar)
   );
-  const sidebarWidth = theme.layout.sidebarMinWidth;
+  const sidebarWidth = getSidebarWidth(terminal.width, theme.layout);
   const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
   const pickerContentWidth = terminal.width - effectiveSidebarWidth - 10;
 
@@ -236,6 +242,8 @@ export function OpenTuiScreen({
       <box flexDirection="row" flexGrow={1} gap={0}>
         {/* Main content column */}
         <box flexDirection="column" flexGrow={1} gap={0}>
+          {/* Plan panel — pinned above conversation */}
+          {planPanel}
           {detailEntry && activeTab?.kind === "detail-thinking" ? (
             <DetailThinkingTab entry={detailEntry} colors={theme.colors} scrollRef={scrollRef} />
           ) : detailEntry && activeTab?.kind === "detail-tool" ? (
@@ -329,6 +337,7 @@ export function OpenTuiScreen({
           colors={theme.colors}
           cwd={process.cwd()}
           activeShells={activeShells}
+          planSection={sidebarPlanSection}
           contextSection={sidebarContextSection}
           codexSection={sidebarCodexSection}
         />

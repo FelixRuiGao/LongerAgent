@@ -202,10 +202,11 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
         />
       </box>
 
-      {/* Bottom row: hint (left) + context (right) */}
+      {/* Bottom row: cwd (left) + hint (middle) + context (right) */}
       <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
+        <text fg={colors.muted} content={cwd} flexShrink={0} />
         {hint ? (
-          <text fg={colors.dim} content={hint} wrapMode="truncate" flexGrow={1} flexShrink={1} />
+          <text fg={colors.dim} content={`  ${hint}`} wrapMode="truncate" flexGrow={1} flexShrink={1} />
         ) : (
           <box flexGrow={1} />
         )}

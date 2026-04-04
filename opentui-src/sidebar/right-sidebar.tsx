@@ -13,6 +13,8 @@ export interface RightSidebarProps {
   colors: ConversationPalette;
   cwd: string;
   activeShells?: Array<{ id: string; command: string; status: string }>;
+  /** Pre-rendered plan panel */
+  planSection?: React.ReactNode;
   /** Pre-rendered context usage card (ContextUsageCard from usage-cards.tsx) */
   contextSection?: React.ReactNode;
   /** Pre-rendered codex usage card (CodexUsageCard from usage-cards.tsx) */
@@ -25,6 +27,7 @@ function RightSidebarInner({
   colors,
   cwd,
   activeShells = [],
+  planSection,
   contextSection,
   codexSection,
 }: RightSidebarProps): React.ReactElement | null {
@@ -48,6 +51,16 @@ function RightSidebarInner({
         <box flexDirection="column" width="100%">
           {contextSection}
         </box>
+      ) : null}
+
+      {/* Plan checkpoints */}
+      {planSection ? (
+        <>
+          {contextSection ? <box height={1} /> : null}
+          <box flexDirection="column" width="100%">
+            {planSection}
+          </box>
+        </>
       ) : null}
 
       {/* Codex usage (reuses CodexUsageCard) */}

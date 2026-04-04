@@ -89,6 +89,8 @@ import {
 } from "./composer-tokens.js";
 import { DEFAULT_DISPLAY_THEME, type DisplayTheme } from "./display/theme/index.js";
 import { ContextUsageCard, CodexUsageCard } from "./display/panels/usage-cards.js";
+import { PlanPanel } from "./display/panels/plan-panel.js";
+import { usePlan } from "./presentation/use-plan.js";
 import {
   type ActivityPhase,
   type CommandOverlayState,
@@ -234,6 +236,8 @@ export function OpenTuiApp({
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const presentationEntries = usePresentationEntries({ session, selectedChildId, childSessions, processing });
   const turnElapsed = useTurnTimer(processing);
+  const planCheckpoints = usePlan(session);
+  const [planExpanded, setPlanExpanded] = useState(true);
 
   // Agent list modal state
   const [agentListOpen, setAgentListOpen] = useState(false);
@@ -251,7 +255,7 @@ export function OpenTuiApp({
   ]);
   const [activeTabId, setActiveTabId] = useState("main");
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
-  const [sidebarMode, setSidebarMode] = useState<"open" | "close" | "auto">("auto");
+  const [sidebarMode, setSidebarMode] = useState<"open" | "close" | "auto">("close");
 
   // Sync child session tabs — child tabs are now temporary (created on enter, removed on exit).
   // Only clean up tabs for children that no longer exist and aren't frozen.
@@ -2265,6 +2269,16 @@ export function OpenTuiApp({
       return;
     }
 
+    // Ctrl+O: toggle plan panel expand/collapse
+    if (event.name === "o" && event.ctrl) {
+      if (planCheckpoints.length > 0) {
+        setPlanExpanded((prev) => !prev);
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     // Tab switching: Ctrl+Left/Right to cycle, Ctrl+Up to return to Main Session
     if (event.name === "left" && event.ctrl && tabs.length > 1) {
       const idx = tabs.findIndex((t) => t.id === activeTabId);
@@ -2454,6 +2468,17 @@ export function OpenTuiApp({
       onAgentListClose={() => setAgentListOpen(false)}
       onAgentListSelect={enterChildSession}
       sidebarMode={sidebarMode}
+      planPanel={
+        planCheckpoints.length > 0
+          ? <PlanPanel
+              checkpoints={planCheckpoints}
+              expanded={planExpanded}
+              contentWidth={terminal.width - (theme.spacing.screenPaddingX * 2)}
+              onToggle={() => setPlanExpanded((p) => !p)}
+            />
+          : undefined
+      }
+      sidebarPlanSection={undefined}
       sidebarContextSection={
         <ContextUsageCard
           contextTokens={effectiveContextTokens}

@@ -38,6 +38,9 @@ export { checkForUpdates } from "./update-check.js";
 // -- Session --------------------------------------------------------------
 export { Session } from "./session.js";
 
+// -- Plan state -----------------------------------------------------------
+export { parsePlanFile, formatPlanSnapshot, PLAN_FILENAME, type PlanCheckpoint } from "./plan-state.js";
+
 // -- Context rendering ----------------------------------------------------
 export {
   COMPACT_MARKER_ROLE,

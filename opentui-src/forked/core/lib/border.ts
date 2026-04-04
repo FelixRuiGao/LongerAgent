@@ -111,6 +111,10 @@ export interface BoxDrawOptions {
   shouldFill?: boolean
   title?: string
   titleAlignment?: "left" | "center" | "right"
+  /** Vertical divider position as a ratio (0–1) of box width */
+  dividerRatio?: number
+  /** Title text displayed after the divider on the top border */
+  dividerTitle?: string
 }
 
 export interface BorderSidesConfig {

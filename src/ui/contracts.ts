@@ -6,6 +6,7 @@
  */
 
 import type { ProgressReporter } from "../progress.js";
+import type { PlanCheckpoint } from "../plan-state.js";
 import type { SessionStore, LogSessionMeta } from "../persistence.js";
 import type {
   PendingAskUi,
@@ -80,6 +81,8 @@ export interface Session {
   setSkillEnabled?(name: string, enabled: boolean): void;
   reloadSkills?(): { added: string[]; removed: string[]; total: number };
   skills?: ReadonlyMap<string, unknown>;
+  getPlanState?(): PlanCheckpoint[];
+  subscribePlan?(listener: () => void): () => void;
 }
 
 export type ConversationEntryKind =

@@ -18,7 +18,7 @@ const DEFAULT_DISPLAY_TOKENS: DisplayThemeTokens = {
     text: "#d0d6e0",
     dim: "#636a76",
     muted: "#454a54",
-    accent: "#ffb703",
+    accent: "#8ab4f8",
     orange: "#fb8500",
     red: "#f85656",
     magenta: "#e81860",

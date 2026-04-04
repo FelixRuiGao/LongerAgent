@@ -2,7 +2,7 @@ import type { TextBuffer } from "./text-buffer.js"
 import { RGBA } from "./lib/index.js"
 import { resolveRenderLib, type RenderLib } from "./zig.js"
 import { type Pointer, toArrayBuffer, ptr } from "bun:ffi"
-import { type BorderStyle, type BorderSides, BorderCharArrays, parseBorderStyle } from "./lib/index.js"
+import { type BorderStyle, type BorderSides, BorderCharArrays, BorderChars, parseBorderStyle, getBorderSides } from "./lib/index.js"
 import { type WidthMethod, type CapturedSpan, type CapturedLine } from "./types.js"
 import type { TextBufferView } from "./text-buffer-view.js"
 import type { EditorView } from "./editor-view.js"
@@ -416,12 +416,29 @@ export class OptimizedBuffer {
     shouldFill?: boolean
     title?: string
     titleAlignment?: "left" | "center" | "right"
+    dividerRatio?: number
+    dividerTitle?: string
   }): void {
     this.guard()
     const style = parseBorderStyle(options.borderStyle, "single")
     const borderChars: Uint32Array = options.customBorderChars ?? BorderCharArrays[style]
 
     const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left")
+
+    // When a divider is present, truncate the left title so it doesn't bleed past the divider
+    let effectiveTitle = options.title ?? null
+    const hasDivider = options.dividerRatio != null && options.dividerRatio > 0 && options.dividerRatio < 1
+    if (hasDivider && effectiveTitle) {
+      // Left section width: from left border to divider (exclusive), minus padding (2 on each side)
+      const dividerX = Math.round(options.width * options.dividerRatio)
+      const leftPadding = 2 // Zig uses 2-cell padding before and after title
+      const maxTitleLen = dividerX - leftPadding * 2
+      if (maxTitleLen < 1) {
+        effectiveTitle = null
+      } else if (effectiveTitle.length > maxTitleLen) {
+        effectiveTitle = effectiveTitle.slice(0, Math.max(1, maxTitleLen - 1)) + "…"
+      }
+    }
 
     this.lib.bufferDrawBox(
       this.bufferPtr,
@@ -433,8 +450,59 @@ export class OptimizedBuffer {
       packedOptions,
       options.borderColor,
       options.backgroundColor,
-      options.title ?? null,
+      effectiveTitle,
     )
+
+    // Draw vertical divider after the base box is rendered
+    if (hasDivider) {
+      const ratio = options.dividerRatio!
+      const sides = getBorderSides(options.border)
+      const chars = BorderChars[style]
+      const fg = options.borderColor
+      const bg = options.backgroundColor
+
+      // Divider x position: offset from box left edge
+      const dividerX = options.x + Math.round(options.width * ratio)
+
+      // Only draw if divider falls within the box (excluding the outer border columns)
+      const leftEdge = options.x + (sides.left ? 1 : 0)
+      const rightEdge = options.x + options.width - 1 - (sides.right ? 1 : 0)
+      if (dividerX < leftEdge || dividerX > rightEdge) return
+
+      // Top junction: topT (┬) if there is a top border
+      if (sides.top) {
+        this.setCellWithAlphaBlending(dividerX, options.y, chars.topT, fg, bg)
+      }
+
+      // Vertical line through the interior
+      const innerTop = options.y + (sides.top ? 1 : 0)
+      const innerBottom = options.y + options.height - 1 - (sides.bottom ? 1 : 0)
+      for (let dy = innerTop; dy <= innerBottom; dy++) {
+        this.setCellWithAlphaBlending(dividerX, dy, chars.vertical, fg, bg)
+      }
+
+      // Bottom junction: bottomT (┴) if there is a bottom border
+      if (sides.bottom) {
+        this.setCellWithAlphaBlending(dividerX, options.y + options.height - 1, chars.bottomT, fg, bg)
+      }
+
+      // Draw divider title on the top border, starting 2 cells after dividerX
+      if (options.dividerTitle && sides.top && options.dividerTitle.length > 0) {
+        const titlePadding = 2
+        const titleStartX = dividerX + titlePadding
+        // Available space: from titleStartX to right border (exclusive), minus padding on the right
+        const rightBorderX = options.x + options.width - 1
+        const availableWidth = rightBorderX - titleStartX - titlePadding
+        if (availableWidth >= 1) {
+          const titleText = options.dividerTitle.length <= availableWidth
+            ? options.dividerTitle
+            : options.dividerTitle.slice(0, Math.max(1, availableWidth - 1)) + "…"
+          // Overwrite the horizontal border chars in the title region with spaces first,
+          // then draw the title text. Since drawText overwrites cells, we just draw directly.
+          this.drawText(titleText, titleStartX, options.y, fg, bg)
+        }
+      }
+    }
   }
 
   public pushScissorRect(x: number, y: number, width: number, height: number): void {
