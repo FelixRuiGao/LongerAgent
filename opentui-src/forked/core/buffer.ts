@@ -427,9 +427,11 @@ export class OptimizedBuffer {
 
     const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left")
 
-    // When titleColor is set or a divider is present, we handle the left title in JS instead of Zig
+    // Determine rendering strategy for the left title
     const hasDivider = options.dividerRatio != null && options.dividerRatio > 0 && options.dividerRatio < 1
-    const jsDrawsLeftTitle = !!(options.titleColor || hasDivider)
+    // Only use JS for the left title when a custom titleColor is explicitly set.
+    // Otherwise let Zig handle it natively (it correctly skips ─ in the title area).
+    const jsDrawsLeftTitle = !!options.titleColor
     let leftTitleText = options.title ?? null
 
     if (leftTitleText && hasDivider) {
@@ -454,18 +456,25 @@ export class OptimizedBuffer {
       packedOptions,
       options.borderColor,
       options.backgroundColor,
-      // If JS will draw the title (custom color or divider), tell Zig to draw full border with no title
+      // When JS draws the left title (custom color), tell Zig to skip title.
+      // Otherwise pass the (possibly truncated) title to Zig for native rendering.
       jsDrawsLeftTitle ? null : leftTitleText,
     )
 
-    // Draw left title from JS when we need a custom color
+    // Draw left title from JS only when a custom titleColor is set
     if (jsDrawsLeftTitle && leftTitleText && leftTitleText.length > 0) {
       const sides = getBorderSides(options.border)
       if (sides.top) {
         const titlePadding = 2
         const titleStartX = options.x + titlePadding
-        const titleFg = options.titleColor ?? options.borderColor
-        this.drawText(leftTitleText, titleStartX, options.y, titleFg, options.backgroundColor)
+        const titleFg = options.titleColor!
+        // Write each character individually with setCellWithAlphaBlending
+        // to ensure proper overwrite of the ─ border chars
+        for (let i = 0; i < leftTitleText.length; i++) {
+          this.setCellWithAlphaBlending(
+            titleStartX + i, options.y, leftTitleText[i], titleFg, options.borderColor,
+          )
+        }
       }
     }
 
@@ -514,7 +523,13 @@ export class OptimizedBuffer {
             ? options.dividerTitle
             : options.dividerTitle.slice(0, Math.max(1, availableWidth - 1)) + "…"
           const dividerTitleFg = options.dividerTitleColor ?? fg
-          this.drawText(titleText, titleStartX, options.y, dividerTitleFg, bg)
+          // Write each character individually with setCellWithAlphaBlending
+          // to ensure proper overwrite of the ─ border chars
+          for (let i = 0; i < titleText.length; i++) {
+            this.setCellWithAlphaBlending(
+              titleStartX + i, options.y, titleText[i], dividerTitleFg, fg,
+            )
+          }
         }
       }
     }
