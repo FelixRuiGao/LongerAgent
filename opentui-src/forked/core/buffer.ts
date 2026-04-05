@@ -49,6 +49,8 @@ export class OptimizedBuffer {
   private _height: number
   private _widthMethod: WidthMethod
   public respectAlpha: boolean = false
+  /** JS-side scissor rect stack for cursor clipping queries. */
+  private _scissorStack: Array<{ x: number; y: number; w: number; h: number }> = []
   private _rawBuffers: {
     char: Uint32Array
     fg: Float32Array
@@ -546,17 +548,33 @@ export class OptimizedBuffer {
 
   public pushScissorRect(x: number, y: number, width: number, height: number): void {
     this.guard()
+    this._scissorStack.push({ x, y, w: width, h: height })
     this.lib.bufferPushScissorRect(this.bufferPtr, x, y, width, height)
   }
 
   public popScissorRect(): void {
     this.guard()
+    this._scissorStack.pop()
     this.lib.bufferPopScissorRect(this.bufferPtr)
   }
 
   public clearScissorRects(): void {
     this.guard()
+    this._scissorStack.length = 0
     this.lib.bufferClearScissorRects(this.bufferPtr)
+  }
+
+  /**
+   * Check whether a 0-based coordinate is within ALL active scissor rects.
+   * Used by cursor rendering to hide the cursor when it's clipped by a scrollbox viewport.
+   */
+  public isWithinScissorRect(x: number, y: number): boolean {
+    for (const rect of this._scissorStack) {
+      if (x < rect.x || x >= rect.x + rect.w || y < rect.y || y >= rect.y + rect.h) {
+        return false
+      }
+    }
+    return true
   }
 
   public pushOpacity(opacity: number): void {

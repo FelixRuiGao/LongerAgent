@@ -639,6 +639,13 @@ export abstract class EditBufferRenderable extends Renderable implements LineInf
     const cursorX = this.x + visualCursor.visualCol + 1 // +1 for 1-based terminal coords
     const cursorY = this.y + visualCursor.visualRow + 1 // +1 for 1-based terminal coords
 
+    // Hide cursor if it's clipped by a scrollbox viewport (scissor rect).
+    // Coordinates are 1-based for the terminal, but scissor rects are 0-based.
+    if (!buffer.isWithinScissorRect(cursorX - 1, cursorY - 1)) {
+      this._ctx.setCursorPosition(cursorX, cursorY, false)
+      return
+    }
+
     this._ctx.setCursorPosition(cursorX, cursorY, true)
     this._ctx.setCursorStyle({ ...this._cursorStyle, color: this._cursorColor })
   }

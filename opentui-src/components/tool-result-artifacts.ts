@@ -95,7 +95,8 @@ function isLikelyDiffPreview(text: string): boolean {
 function buildPlainToolResultArtifacts(
   { text, dim, colors, wrapWidth }: Pick<ToolResultArtifactOptions, "text" | "dim" | "colors" | "wrapWidth">,
 ): ToolResultLineArtifact[] {
-  const fg = RGBA.fromHex(dim ? colors.dim : colors.text);
+  // Result body uses two-tier dim palette (darker than tool call args).
+  const fg = RGBA.fromHex(dim ? colors.dim : "#5a6078");
   return text.split("\n").flatMap((line) =>
     wrapStandaloneChunks([createChunk(line || " ", { fg })], wrapWidth),
   );

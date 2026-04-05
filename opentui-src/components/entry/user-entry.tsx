@@ -58,7 +58,6 @@ function UserEntryInner(
         }
         {queued ? <text fg={colors.orange} content=" [queued]" /> : null}
       </box>
-      <box height={1} />
     </box>
   );
 }

@@ -1,5 +1,4 @@
-import type { RefObject } from "react";
-import type { SyntaxStyle, ScrollBoxRenderable } from "@opentui/core";
+import type { SyntaxStyle } from "@opentui/core";
 
 import type { PresentationEntry } from "../presentation/types.js";
 import type {
@@ -17,6 +16,7 @@ export interface PresentationEntryItemProps {
   markdownMode: "rendered" | "raw";
   markdownStyle: SyntaxStyle;
   onEntryClick?: (entry: PresentationEntry) => void;
+  onAgentClick?: (agentId: string) => void;
 }
 
 export interface PresentationPanelProps {
@@ -26,9 +26,9 @@ export interface PresentationPanelProps {
   markdownMode: "rendered" | "raw";
   markdownStyle: SyntaxStyle;
   processing: boolean;
-  scrollRef: RefObject<ScrollBoxRenderable | null>;
   selectedChildId: string | null;
   showLogoInScroll: boolean;
   branding: DisplayThemeBrandingTokens;
   onEntryClick?: (entry: PresentationEntry) => void;
+  onAgentClick?: (agentId: string) => void;
 }

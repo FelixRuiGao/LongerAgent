@@ -57,6 +57,8 @@ export interface PresentationEntry {
   toolCategory?: ToolCategory;
   toolText?: string;
   toolSuffix?: string;
+  /** When set, the toolText represents a sub-agent id — clickable to open that agent's tab. */
+  toolAgentName?: string;
   toolStartedAt?: number;
   toolElapsedMs?: number;
   toolInlineResult?: InlineResultData | null;

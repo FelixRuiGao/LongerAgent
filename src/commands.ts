@@ -122,7 +122,7 @@ export interface CommandOptionsContext {
  * A single slash command.
  */
 export interface SlashCommand {
-  /** The command name, e.g. "/resume". */
+  /** The command name, e.g. "/sessions". */
   name: string;
   /** Short description shown in /help output. */
   description: string;
@@ -136,6 +136,8 @@ export interface SlashCommand {
   options?: (ctx: CommandOptionsContext) => CommandOption[];
   /** When true, TUI uses a checkbox multi-select picker instead of single-select. */
   checkboxMode?: boolean;
+  /** Alternative names that also match during search (e.g. ["/resume"] for "/sessions"). */
+  aliases?: string[];
 }
 
 export class CommandExitSignal extends Error {
@@ -171,9 +173,15 @@ export class CommandRegistry {
     return this._commands.delete(name);
   }
 
-  /** Look up a command by its exact name. */
+  /** Look up a command by its exact name or alias. */
   lookup(name: string): SlashCommand | undefined {
-    return this._commands.get(name);
+    const direct = this._commands.get(name);
+    if (direct) return direct;
+    // Fallback: check aliases
+    for (const cmd of this._commands.values()) {
+      if (cmd.aliases?.includes(name)) return cmd;
+    }
+    return undefined;
   }
 
   /** Return all registered commands sorted alphabetically by name. */
@@ -329,11 +337,13 @@ async function cmdResume(ctx: CommandContext, args: string): Promise<void> {
   const bindingState = store.captureBindingState();
   try {
     store.attachToExistingSession(target.path);
-    const prepared = session.prepareRestoreFromLog(logData.meta, repairedEntries, logData.idAllocator);
-    const warnings = session.commitPreparedRestore(prepared);
+    // setStore BEFORE prepareRestoreFromLog so that _childSessionDir()
+    // resolves agent paths from the resumed session's artifacts, not the current one.
     if (typeof session.setStore === "function") {
       session.setStore(store);
     }
+    const prepared = session.prepareRestoreFromLog(logData.meta, repairedEntries, logData.idAllocator);
+    const warnings = session.commitPreparedRestore(prepared);
     for (const warning of warnings) {
       ctx.showMessage(`[resume] ${warning}`);
     }
@@ -926,20 +936,17 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/help", description: "Show commands and shortcuts", handler: cmdHelp });
   registry.register({ name: "/compact", description: "Manually compact the active context", handler: cmdCompact });
   registry.register({ name: "/new", description: "Start a new session", handler: cmdNew });
-  registry.register({ name: "/resume", description: "Resume a previous session", handler: cmdResume, options: resumeOptions });
+  registry.register({ name: "/sessions", description: "Resume a previous session", handler: cmdResume, options: resumeOptions, aliases: ["/resume"] });
   registry.register({ name: "/summarize", description: "Manually summarize older context", handler: cmdSummarize });
   registry.register({ name: "/model", description: "Switch model", handler: cmdModel, options: modelOptions });
-  registry.register({ name: "/quit", description: "Exit the application", handler: cmdQuit });
-  registry.register({ name: "/exit", description: "Exit the application", handler: cmdQuit });
+  registry.register({ name: "/quit", description: "Exit the application", handler: cmdQuit, aliases: ["/exit"] });
   registry.register({ name: "/thinking", description: "Set thinking level", handler: cmdThinking, options: thinkingOptions });
-  registry.register({ name: "/theme", description: "Change accent color", handler: cmdTheme, options: themeOptions });
   registry.register({ name: "/skills", description: "Manage installed skills", handler: cmdSkills, options: skillsOptions, checkboxMode: true });
   registry.register({ name: "/mcp", description: "Show MCP server status and tools", handler: cmdMcp });
   registry.register({ name: "/rename", description: "Rename current session", handler: cmdRename });
   registry.register({ name: "/codex", description: "OpenAI ChatGPT login", handler: cmdCodex, options: codexOptions });
-  registry.register({ name: "/raw", description: "Toggle markdown raw/rendered mode", handler: cmdRaw });
+  registry.register({ name: "/raw", description: "Toggle markdown raw/rendered mode", handler: cmdRaw, aliases: ["/md"] });
   registry.register({ name: "/agents", description: "Show agent list", handler: cmdAgents });
-  registry.register({ name: "/sidebar", description: "Toggle sidebar (open/close/auto)", handler: cmdSidebar });
   return registry;
 }
 

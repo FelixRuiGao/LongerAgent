@@ -14,6 +14,7 @@ import { PresentationPanel } from "../../components/entry/presentation-panel.js"
 import { DetailThinkingTab } from "../../components/entry/detail-thinking-tab.js";
 import { DetailToolTab } from "../../components/entry/detail-tool-tab.js";
 import { InputArea } from "../../input/input-area.js";
+import { ScrollViewport } from "../primitives/scroll-viewport.js";
 import type { TabState } from "../../sidebar/sidebar-tabs.js";
 import type { DisplayTheme } from "../theme/index.js";
 import type {
@@ -57,6 +58,7 @@ export interface OpenTuiScreenProps {
   scrollRef: React.RefObject<ScrollBoxRenderable | null>;
   selectedChildId: string | null;
   onEntryClick: (entry: PresentationEntry) => void;
+  onAgentClick?: (agentId: string) => void;
   pendingAsk: PendingAskUi | null;
   askError: string | null;
   askSelectionIndex: number;
@@ -120,6 +122,8 @@ export interface OpenTuiScreenProps {
   onTodoClick?: () => void;
   agentsPanelOpen?: boolean;
   onAgentsPanelClick?: () => void;
+  /** True when user has scrolled away from bottom — hides textarea cursor */
+  scrolledAway?: boolean;
 }
 
 export function OpenTuiScreen({
@@ -138,6 +142,7 @@ export function OpenTuiScreen({
   scrollRef,
   selectedChildId,
   onEntryClick,
+  onAgentClick,
   pendingAsk,
   askError,
   askSelectionIndex,
@@ -197,6 +202,7 @@ export function OpenTuiScreen({
   onTodoClick,
   agentsPanelOpen,
   onAgentsPanelClick,
+  scrolledAway = false,
 }: OpenTuiScreenProps): React.ReactElement {
   const conversationColumnWidth = terminal.width - (theme.spacing.screenPaddingX * 2);
   const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
@@ -224,6 +230,113 @@ export function OpenTuiScreen({
   const hasUserMessage = presentationEntries.some((e) => e.kind === "user");
   const showLogoInScroll = !hasUserMessage
     && terminal.width >= theme.layout.minTerminalWidthForLogoHeader;
+
+  // Shared InputArea element — rendered inside scrollbox for main view, outside for detail tabs
+  const inputAreaElement = (
+    <InputArea
+      inputRef={inputRef}
+      processing={processing}
+      pendingAsk={Boolean(pendingAsk)}
+      selectedChildId={selectedChildId}
+      phase={phase}
+      modelName={modelName}
+      modelColor={modelColor}
+      elapsed={turnElapsed}
+      cwd={shortenPath(process.cwd())}
+      hint={hint}
+      contextTokens={contextTokens}
+      contextLimit={contextLimit}
+      cacheReadTokens={cacheReadTokens ?? 0}
+      contentWidth={Math.max(20, conversationColumnWidth - effectiveSidebarWidth)}
+      colors={theme.colors}
+      inputVisibleLines={inputVisibleLines}
+      maxInputLines={theme.layout.inputMaxVisibleLines}
+      composerTokenVisuals={composerTokenVisuals}
+      keyBindings={keyBindings}
+      onSubmit={onSubmit}
+      onModelClick={onModelClick}
+      onAgentIndicatorClick={onAgentIndicatorClick}
+      runningAgentCount={runningAgentCount}
+      idleAgentCount={idleAgentCount}
+      archivedAgentCount={archivedAgentCount}
+      commandOverlayVisible={commandOverlay.visible}
+      commandPicker={Boolean(commandPicker)}
+      checkboxPicker={Boolean(checkboxPicker)}
+      promptSelect={Boolean(promptSelect)}
+      promptSecret={Boolean(promptSecret)}
+      todoOpenCount={todoOpenCount}
+      todoDoneCount={todoDoneCount}
+      todoPanelOpen={todoPanelOpen}
+      onTodoClick={onTodoClick}
+      agentsPanelOpen={agentsPanelOpen}
+      onAgentsPanelClick={onAgentsPanelClick}
+      scrolledAway={scrolledAway}
+    />
+  );
+
+  // Shared overlays block
+  const overlaysBlock = (
+    <>
+      {pendingAsk ? (
+        <AskPanelView
+          ask={pendingAsk}
+          error={askError}
+          selectedIndex={askSelectionIndex}
+          currentQuestionIndex={currentQuestionIndex}
+          totalQuestions={pendingAsk.kind === "agent_question" ? getAskQuestions().length : 1}
+          questionAnswers={questionAnswers}
+          customInputMode={customInputMode}
+          noteInputMode={noteInputMode}
+          reviewMode={reviewMode}
+          inlineValue={askInputValue}
+          optionNotes={optionNotes}
+          inputRef={askInputRef}
+          onInput={onAskInput}
+          onSubmit={onAskSubmit}
+          theme={theme}
+        />
+      ) : null}
+      <CommandOverlayView
+        overlay={commandOverlay}
+        theme={theme}
+        contentWidth={pickerContentWidth}
+        maxVisible={pickerMaxVisible}
+        onItemClick={onOverlayItemClick}
+      />
+      <CommandPickerView
+        picker={commandPicker}
+        theme={theme}
+        contentWidth={pickerContentWidth}
+        maxVisible={pickerMaxVisible}
+        onItemClick={onCommandPickerItemClick}
+      />
+      <CheckboxPickerView
+        picker={checkboxPicker}
+        theme={theme}
+        contentWidth={pickerContentWidth}
+        onItemClick={onCheckboxPickerItemClick}
+      />
+      <PromptSelectView
+        prompt={promptSelect}
+        theme={theme}
+        contentWidth={pickerContentWidth}
+        maxVisible={pickerMaxVisible}
+        onItemClick={onPromptSelectItemClick}
+      />
+      <PromptSecretView
+        prompt={promptSecret}
+        inputRef={promptSecretInputRef}
+        focused={Boolean(promptSecret)}
+        onSubmit={onPromptSecretSubmit}
+        theme={theme}
+      />
+      <OAuthOverlayView
+        state={oauthOverlay}
+        theme={theme}
+        contentWidth={pickerContentWidth}
+      />
+    </>
+  );
 
   return (
     <box
@@ -255,6 +368,7 @@ export function OpenTuiScreen({
         {/* Main content column */}
         <box flexDirection="column" flexGrow={1} gap={0}>
           {detailEntry && activeTab?.kind === "detail-thinking" ? (
+            /* Detail tabs keep their own scrollbox; InputArea is outside */
             <DetailThinkingTab entry={detailEntry} colors={theme.colors} scrollRef={scrollRef} />
           ) : detailEntry && activeTab?.kind === "detail-tool" ? (
             <DetailToolTab
@@ -264,79 +378,42 @@ export function OpenTuiScreen({
               scrollRef={scrollRef}
             />
           ) : (
-            <PresentationPanel
-              items={presentationEntries}
-              processing={processing}
-              contentWidth={Math.max(20, conversationContentWidth - effectiveSidebarWidth)}
-              markdownMode={markdownMode}
+            /* Main conversation: single scrollbox wraps entries + status panel + input */
+            <ScrollViewport
               colors={theme.colors}
-              markdownStyle={theme.markdownStyle}
               scrollRef={scrollRef}
-              selectedChildId={selectedChildId}
-              showLogoInScroll={showLogoInScroll}
-              branding={theme.branding}
-              onEntryClick={onEntryClick}
-            />
-          )}
+              stickyScroll={true}
+              stickyStart="bottom"
+            >
+              <box flexDirection="column" gap={0}>
+                <PresentationPanel
+                  items={presentationEntries}
+                  processing={processing}
+                  contentWidth={Math.max(20, conversationContentWidth - effectiveSidebarWidth)}
+                  markdownMode={markdownMode}
+                  colors={theme.colors}
+                  markdownStyle={theme.markdownStyle}
+                  selectedChildId={selectedChildId}
+                  showLogoInScroll={showLogoInScroll}
+                  branding={theme.branding}
+                  onEntryClick={onEntryClick}
+                  onAgentClick={onAgentClick}
+                />
 
-        {pendingAsk ? (
-          <AskPanelView
-            ask={pendingAsk}
-            error={askError}
-            selectedIndex={askSelectionIndex}
-            currentQuestionIndex={currentQuestionIndex}
-            totalQuestions={pendingAsk.kind === "agent_question" ? getAskQuestions().length : 1}
-            questionAnswers={questionAnswers}
-            customInputMode={customInputMode}
-            noteInputMode={noteInputMode}
-            reviewMode={reviewMode}
-            inlineValue={askInputValue}
-            optionNotes={optionNotes}
-            inputRef={askInputRef}
-            onInput={onAskInput}
-            onSubmit={onAskSubmit}
-            theme={theme}
-          />
-        ) : null}
-        <CommandOverlayView
-          overlay={commandOverlay}
-          theme={theme}
-          contentWidth={pickerContentWidth}
-          maxVisible={pickerMaxVisible}
-          onItemClick={onOverlayItemClick}
-        />
-        <CommandPickerView
-          picker={commandPicker}
-          theme={theme}
-          contentWidth={pickerContentWidth}
-          maxVisible={pickerMaxVisible}
-          onItemClick={onCommandPickerItemClick}
-        />
-        <CheckboxPickerView
-          picker={checkboxPicker}
-          theme={theme}
-          contentWidth={pickerContentWidth}
-          onItemClick={onCheckboxPickerItemClick}
-        />
-        <PromptSelectView
-          prompt={promptSelect}
-          theme={theme}
-          contentWidth={pickerContentWidth}
-          maxVisible={pickerMaxVisible}
-          onItemClick={onPromptSelectItemClick}
-        />
-        <PromptSecretView
-          prompt={promptSecret}
-          inputRef={promptSecretInputRef}
-          focused={Boolean(promptSecret)}
-          onSubmit={onPromptSecretSubmit}
-          theme={theme}
-        />
-        <OAuthOverlayView
-          state={oauthOverlay}
-          theme={theme}
-          contentWidth={pickerContentWidth}
-        />
+                {/* Spacer between entries and input section */}
+                <box height={1} />
+
+                {/* Status panel (agents + todos) */}
+                {statusPanel}
+
+                {/* Input area — inside the scrollbox */}
+                {inputAreaElement}
+
+                {/* Overlays — inside scrollbox, directly below input */}
+                {overlaysBlock}
+              </box>
+            </ScrollViewport>
+          )}
         </box>
         {/* End main content column */}
 
@@ -354,50 +431,15 @@ export function OpenTuiScreen({
       </box>
       {/* End content row */}
 
-      {/* Spacer below conversation — always present */}
-      <box height={1} />
-
-      {/* Status panel (agents + todos) between content and input */}
-      {statusPanel}
-
-      {/* Input area */}
-      <InputArea
-        inputRef={inputRef}
-        processing={processing}
-        pendingAsk={Boolean(pendingAsk)}
-        selectedChildId={selectedChildId}
-        phase={phase}
-        modelName={modelName}
-        modelColor={modelColor}
-        elapsed={turnElapsed}
-        cwd={shortenPath(process.cwd())}
-        hint={hint}
-        contextTokens={contextTokens}
-        contextLimit={contextLimit}
-        cacheReadTokens={cacheReadTokens ?? 0}
-        contentWidth={conversationColumnWidth}
-        colors={theme.colors}
-        inputVisibleLines={inputVisibleLines}
-        maxInputLines={theme.layout.inputMaxVisibleLines}
-        composerTokenVisuals={composerTokenVisuals}
-        keyBindings={keyBindings}
-        onSubmit={onSubmit}
-        onModelClick={onModelClick}
-        onAgentIndicatorClick={onAgentIndicatorClick}
-        runningAgentCount={runningAgentCount}
-        idleAgentCount={idleAgentCount}
-        archivedAgentCount={archivedAgentCount}
-        commandPicker={Boolean(commandPicker)}
-        checkboxPicker={Boolean(checkboxPicker)}
-        promptSelect={Boolean(promptSelect)}
-        promptSecret={Boolean(promptSecret)}
-        todoOpenCount={todoOpenCount}
-        todoDoneCount={todoDoneCount}
-        todoPanelOpen={todoPanelOpen}
-        onTodoClick={onTodoClick}
-        agentsPanelOpen={agentsPanelOpen}
-        onAgentsPanelClick={onAgentsPanelClick}
-      />
+      {/* For detail tabs: InputArea + overlays stay fixed outside the scrollbox */}
+      {isDetailTab ? (
+        <>
+          <box height={1} />
+          {statusPanel}
+          {inputAreaElement}
+          {overlaysBlock}
+        </>
+      ) : null}
 
       {/* Agent list modal (absolute positioned, above everything) */}
       <AgentListModal

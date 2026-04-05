@@ -28,7 +28,7 @@ interface InlineResultProps {
   onOpenDetail?: () => void;
 }
 
-const LINE_PREFIX = "  ";
+const LINE_PREFIX = "";
 const MAX_LINES_PER_HUNK = 20;
 const CONTEXT_LINES = 3;
 
@@ -173,7 +173,7 @@ function InlineResultInner(
       }
 
       return (
-        <box flexDirection="column" paddingLeft={3} gap={0}>
+        <box flexDirection="column" gap={0}>
           {elements}
         </box>
       );
@@ -184,7 +184,7 @@ function InlineResultInner(
     const artifactHiddenCount = Math.max(0, artifacts.length - data.maxLines);
 
     return (
-      <box flexDirection="column" paddingLeft={3} gap={0}>
+      <box flexDirection="column" gap={0}>
         {visibleArtifacts.map((artifact, idx) => (
           <box
             key={idx}
@@ -210,14 +210,15 @@ function InlineResultInner(
     );
   }
 
-  // Plain text inline result (no toolMetadata)
-  const textColor = data.dim ? colors.dim : colors.text;
+  // Plain text inline result (no toolMetadata) — result body uses the
+  // two-tier dim palette (darker than tool call args).
+  const textColor = data.dim ? colors.dim : "#5a6078";
   const lines = data.text.split("\n");
   const visibleLines = lines.slice(0, data.maxLines);
   const hiddenCount = Math.max(0, lines.length - data.maxLines);
 
   return (
-    <box flexDirection="column" paddingLeft={3} gap={0}>
+    <box flexDirection="column" gap={0}>
       {visibleLines.map((line, idx) => (
         <box key={idx} flexDirection="row" width="100%">
           <text

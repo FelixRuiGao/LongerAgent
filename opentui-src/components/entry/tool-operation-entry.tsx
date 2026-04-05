@@ -11,19 +11,23 @@ import type { ConversationPalette } from "../conversation-types.js";
 import { InlineResult } from "./inline-result.js";
 import { FileModifyBody } from "./file-modify-body.js";
 import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
-import { getActivityIndicatorColor } from "../../display/entries/entry-variants.js";
 
-// Left bar colors — muted variants of category colors, pre-computed constants.
-const BAR_COLORS: Record<ToolCategory, string> = {
-  observe: "#5b908a",
-  modify: "#96804a",
-  orchestrate: "#766a99",
-};
-
-// Unified tool name color — all tool names use this single color
+// Unified tool name color — all categories share the same cyan
 const TOOL_NAME_COLOR = DEFAULT_DISPLAY_THEME.presentation.toolNameColor;
 const TOOL_NAME_RGBA = RGBA.fromHex(TOOL_NAME_COLOR);
+
+// Unified left bar — warm neutral gray for all tool categories.
+const BAR_COLORS: Record<ToolCategory, string> = {
+  observe: "#66635c",
+  modify: "#66635c",
+  orchestrate: "#66635c",
+};
+
 const TOOL_STREAM_MAX_LINES = 10;
+
+// Tool call arg / result body two-tier dim palette (matches AgentRows done state).
+const ARG_COLOR = "#7a8098";    // L=54 — brighter: tool args, path, suffix, wait timeout
+const RESULT_COLOR = "#5a6078"; // L=41 — darker:  tool result body content
 const PATH_TOOL_NAMES = new Set(["Read", "Edit", "Write", "List"]);
 
 function openFile(filePath: string): void {
@@ -46,6 +50,33 @@ function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: 
         e.stopPropagation();
         e.preventDefault();
         if (text) openFile(text);
+      }}
+    >
+      <text
+        fg={baseColor}
+        underline
+        content={text}
+        wrapMode="truncate"
+      />
+    </box>
+  );
+}
+
+/** A sub-agent name element with hover highlight and click-to-open-tab. */
+function ClickableAgentName(
+  { text, baseColor, hoverBg, onClick }: { text: string; baseColor: string; hoverBg: string; onClick: () => void },
+): React.ReactElement {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <box
+      flexShrink={1}
+      backgroundColor={hovered ? hoverBg : undefined}
+      onMouseOver={() => setHovered(true)}
+      onMouseOut={() => setHovered(false)}
+      onMouseDown={(e: any) => {
+        e.stopPropagation();
+        e.preventDefault();
+        onClick();
       }}
     >
       <text
@@ -92,30 +123,30 @@ interface ToolOperationEntryProps {
   colors: ConversationPalette;
   contentWidth: number;
   onEntryClick?: (entry: PresentationEntry) => void;
+  onAgentClick?: (agentId: string) => void;
 }
 
 function ToolOperationEntryInner(
-  { entry, colors, contentWidth, onEntryClick }: ToolOperationEntryProps,
+  { entry, colors, contentWidth, onEntryClick, onAgentClick }: ToolOperationEntryProps,
 ): React.ReactElement {
   const active = entry.state === "active";
 
   const displayName = entry.toolDisplayName ?? "Tool";
+  const category = entry.toolCategory ?? "observe";
+  const barColor = BAR_COLORS[category];
   const shimmer = useShimmer(displayName, TOOL_NAME_RGBA, active);
 
   const indicator = active
     ? "›"
     : entry.state === "error"
-      ? "✖"
-      : "✔";
+      ? "✗"
+      : "✓";
 
-  const indicatorColor = getActivityIndicatorColor(
-    {
-      active,
-      error: entry.state === "error",
-    },
-    DEFAULT_DISPLAY_THEME,
-    "tool",
-  );
+  const indicatorColor = active
+    ? TOOL_NAME_COLOR
+    : entry.state === "error"
+      ? DEFAULT_DISPLAY_THEME.presentation.errorColor
+      : DEFAULT_DISPLAY_THEME.presentation.successColor;
 
   const isWait = displayName === "Wait";
   const waitElapsed = useElapsedSince(entry.toolStartedAt, active && isWait);
@@ -145,8 +176,6 @@ function ToolOperationEntryInner(
     && entry.toolInlineResult
     && entry.state !== "active";
 
-  const category = entry.toolCategory ?? "observe";
-  const barColor = BAR_COLORS[category];
   const hasBody = showFileModify || showStreamBody || showInlineResult;
 
   return (
@@ -164,67 +193,75 @@ function ToolOperationEntryInner(
           <text fg={TOOL_NAME_COLOR} content={displayName} flexShrink={0} />
         )}
         {suffix ? (
-          <text fg={colors.dim} content={` ${suffix}`} flexShrink={0} />
+          <text fg={ARG_COLOR} content={` ${suffix}`} flexShrink={0} />
         ) : null}
         <text content="  " flexShrink={0} />
         {isWait && active ? (
-          <text fg={colors.dim} content={`${waitElapsed}s  Timeout: ${toolText} (Send a message to interrupt)`} flexShrink={0} />
+          <text fg={ARG_COLOR} content={`${waitElapsed}s  Timeout: ${toolText} (Send a message to interrupt)`} flexShrink={0} />
+        ) : entry.toolAgentName && !active ? (
+          <ClickableAgentName
+            text={entry.toolAgentName}
+            baseColor={ARG_COLOR}
+            hoverBg={colors.border}
+            onClick={() => onAgentClick?.(entry.toolAgentName!)}
+          />
         ) : PATH_TOOL_NAMES.has(displayName) && toolText && !active ? (
-          <ClickablePath text={toolText} baseColor={colors.dim} hoverBg={colors.border} />
+          <ClickablePath text={toolText} baseColor={ARG_COLOR} hoverBg={colors.border} />
         ) : (
-          <text fg={colors.dim} content={toolText} wrapMode="char" flexGrow={1} flexShrink={1} />
+          <text fg={ARG_COLOR} content={toolText} wrapMode="char" flexGrow={1} flexShrink={1} />
         )}
       </box>
       {hasBody ? (
-        <box
-          flexDirection="column"
-          marginLeft={3}
-          marginTop={1}
-          marginBottom={1}
-          border={["left"] as any}
-          borderColor={barColor}
-          borderStyle="single"
-          paddingLeft={1}
-          gap={0}
-        >
-          {showFileModify ? (
-            <FileModifyBody
-              data={fmd!}
-              colors={colors}
-              contentWidth={contentWidth - 5}
-              streaming={entry.state === "active"}
-              onOpenDetail={onEntryClick ? () => onEntryClick(entry) : undefined}
-            />
-          ) : showStreamBody ? (
-            <box flexDirection="column" gap={0}>
-              {streamSections.map((section) => {
-                const preview = buildSectionPreview(section.text, TOOL_STREAM_MAX_LINES);
-                return (
-                  <box key={section.key} flexDirection="column" width="100%" paddingBottom={1}>
-                    <text fg={colors.dim} content={`${section.label}${section.complete ? "" : " (streaming)"}`} />
-                    <text fg={colors.text} content={preview.text} wrapMode="char" />
-                    {preview.truncated ? (
-                      <text fg={colors.dim} content="(... more lines, click to open)" />
-                    ) : null}
-                  </box>
-                );
-              })}
-              {entry.toolRepairedFromPartial ? (
-                <text fg={colors.dim} content="(repaired from partial stream)" />
-              ) : null}
-            </box>
-          ) : showInlineResult ? (
-            entry.toolInlineResult!.text.startsWith("[Interrupted]") ? (
-              <text fg={colors.dim} content={entry.toolInlineResult!.text} />
-            ) : (
-              <InlineResult
-                data={entry.toolInlineResult!}
+        <box flexDirection="row" paddingLeft={3} alignItems="flex-start">
+          <text fg={barColor} content="└" flexShrink={0} />
+          <box
+            flexDirection="column"
+            flexGrow={1}
+            border={["left"] as any}
+            borderColor={barColor}
+            borderStyle="single"
+            paddingLeft={1}
+            gap={0}
+          >
+            {showFileModify ? (
+              <FileModifyBody
+                data={fmd!}
                 colors={colors}
-                contentWidth={contentWidth - 5}
+                contentWidth={contentWidth - 6}
+                streaming={entry.state === "active"}
                 onOpenDetail={onEntryClick ? () => onEntryClick(entry) : undefined}
               />
-            )
-          ) : null}
+            ) : showStreamBody ? (
+              <box flexDirection="column" gap={0}>
+                {streamSections.map((section) => {
+                  const preview = buildSectionPreview(section.text, TOOL_STREAM_MAX_LINES);
+                  return (
+                    <box key={section.key} flexDirection="column" width="100%" paddingBottom={1}>
+                      <text fg={colors.dim} content={`${section.label}${section.complete ? "" : " (streaming)"}`} />
+                      <text fg={RESULT_COLOR} content={preview.text} wrapMode="char" />
+                      {preview.truncated ? (
+                        <text fg={colors.dim} content="(... more lines, click to open)" />
+                      ) : null}
+                    </box>
+                  );
+                })}
+                {entry.toolRepairedFromPartial ? (
+                  <text fg={colors.dim} content="(repaired from partial stream)" />
+                ) : null}
+              </box>
+            ) : showInlineResult ? (
+              entry.toolInlineResult!.text.startsWith("[Interrupted]") ? (
+                <text fg={colors.dim} content={entry.toolInlineResult!.text} />
+              ) : (
+                <InlineResult
+                  data={entry.toolInlineResult!}
+                  colors={colors}
+                  contentWidth={contentWidth - 6}
+                  onOpenDetail={onEntryClick ? () => onEntryClick(entry) : undefined}
+                />
+              )
+            ) : null}
+          </box>
         </box>
       ) : null}
     </box>

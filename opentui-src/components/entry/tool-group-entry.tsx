@@ -70,7 +70,7 @@ function ToolGroupEntryInner(
     "tool",
   );
 
-  const indicator = active ? "›" : entry.state === "error" ? "✖" : "✔";
+  const indicator = active ? "›" : entry.state === "error" ? "✗" : "✓";
 
   const toggleExpand = (e: any) => {
     e.stopPropagation();
@@ -112,7 +112,7 @@ function ToolGroupEntryInner(
           {items.map((item) => {
             const name = item.toolDisplayName ?? "?";
             const text = item.toolText ?? "";
-            const itemIndicator = item.state === "error" ? "✖" : "✔";
+            const itemIndicator = item.state === "error" ? "✗" : "✓";
             const itemColor = getActivityIndicatorColor(
               { active: false, error: item.state === "error" },
               DEFAULT_DISPLAY_THEME,

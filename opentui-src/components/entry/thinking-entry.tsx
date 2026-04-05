@@ -41,8 +41,8 @@ function ThinkingEntryInner(
   const indicator = active
     ? spinner
     : entry.state === "error"
-      ? "✖"
-      : "✔";
+      ? "✗"
+      : "✓";
 
   const indicatorColor = getActivityIndicatorColor(
     {

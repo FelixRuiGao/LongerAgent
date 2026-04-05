@@ -14,7 +14,7 @@ import { TurnSummaryEntry } from "./turn-summary-entry.js";
 function PresentationEntryInner(
   props: PresentationEntryItemProps,
 ): React.ReactElement {
-  const { entry, colors, contentWidth, markdownMode, markdownStyle, onEntryClick } = props;
+  const { entry, colors, contentWidth, markdownMode, markdownStyle, onEntryClick, onAgentClick } = props;
 
   const renderers = {
     user: () => <UserEntry entry={entry} colors={colors} />,
@@ -25,6 +25,7 @@ function PresentationEntryInner(
         colors={colors}
         contentWidth={contentWidth}
         onEntryClick={onEntryClick}
+        onAgentClick={onAgentClick}
       />
     ),
     tool_group: () => (

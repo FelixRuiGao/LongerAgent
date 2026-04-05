@@ -42,6 +42,7 @@ interface InputAreaProps {
   onSubmit: () => void;
   onModelClick: () => void;
   onAgentIndicatorClick?: () => void;
+  commandOverlayVisible: boolean;
   commandPicker: boolean;
   checkboxPicker: boolean;
   promptSelect: boolean;
@@ -64,6 +65,8 @@ interface InputAreaProps {
   agentsPanelOpen?: boolean;
   /** Toggle the agents panel. */
   onAgentsPanelClick?: () => void;
+  /** True when user has scrolled away — hides textarea cursor. */
+  scrolledAway?: boolean;
 }
 
 function getPhaseLabel(phase: ActivityPhase): string {
@@ -71,6 +74,8 @@ function getPhaseLabel(phase: ActivityPhase): string {
     case "decoding": return "Decoding";
     case "waiting": return "Waiting";
     case "asking": return "Asking";
+    case "cancelling": return "Cancelling";
+    case "error": return "Error";
     case "prefilling":
     default: return "Prefilling";
   }
@@ -119,6 +124,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     keyBindings,
     onSubmit,
     onModelClick,
+    commandOverlayVisible,
     commandPicker,
     checkboxPicker,
     promptSelect,
@@ -133,6 +139,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     onTodoClick,
     agentsPanelOpen = false,
     onAgentsPanelClick,
+    scrolledAway = false,
   } = props;
 
   const placeholder = pendingAsk
@@ -168,10 +175,11 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
 
         {/* Agent indicator: show whenever agents exist */}
         {(runningAgentCount + idleAgentCount + archivedAgentCount) > 0 && !selectedChildId ? (
+          <>
+          {processing ? <box width={2} /> : null}
           <box
             flexDirection="row"
             flexShrink={0}
-            paddingLeft={processing ? 2 : 0}
             backgroundColor={agentsPanelOpen ? "#3a3058" : "#2a2640"}
             onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onAgentsPanelClick?.(); }}
           >
@@ -183,6 +191,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
               return ` Agents (${parts.join(", ")}) `;
             })()} />
           </box>
+          </>
         ) : null}
 
         {/* Todo indicator: show whenever checkpoints exist */}
@@ -247,16 +256,18 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
         />
       </box>
 
-      {/* Bottom row: cwd (left) + hint (middle) + context (right) */}
-      <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
-        <text fg={colors.muted} content={cwd} flexShrink={0} />
-        {hint ? (
-          <text fg={colors.dim} content={`  ${hint}`} wrapMode="truncate" flexGrow={1} flexShrink={1} />
-        ) : (
-          <box flexGrow={1} />
-        )}
-        <text fg={colors.dim} content={`  ${contextText}`} flexShrink={0} />
-      </box>
+      {/* Bottom row: cwd (left) + hint (middle) + context (right) — hidden when overlays are open */}
+      {!commandOverlayVisible && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !pendingAsk ? (
+        <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
+          <text fg={colors.muted} content={cwd} flexShrink={0} />
+          {hint ? (
+            <text fg={colors.dim} content={`  ${hint}`} wrapMode="truncate" flexGrow={1} flexShrink={1} />
+          ) : (
+            <box flexGrow={1} />
+          )}
+          <text fg={colors.dim} content={`  ${contextText}`} flexShrink={0} />
+        </box>
+      ) : null}
     </box>
   );
 }

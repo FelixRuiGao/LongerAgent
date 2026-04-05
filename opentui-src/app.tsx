@@ -239,6 +239,7 @@ export function OpenTuiApp({
   const planCheckpoints = usePlan(session);
   const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
   const [todoPanelOpen, setTodoPanelOpen] = useState(false);
+  const [scrolledAway, setScrolledAway] = useState(false);
 
   // Agent list modal state
   const [agentListOpen, setAgentListOpen] = useState(false);
@@ -702,6 +703,11 @@ export function OpenTuiApp({
     };
   }, [session, verbose]);
 
+  // Stable ref for the textarea's expected character width — used by syncComposerState
+  // when getComputedWidth() returns 0 (layout not yet computed inside scrollbox).
+  const composerWidthRef = useRef(Math.max(20, terminal.width - (theme.spacing.screenPaddingX * 2) - 5));
+  composerWidthRef.current = Math.max(20, terminal.width - (theme.spacing.screenPaddingX * 2) - 5);
+
   const syncComposerState = useCallback(() => {
     const composer = inputRef.current;
     if (!composer || composer.isDestroyed) return;
@@ -720,12 +726,21 @@ export function OpenTuiApp({
     }
     const visibleValue = composer.plainText;
     const cursorOffset = composer.cursorOffset;
-    const computedWidth = Math.max(1, composer.getLayoutNode().getComputedWidth());
+    // Use Yoga-computed width when available; fall back to terminal-based estimate
+    // (getComputedWidth() returns 0 when layout hasn't run yet inside a scrollbox).
+    const yogaWidth = composer.getLayoutNode().getComputedWidth();
+    const computedWidth = yogaWidth > 10 ? yogaWidth : composerWidthRef.current;
     const measured = composer.editorView.measureForDimensions(computedWidth, inputMaxVisibleLines);
-    const measuredLines = Math.max(
-      composer.lineCount || 1,
-      composer.virtualLineCount || 1,
-      measured?.lineCount || 1,
+    // Text-based estimate as a ceiling — prevents stale native measurements
+    // from keeping the box inflated after deletions.
+    const textWidth = Math.max(1, computedWidth - 3);
+    let textBasedLines = 0;
+    for (const line of visibleValue.split("\n")) {
+      textBasedLines += Math.max(1, Math.ceil((line.length + 1) / textWidth));
+    }
+    const measuredLines = Math.min(
+      measured?.lineCount ?? textBasedLines,
+      textBasedLines + 2, // allow small margin for CJK double-width chars
     );
     lastInputValueRef.current = visibleValue;
     setDraftValue(visibleValue);
@@ -958,14 +973,21 @@ export function OpenTuiApp({
     if (isCommandOverlayEligible(livePrefix)) {
       const prefix = livePrefix.slice(1);
       const matches = commandRegistry.getAll().filter((command) =>
-        command.name.slice(1).startsWith(prefix),
+        command.name.slice(1).startsWith(prefix)
+        || command.aliases?.some((alias) => alias.slice(1).startsWith(prefix)),
       );
 
       if (matches.length > 0) {
         setCommandOverlay((current) => ({
           mode: "command",
           visible: true,
-          items: matches.map((command) => `${command.name.padEnd(20)}${command.description}`),
+          items: matches.map((command) => {
+            const matchedAlias = !command.name.slice(1).startsWith(prefix)
+              ? command.aliases?.find((a) => a.slice(1).startsWith(prefix))
+              : null;
+            const aliasHint = matchedAlias ? ` (${matchedAlias})` : "";
+            return `${command.name.padEnd(20)}${command.description}${aliasHint}`;
+          }),
           values: matches.map((command) => command.name),
           selected: current.mode === "command"
             ? clamp(current.selected, 0, Math.max(0, matches.length - 1))
@@ -1042,16 +1064,21 @@ export function OpenTuiApp({
     if (!composer) return;
     patchComposerExtmarksForDisplayWidth(composer);
 
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    let followupTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    const pendingTimers: ReturnType<typeof setTimeout>[] = [];
     const sync = () => {
       syncComposerState();
     };
     const scheduleSync = () => {
+      // Clear any previous pending timers to avoid stale callbacks
+      for (const id of pendingTimers) clearTimeout(id);
+      pendingTimers.length = 0;
+      // Sync immediately, then at several deferred points to catch
+      // native text buffer layout updates (word-wrap, line count).
       sync();
       queueMicrotask(sync);
-      timeoutId = setTimeout(sync, 0);
-      followupTimeoutId = setTimeout(sync, 16);
+      pendingTimers.push(setTimeout(sync, 0));
+      pendingTimers.push(setTimeout(sync, 16));
+      pendingTimers.push(setTimeout(sync, 50));
     };
 
     composer.onContentChange = scheduleSync;
@@ -1059,8 +1086,8 @@ export function OpenTuiApp({
     scheduleSync();
 
     return () => {
-      if (timeoutId) clearTimeout(timeoutId);
-      if (followupTimeoutId) clearTimeout(followupTimeoutId);
+      for (const id of pendingTimers) clearTimeout(id);
+      pendingTimers.length = 0;
       if (inputRef.current === composer) {
         composer.onContentChange = undefined;
         composer.onCursorChange = undefined;
@@ -1995,6 +2022,7 @@ export function OpenTuiApp({
 
     if (event.name === "pageup") {
       scrollRef.current?.scrollBy(-(scrollRef.current.height / 2));
+      setScrolledAway(true);
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -2002,6 +2030,13 @@ export function OpenTuiApp({
 
     if (event.name === "pagedown") {
       scrollRef.current?.scrollBy(scrollRef.current.height / 2);
+      // Check if we're back at the bottom
+      if (scrollRef.current) {
+        const sb = scrollRef.current;
+        if (sb.scrollTop + sb.height >= sb.scrollHeight - 1) {
+          setScrolledAway(false);
+        }
+      }
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -2272,8 +2307,7 @@ export function OpenTuiApp({
 
     // Ctrl+O: toggle todo panel expand/collapse
     if (event.name === "o" && event.ctrl) {
-      const openTodos = planCheckpoints.filter((cp) => cp.status !== "done");
-      if (openTodos.length > 0) {
+      if (planCheckpoints.length > 0) {
         setTodoPanelOpen((prev) => !prev);
       }
       event.preventDefault();
@@ -2347,6 +2381,23 @@ export function OpenTuiApp({
       return;
     }
 
+    // Any unhandled key will reach the textarea — scroll to bottom so the
+    // user can see what they're typing after scrolling up through history.
+    if (scrollRef.current) {
+      const sb = scrollRef.current;
+      sb.scrollTo(sb.scrollHeight);
+    }
+    setScrolledAway(false);
+
+    // Force composer state sync after the key is processed by the textarea.
+    // onContentChange may not fire reliably for all edits (paste, delete),
+    // so we explicitly re-measure at several deferred points.
+    queueMicrotask(syncComposerState);
+    setTimeout(syncComposerState, 0);
+    setTimeout(syncComposerState, 16);
+    setTimeout(syncComposerState, 50);
+    setTimeout(syncComposerState, 100);
+
   });
 
   const modelDescriptor = getCurrentModelDescriptor(session);
@@ -2417,6 +2468,7 @@ export function OpenTuiApp({
       scrollRef={scrollRef}
       selectedChildId={selectedChildId}
       onEntryClick={openDetailTab}
+      onAgentClick={enterChildSession}
       pendingAsk={pendingAsk}
       askError={askError}
       askSelectionIndex={askSelectionIndex}
@@ -2472,8 +2524,7 @@ export function OpenTuiApp({
       sidebarMode={sidebarMode}
       statusPanel={(() => {
         const showAgents = agentsPanelOpen && childSessions.length > 0;
-        const openTodos = planCheckpoints.filter((cp) => cp.status !== "done");
-        const showTodos = todoPanelOpen && openTodos.length > 0;
+        const showTodos = todoPanelOpen && planCheckpoints.length > 0;
         if (!showAgents && !showTodos) return undefined;
         return (
           <StatusPanel
@@ -2493,6 +2544,7 @@ export function OpenTuiApp({
       onTodoClick={() => setTodoPanelOpen((p) => !p)}
       agentsPanelOpen={agentsPanelOpen}
       onAgentsPanelClick={() => setAgentsPanelOpen((p) => !p)}
+      scrolledAway={scrolledAway}
       sidebarPlanSection={undefined}
       sidebarContextSection={
         <ContextUsageCard

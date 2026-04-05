@@ -12,7 +12,8 @@ import { SelectableRow } from "../primitives/selectable-row.js";
 import { formatCompactTokensShort } from "../utils/format.js";
 
 // ── Color spec ──────────────────────────────────────────────
-const TITLE_COLOR = "#8ab4f8";
+const AGENT_TITLE_COLOR = "#b4a0ec"; // matches input-area agent badge
+const TODO_TITLE_COLOR = "#86ded4";  // matches input-area todo badge
 
 const TODO_COLORS = {
   doneMark: RGBA.fromHex("#4e6a88"),
@@ -155,7 +156,7 @@ function StatusPanelInner({
   const runningCount = agents.filter((a) => a.lifecycle === "running").length;
 
   const hasAgents = agents.length > 0 && showAgents;
-  const hasTodos = openTodos.length > 0 && showTodos;
+  const hasTodos = todos.length > 0 && showTodos;
 
   if (!hasAgents && !hasTodos) return null;
 
@@ -179,10 +180,10 @@ function StatusPanelInner({
         borderStyle="rounded"
         borderColor={colors.dim}
         title={agentTitle}
-        titleColor={TITLE_COLOR}
+        titleColor={AGENT_TITLE_COLOR}
         dividerRatio={0.4}
         dividerTitle={todoTitle}
-        dividerTitleColor={TITLE_COLOR}
+        dividerTitleColor={TODO_TITLE_COLOR}
         flexDirection="row"
         gap={0}
       >
@@ -205,7 +206,7 @@ function StatusPanelInner({
         borderStyle="rounded"
         borderColor={colors.dim}
         title={agentTitle}
-        titleColor={TITLE_COLOR}
+        titleColor={AGENT_TITLE_COLOR}
         paddingLeft={1}
         paddingRight={1}
       >
@@ -222,7 +223,7 @@ function StatusPanelInner({
       borderStyle="rounded"
       borderColor={colors.dim}
       title={todoTitle}
-      titleColor={TITLE_COLOR}
+      titleColor={TODO_TITLE_COLOR}
       paddingLeft={1}
       paddingRight={1}
     >

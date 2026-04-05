@@ -156,6 +156,48 @@ function transformTurnEnd(entry: ReconciledConversationEntry): PresentationEntry
   };
 }
 
+/**
+ * Matches the display text produced by session.ts for sub-agent completion:
+ *   [#1 code-review-1] [done] (123.6s)\n<preview>
+ *   [#2 foo] [error]\n<preview>
+ * Groups: numericId, agentName, outcome, elapsedStr, preview
+ */
+const SUB_AGENT_END_PATTERN = /^\[#(\d+) ([^\]]+)\] \[(\w+)\](?: \(([\d.]+)s\))?(?:\n([\s\S]*))?$/;
+
+function transformSubAgentDone(entry: ReconciledConversationEntry): PresentationEntry | null {
+  const text = entry.entry.text ?? "";
+  const match = text.match(SUB_AGENT_END_PATTERN);
+  if (!match) return null;
+
+  const [, , agentName, outcome, elapsedStr, previewRaw] = match;
+  const preview = (previewRaw ?? "").trimEnd();
+
+  const state: PresentationState = outcome === "error" || outcome === "interrupted"
+    ? "error"
+    : "done";
+
+  const inlineResult: InlineResultData | null = preview.length > 0
+    ? {
+        text: preview,
+        dim: false,
+        maxLines: 50,
+      }
+    : null;
+
+  return {
+    id: entry.id,
+    contentVersion: entry.contentVersion,
+    kind: "tool_operation",
+    state,
+    toolDisplayName: "Agent",
+    toolCategory: "orchestrate",
+    toolText: agentName,
+    toolSuffix: elapsedStr ? `(${elapsedStr}s)` : "",
+    toolAgentName: agentName,
+    toolInlineResult: inlineResult,
+  };
+}
+
 function transformSystem(entry: ReconciledConversationEntry): PresentationEntry {
   const kind = entry.entry.kind;
   let severity: PresentationEntry["systemSeverity"] = "info";
@@ -272,6 +314,11 @@ function buildToolOperation(
   const sourceEntries: ReconciledConversationEntry[] = [callEntry];
   if (resultEntry) sourceEntries.push(resultEntry);
 
+  // Spawn tool call: expose agent id for clickable arg rendering
+  const toolAgentName = toolName === "spawn" && typeof toolArgs.id === "string"
+    ? toolArgs.id as string
+    : undefined;
+
   return {
     id: callEntry.id,
     contentVersion: resultEntry
@@ -283,6 +330,7 @@ function buildToolOperation(
     toolCategory: profile.category,
     toolText: profile.text(toolArgs),
     toolSuffix: profile.suffix?.(resultMeta) ?? "",
+    toolAgentName,
     toolStartedAt: callEntry.entry.startedAt,
     toolElapsedMs: callEntry.entry.elapsedMs,
     toolInlineResult: inlineResult,
@@ -470,6 +518,9 @@ export function presentationTransform(
       default: {
         if (isTurnEndEntry(entry)) {
           result.push(transformTurnEnd(entry));
+        } else if (entry.entry.meta?.statusType === "sub_agent_end") {
+          const synthetic = transformSubAgentDone(entry);
+          result.push(synthetic ?? transformSystem(entry));
         } else {
           result.push(transformSystem(entry));
         }
