@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { OptimizedBuffer } from "../buffer.js"
 
 /**

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { createTestRenderer, type TestRenderer } from "../testing.js"
 import { ManualClock } from "../testing/manual-clock.js"

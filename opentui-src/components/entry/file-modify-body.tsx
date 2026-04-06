@@ -13,8 +13,7 @@
 
 import React, { useMemo } from "react";
 
-import { RGBA, StyledText } from "@opentui/core";
-import type { TextChunk } from "../../forked/core/text-buffer.js";
+import { RGBA, StyledText, type TextChunk } from "@opentui/core";
 import { highlightToChunks } from "../../forked/patch-opentui-markdown.js";
 import type { FileModifyDisplayData, DiffHunk } from "../../../src/diff-hunk.js";
 import type { ConversationPalette } from "../conversation-types.js";
@@ -317,7 +316,7 @@ function FileModifyBodyInner({
   streaming,
   maxVisibleLines = DEFAULT_MAX_VISIBLE,
   onOpenDetail,
-}: FileModifyBodyProps): React.ReactElement {
+}: FileModifyBodyProps): React.ReactNode {
   const rawArtifacts = useMemo(() => {
     switch (data.mode) {
       case "replace": return buildReplaceArtifacts(data, colors);

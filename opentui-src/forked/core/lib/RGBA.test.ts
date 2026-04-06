@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, describe } from "bun:test"
 import { RGBA, ansi256, ansi256ToRgb, getAnsi256Index, hexToRgb, isAnsi256Color, rgbToHex, hsvToRgb, parseColor } from "./RGBA.js"
 

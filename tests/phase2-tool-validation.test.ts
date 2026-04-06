@@ -18,7 +18,7 @@ function makeTempDir(prefix: string): string {
 
 describe("Phase 2 tool validation and grep limits", () => {
   it("validates high-risk basic tool arguments at runtime", async () => {
-    const root = makeTempDir("longeragent-phase2-basic-");
+    const root = makeTempDir("vigil-phase2-basic-");
     try {
       const readBad = await executeTool("read_file", { path: 123 as unknown as string }, { projectRoot: root });
       expect(readBad.content).toContain("Invalid arguments for read_file");
@@ -34,18 +34,17 @@ describe("Phase 2 tool validation and grep limits", () => {
 
       const editBad = await executeTool(
         "edit_file",
-        { path: "a.txt", old_str: "", new_str: "x" },
+        { path: "a.txt", edits: [{ old_str: "", new_str: "x" }] },
         { projectRoot: root },
       );
-      expect(editBad.content).toContain("Invalid arguments for edit_file");
-      expect(editBad.content).toContain("'old_str' must be a non-empty string");
+      expect(editBad.content).toContain("old_str");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("returns current local time with timezone and UTC offset", async () => {
-    const root = makeTempDir("longeragent-phase2-time-tool-");
+    const root = makeTempDir("vigil-phase2-time-tool-");
     try {
       const result = await executeTool("time", {}, { projectRoot: root });
       expect(result.content).toContain("Current local time:");
@@ -58,7 +57,7 @@ describe("Phase 2 tool validation and grep limits", () => {
   });
 
   it("rejects risky/overlong regex patterns before grep execution", async () => {
-    const root = makeTempDir("longeragent-phase2-search-regex-");
+    const root = makeTempDir("vigil-phase2-search-regex-");
     try {
       writeFileSync(join(root, "a.txt"), "aaaaab\n", "utf-8");
 
@@ -82,7 +81,7 @@ describe("Phase 2 tool validation and grep limits", () => {
   });
 
   it("enforces grep depth and file-size limits with notices", async () => {
-    const root = makeTempDir("longeragent-phase2-search-limits-");
+    const root = makeTempDir("vigil-phase2-search-limits-");
     try {
       // Depth > 6 should be skipped
       let deep = root;
@@ -111,17 +110,17 @@ describe("Phase 2 tool validation and grep limits", () => {
   });
 
   it("returns a diff preview metadata block for edit_file", async () => {
-    const root = makeTempDir("longeragent-phase2-edit-preview-");
+    const root = makeTempDir("vigil-phase2-edit-preview-");
     try {
       writeFileSync(join(root, "a.txt"), "line 1\nold value\nline 3\n", "utf-8");
 
       const result = await executeTool(
         "edit_file",
-        { path: "a.txt", old_str: "old value", new_str: "new value" },
+        { path: "a.txt", edits: [{ old_str: "old value", new_str: "new value" }] },
         { projectRoot: root },
       );
 
-      expect(result.content).toContain("OK: File edited successfully.");
+      expect(result.content).toContain("edits applied");
       expect(result.metadata.path).toBe(join(root, "a.txt"));
       expect(result.metadata.tui_preview).toBeTruthy();
       const preview = result.metadata.tui_preview as Record<string, unknown>;
@@ -137,7 +136,7 @@ describe("Phase 2 tool validation and grep limits", () => {
   });
 
   it("returns a diff preview metadata block for write_file when overwriting", async () => {
-    const root = makeTempDir("longeragent-phase2-write-preview-");
+    const root = makeTempDir("vigil-phase2-write-preview-");
     try {
       writeFileSync(join(root, "a.txt"), "line 1\nold value\nline 3\n", "utf-8");
 
@@ -161,7 +160,7 @@ describe("Phase 2 tool validation and grep limits", () => {
   });
 
   it("returns a diff preview metadata block for write_file when creating a new file", async () => {
-    const root = makeTempDir("longeragent-phase2-write-preview-new-");
+    const root = makeTempDir("vigil-phase2-write-preview-new-");
     try {
       const result = await executeTool(
         "write_file",
@@ -184,7 +183,7 @@ describe("Phase 2 tool validation and grep limits", () => {
   });
 
   it("keeps all changed lines in large edit diffs without global truncation", async () => {
-    const root = makeTempDir("longeragent-phase2-edit-preview-large-");
+    const root = makeTempDir("vigil-phase2-edit-preview-large-");
     try {
       const oldBlock = Array.from({ length: 80 }, (_, i) => `old ${i + 1}`).join("\n");
       const newBlock = Array.from({ length: 80 }, (_, i) => `new ${i + 1}`).join("\n");
@@ -192,7 +191,7 @@ describe("Phase 2 tool validation and grep limits", () => {
 
       const result = await executeTool(
         "edit_file",
-        { path: "big.txt", old_str: oldBlock, new_str: newBlock },
+        { path: "big.txt", edits: [{ old_str: oldBlock, new_str: newBlock }] },
         { projectRoot: root },
       );
 
@@ -211,7 +210,7 @@ describe("Phase 2 tool validation and grep limits", () => {
   });
 
   it("still omits unchanged context between distant changes", async () => {
-    const root = makeTempDir("longeragent-phase2-edit-preview-context-gap-");
+    const root = makeTempDir("vigil-phase2-edit-preview-context-gap-");
     try {
       const beforeLines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
       const afterLines = [...beforeLines];

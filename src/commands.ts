@@ -37,10 +37,11 @@ import {
   type PromptSelectRequest,
 } from "./provider-credential-flow.js";
 import { resolveSkillContent, type SkillMeta } from "./skills/loader.js";
-import { ACCENT_PRESETS, DEFAULT_ACCENT, setAccent, theme } from "./tui/theme.js";
+import { ACCENT_PRESETS, DEFAULT_ACCENT, setAccent, theme } from "./accent.js";
 import { buildModelPickerTree, toCommandPickerOptions } from "./model-picker-tree.js";
 import { formatCurrentModelScopedLabel, getCurrentModelDescriptor } from "./model-presentation.js";
 import { hasOAuthTokens, isTokenExpiring, readOAuthAccessToken, clearOAuthTokens } from "./auth/openai-oauth.js";
+import { hasGitHubTokens, clearGitHubTokens } from "./auth/github-copilot-oauth.js";
 
 // ------------------------------------------------------------------
 // Types
@@ -94,8 +95,15 @@ export interface CommandContext {
   /** Prompt the user for a secret value during command execution. */
   promptSecret?: (request: PromptSecretRequest) => Promise<string | undefined>;
 
-  /** Show the inline OAuth login overlay and return tokens (or null on cancel). */
-  requestOAuthLogin?: () => Promise<import("./auth/openai-oauth.js").OAuthTokens | null>;
+  /**
+   * Show the inline OAuth login overlay for the given provider and return
+   * on completion (resolved value is non-null on success, null on cancel).
+   * The returned token type varies by provider; callers typically only care
+   * that it's non-null.
+   */
+  requestOAuthLogin?: (
+    provider: "codex" | "copilot",
+  ) => Promise<unknown | null>;
 }
 
 /**
@@ -492,7 +500,7 @@ function parseModelArgs(args: string): { target: string } {
     throw new Error(
       "Inline API keys in `/model` are no longer supported.\n" +
       "Use `/model` to select the model and follow the prompt to import or paste a key,\n" +
-      "or run 'longeragent init' to configure providers.",
+      "or run 'vigil init' to configure providers.",
     );
   }
   if (rest.length > 0) {
@@ -545,7 +553,7 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
     ctx.showMessage(
       `Current model: ${current}\n` +
       "Use /model to select a new model.\n" +
-      "For models marked 'key missing', run 'longeragent init' or select the model to import/paste a key.",
+      "For models marked 'key missing', run 'vigil init' or select the model to import/paste a key.",
     );
     return;
   }
@@ -571,7 +579,7 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
       const needsLogin = !hasOAuthTokens()
         || (existingToken && isTokenExpiring(existingToken));
       if (needsLogin && ctx.requestOAuthLogin) {
-        const tokens = await ctx.requestOAuthLogin();
+        const tokens = await ctx.requestOAuthLogin("codex");
         if (!tokens) {
           ctx.showMessage("Model switch cancelled.");
           return;
@@ -579,9 +587,31 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
       } else if (needsLogin) {
         ctx.showMessage(
           "OpenAI OAuth token is missing or expired.\n" +
-          "Run 'longeragent oauth' to log in.",
+          "Run 'vigil oauth' to log in.",
         );
         return;
+      }
+    }
+
+    // ── Copilot OAuth check: ensure GitHub token exists before resolving ──
+    // The GitHub App user token is non-expiring, so we only need to check
+    // presence — never expiry. If the token is revoked server-side, the first
+    // Copilot API call surfaces a 401 and we prompt re-login from there.
+    if (parsedForCodex?.provider === "copilot") {
+      if (!hasGitHubTokens()) {
+        if (ctx.requestOAuthLogin) {
+          const tokens = await ctx.requestOAuthLogin("copilot");
+          if (!tokens) {
+            ctx.showMessage("Model switch cancelled.");
+            return;
+          }
+        } else {
+          ctx.showMessage(
+            "Not logged in to GitHub Copilot.\n" +
+            "Run 'vigil oauth' to log in.",
+          );
+          return;
+        }
       }
     }
 
@@ -891,7 +921,7 @@ async function cmdCodex(ctx: CommandContext, args: string): Promise<void> {
       return;
     }
     if (ctx.requestOAuthLogin) {
-      const tokens = await ctx.requestOAuthLogin();
+      const tokens = await ctx.requestOAuthLogin("codex");
       if (!tokens) {
         ctx.showMessage("Login cancelled.");
       }
@@ -925,6 +955,68 @@ async function cmdCodex(ctx: CommandContext, args: string): Promise<void> {
 }
 
 // ------------------------------------------------------------------
+// /copilot command
+// ------------------------------------------------------------------
+
+function copilotOptions(): CommandOption[] {
+  const options: CommandOption[] = [];
+  if (hasGitHubTokens()) {
+    options.push({ label: "status", value: "status" });
+    options.push({ label: "logout", value: "logout" });
+  } else {
+    options.push({ label: "login", value: "login" });
+  }
+  return options;
+}
+
+async function cmdCopilot(ctx: CommandContext, args: string): Promise<void> {
+  const sub = args.trim().toLowerCase();
+
+  if (sub === "login" || sub === "") {
+    if (hasGitHubTokens() && sub !== "login") {
+      ctx.showMessage("Already logged in to GitHub Copilot.");
+      return;
+    }
+    if (ctx.requestOAuthLogin) {
+      const result = await ctx.requestOAuthLogin("copilot");
+      if (!result) {
+        ctx.showMessage("Login cancelled.");
+      }
+    } else {
+      ctx.showMessage("OAuth login is not available in this environment.");
+    }
+    return;
+  }
+
+  if (sub === "logout") {
+    clearGitHubTokens();
+    // Drop the per-account model-visibility cache so a future login for a
+    // different plan doesn't inherit the wrong hidden-model set.
+    try {
+      const { clearCopilotModelsCache } = await import(
+        "./providers/copilot-models-cache.js"
+      );
+      clearCopilotModelsCache();
+    } catch {
+      // ignore
+    }
+    ctx.showMessage("GitHub Copilot tokens cleared.");
+    return;
+  }
+
+  if (sub === "status") {
+    if (!hasGitHubTokens()) {
+      ctx.showMessage("Not logged in.");
+      return;
+    }
+    ctx.showMessage("Logged in.");
+    return;
+  }
+
+  ctx.showMessage(`Unknown /copilot subcommand: ${sub}`);
+}
+
+// ------------------------------------------------------------------
 // Registry builder
 // ------------------------------------------------------------------
 
@@ -945,6 +1037,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/mcp", description: "Show MCP server status and tools", handler: cmdMcp });
   registry.register({ name: "/rename", description: "Rename current session", handler: cmdRename });
   registry.register({ name: "/codex", description: "OpenAI ChatGPT login", handler: cmdCodex, options: codexOptions });
+  registry.register({ name: "/copilot", description: "GitHub Copilot login", handler: cmdCopilot, options: copilotOptions });
   registry.register({ name: "/raw", description: "Toggle markdown raw/rendered mode", handler: cmdRaw, aliases: ["/md"] });
   registry.register({ name: "/agents", description: "Show agent list", handler: cmdAgents });
   return registry;
@@ -961,7 +1054,7 @@ async function cmdMcp(ctx: CommandContext): Promise<void> {
   if (!mcpManager) {
     ctx.showMessage(
       "No MCP servers configured.\n" +
-      "Add servers to ~/.longeragent/mcp.json to enable MCP tools.",
+      "Add servers to ~/.vigil/mcp.json to enable MCP tools.",
     );
     return;
   }

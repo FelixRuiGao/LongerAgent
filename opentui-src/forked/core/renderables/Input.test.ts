@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, it, afterAll, beforeAll } from "bun:test"
 import { InputRenderable, type InputRenderableOptions, InputRenderableEvents } from "./Input.js"
 import { decodePasteBytes } from "../lib/paste.js"

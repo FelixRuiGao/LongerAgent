@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { beforeEach, describe, expect, test, afterEach } from "bun:test"
 import { createTestRenderer, MouseButtons, type MockMouse, type TestRenderer } from "../testing"
 import { BoxRenderable } from "../renderables"

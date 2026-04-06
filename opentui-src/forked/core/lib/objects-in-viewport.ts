@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { ViewportBounds } from "../types.js"
 
 interface ViewportObject {

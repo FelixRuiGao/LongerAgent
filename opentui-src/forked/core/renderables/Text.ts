@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { BaseRenderable } from "../Renderable.js"
 import { stringToStyledText, StyledText } from "../lib/styled-text.js"
 import { type TextChunk } from "../text-buffer.js"

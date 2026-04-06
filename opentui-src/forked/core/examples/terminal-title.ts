@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { TextRenderable, createCliRenderer } from "../index.js"
 
 async function testTerminalTitle() {

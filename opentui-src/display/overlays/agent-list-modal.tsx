@@ -1,7 +1,10 @@
 /** @jsxImportSource @opentui/react */
 
 import React from "react";
-import { RGBA } from "@opentui/core";
+import { RGBA, createTextAttributes } from "@opentui/core";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
+const ATTRS_NONE = createTextAttributes({});
 import type { ChildSessionSnapshot } from "../../../src/session-tree-types.js";
 import type { DisplayThemeColorTokens } from "../theme/types.js";
 import { CenteredModal } from "./centered-modal.js";
@@ -57,7 +60,7 @@ function AgentRow({
   selected: boolean;
   colors: DisplayThemeColorTokens;
   onClick: () => void;
-}): React.ReactElement {
+}): React.ReactNode {
   const icon = lifecycleIcon(agent.lifecycle);
   const label = lifecycleLabel(agent.lifecycle);
   const statusColor = lifecycleColor(agent.lifecycle, colors);
@@ -83,17 +86,17 @@ function AgentRow({
         <text fg={selected ? fg : statusColor} content={`${icon} `} flexShrink={0} />
         <text
           fg={fg}
-          bold={selected}
+          attributes={selected ? ATTRS_BOLD : ATTRS_NONE}
           content={agent.id}
           flexShrink={1}
-          wrapMode="truncate"
+          truncate
         />
         <text fg={selected ? fg : statusColor} content={` [${label}]`} flexShrink={0} />
         <box flexGrow={1} />
       </box>
       {/* Secondary row: └ N tools used, Xk tokens */}
       <box flexDirection="row" width="100%" paddingLeft={2}>
-        <text fg={descFg} content={statsLine} wrapMode="truncate" />
+        <text fg={descFg} content={statsLine} truncate />
       </box>
     </box>
   );
@@ -108,7 +111,7 @@ export function AgentListModal({
   colors,
   onClose,
   onSelect,
-}: AgentListModalProps): React.ReactElement | null {
+}: AgentListModalProps): React.ReactNode {
   if (!visible || agents.length === 0) return null;
 
   const modalWidth = Math.min(60, terminalWidth - 2);

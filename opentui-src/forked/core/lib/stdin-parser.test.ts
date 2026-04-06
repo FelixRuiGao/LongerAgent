@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, test } from "bun:test"
 import { Buffer } from "node:buffer"
 import { ManualClock } from "../testing/manual-clock"

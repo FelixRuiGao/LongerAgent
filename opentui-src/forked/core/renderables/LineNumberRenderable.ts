@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Renderable, type RenderableOptions } from "../Renderable.js"
 import { OptimizedBuffer } from "../buffer.js"
 import type { RenderContext, LineInfoProvider } from "../types.js"

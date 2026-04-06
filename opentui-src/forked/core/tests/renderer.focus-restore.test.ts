@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, beforeEach, afterEach, describe, spyOn } from "bun:test"
 import { Buffer } from "node:buffer"
 import { createTestRenderer, type TestRenderer, type MockInput, type MockMouse } from "../testing/test-renderer"

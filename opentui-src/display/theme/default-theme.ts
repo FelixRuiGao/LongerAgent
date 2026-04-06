@@ -167,14 +167,16 @@ const DEFAULT_DISPLAY_TOKENS: DisplayThemeTokens = {
   },
 };
 
-function mergeNested<T extends Record<string, unknown>>(base: T, overrides?: DeepPartial<T>): T {
+function mergeNested<T extends object>(base: T, overrides?: DeepPartial<T>): T {
   if (!overrides) return { ...base };
-  const result: Record<string, unknown> = { ...base };
+  const baseRecord = base as Record<string, unknown>;
+  const overridesRecord = overrides as Record<string, unknown>;
+  const result: Record<string, unknown> = { ...baseRecord };
 
-  for (const key of Object.keys(overrides) as Array<keyof T>) {
-    const overrideValue = overrides[key];
+  for (const key of Object.keys(overridesRecord)) {
+    const overrideValue = overridesRecord[key];
     if (overrideValue === undefined) continue;
-    const baseValue = base[key];
+    const baseValue = baseRecord[key];
 
     if (
       baseValue &&

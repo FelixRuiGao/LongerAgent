@@ -4,7 +4,9 @@ import React, { useState } from "react";
 import { execSync } from "node:child_process";
 import path from "node:path";
 
-import { RGBA } from "../../forked/core/lib/RGBA.js";
+import { RGBA, createTextAttributes } from "@opentui/core";
+
+const ATTRS_UNDERLINE = createTextAttributes({ underline: true });
 import type { PresentationEntry } from "../../presentation/types.js";
 import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
@@ -30,7 +32,7 @@ function openFile(filePath: string): void {
 }
 
 /** A file-path text element with hover highlight and click-to-open. */
-function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: string; hoverBg: string }): React.ReactElement {
+function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: string; hoverBg: string }): React.ReactNode {
   const [hovered, setHovered] = useState(false);
   return (
     <box
@@ -46,9 +48,9 @@ function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: 
     >
       <text
         fg={baseColor}
-        underline
+        attributes={ATTRS_UNDERLINE}
         content={text}
-        wrapMode="truncate"
+        truncate
       />
     </box>
   );
@@ -56,7 +58,7 @@ function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: 
 
 function ToolGroupEntryInner(
   { entry, colors, contentWidth }: ToolGroupEntryProps,
-): React.ReactElement {
+): React.ReactNode {
   const [expanded, setExpanded] = useState(false);
   const active = entry.groupActive ?? false;
   const items = entry.groupEntries ?? [];
@@ -94,7 +96,7 @@ function ToolGroupEntryInner(
             <text content="  " flexShrink={0} />
             <text fg={TOOL_NAME_COLOR} content={entry.groupLatestToolName ?? ""} flexShrink={0} />
             <text content="  " flexShrink={0} />
-            <text fg={colors.dim} content={entry.groupLatestToolText ?? ""} wrapMode="truncate" flexGrow={1} flexShrink={1} />
+            <text fg={colors.dim} content={entry.groupLatestToolText ?? ""} truncate flexGrow={1} flexShrink={1} />
           </>
         ) : (
           <>
@@ -127,7 +129,7 @@ function ToolGroupEntryInner(
                 {isPathTool && text ? (
                   <ClickablePath text={text} baseColor={colors.dim} hoverBg={colors.border} />
                 ) : (
-                  <text fg={colors.dim} content={text} wrapMode="truncate" flexGrow={1} flexShrink={1} />
+                  <text fg={colors.dim} content={text} truncate flexGrow={1} flexShrink={1} />
                 )}
               </box>
             );

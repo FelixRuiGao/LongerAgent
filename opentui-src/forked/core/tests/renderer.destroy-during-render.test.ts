@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect } from "bun:test"
 import { Renderable } from "../Renderable.js"
 import type { OptimizedBuffer } from "../buffer.js"

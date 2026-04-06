@@ -7,8 +7,8 @@ import type { DisplayThemeColorTokens, DisplayThemeSpacingTokens } from "../them
 interface PanelSurfaceProps {
   colors: DisplayThemeColorTokens;
   spacing?: DisplayThemeSpacingTokens;
-  width?: number | string;
-  height?: number | string;
+  width?: number | "auto" | `${number}%`;
+  height?: number | "auto" | `${number}%`;
   flexDirection?: "row" | "column";
   flexShrink?: number;
   flexGrow?: number;
@@ -34,7 +34,7 @@ export function PanelSurface({
   paddingBottom,
   border = true,
   children,
-}: PanelSurfaceProps): React.ReactElement {
+}: PanelSurfaceProps): React.ReactNode {
   return (
     <box
       border={border}

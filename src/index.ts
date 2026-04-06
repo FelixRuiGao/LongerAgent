@@ -1,9 +1,9 @@
 /**
- * LongerAgent -- Public barrel re-exports.
+ * Vigil -- Public barrel re-exports.
  *
  * Provides a single import point for all public APIs:
  *
- *   import { Session, Agent, Config, SessionStore } from "longer-agent";
+ *   import { Session, Agent, Config, SessionStore } from "vigil";
  *
  * @packageDocumentation
  */
@@ -20,7 +20,7 @@ export {
   getWebSearchSupport,
   resolveAssetPaths,
   getBundledAssetsDir,
-  LONGERAGENT_HOME_DIR,
+  VIGIL_HOME_DIR,
 } from "./config.js";
 
 // -- Dotenv ---------------------------------------------------------------
@@ -148,7 +148,10 @@ export {
 } from "./file-attach.js";
 
 // -- TUI ------------------------------------------------------------------
-export { launchTui } from "./tui/launch.js";
+// NOTE: launchTui is provided by opentui-src/main.ts. We no longer re-export
+// it from this barrel file because opentui-src lives outside src/'s rootDir.
+// Consumers that need to launch the TUI programmatically should import
+// directly from the compiled opentui-src entry at runtime.
 export type {
   ConversationEntry,
   ConversationEntryKind,

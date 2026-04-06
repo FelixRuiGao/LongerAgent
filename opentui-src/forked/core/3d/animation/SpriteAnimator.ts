@@ -1,3 +1,4 @@
+// @ts-nocheck
 import * as THREE from "three"
 import { uniform, texture as tslTexture, uv, float, vec2, bufferAttribute, mix } from "three/tsl"
 import { MeshBasicNodeMaterial, NodeMaterial } from "three/webgpu"

@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 
 interface SelectableRowProps {
-  width?: number | string;
+  width?: number | "auto" | `${number}%`;
   hoverBackgroundColor?: string;
   onPress?: () => void;
   children: React.ReactNode;
@@ -14,7 +14,7 @@ export function SelectableRow({
   hoverBackgroundColor,
   onPress,
   children,
-}: SelectableRowProps): React.ReactElement {
+}: SelectableRowProps): React.ReactNode {
   const [hovered, setHovered] = useState(false);
 
   return (

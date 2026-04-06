@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 
 import { MarkdownRenderable, SyntaxStyle, createCliRenderer, parseColor } from "../index"
 import { resolveRenderLib } from "../zig"

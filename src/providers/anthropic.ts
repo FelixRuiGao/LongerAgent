@@ -22,8 +22,8 @@ import {
 export class AnthropicProvider extends BaseProvider {
   override readonly requiresAlternatingRoles = true;
 
-  private _config: ModelConfig;
-  private _client: Anthropic;
+  protected _config: ModelConfig;
+  protected _client: Anthropic;
 
   constructor(config: ModelConfig) {
     super();
@@ -172,11 +172,13 @@ export class AnthropicProvider extends BaseProvider {
    *
    * Claude 4.5 and earlier use Manual Extended Thinking:
    *   thinking: { type: "enabled", budget_tokens: N }
+   *
+   * Matches both the canonical dashed form (`claude-opus-4-6`) used by the
+   * Anthropic API and the dotted variant (`claude-opus-4.6`, including
+   * suffixes like `-fast`) used by GitHub Copilot's model catalog.
    */
-  private static readonly _ADAPTIVE_MODELS = new Set([
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-  ]);
+  private static readonly _ADAPTIVE_MODEL_RE =
+    /^claude-(opus|sonnet)-4[.-]6/;
 
   private _applyThinkingParams(kwargs: Record<string, unknown>, options?: SendMessageOptions): void {
     if (!this._config.supportsThinking) return;
@@ -190,7 +192,7 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     const model = this._config.model;
-    if (AnthropicProvider._ADAPTIVE_MODELS.has(model)) {
+    if (AnthropicProvider._ADAPTIVE_MODEL_RE.test(model)) {
       // --- Adaptive Thinking (Claude 4.6) ---
       kwargs["thinking"] = { type: "adaptive" };
 

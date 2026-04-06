@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { dlopen, toArrayBuffer, JSCallback, ptr, type Pointer } from "bun:ffi"
 import { existsSync, realpathSync, writeFileSync } from "fs"
 import { dirname, join } from "path"

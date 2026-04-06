@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { RGBA } from "../forked/core/lib/RGBA.js";
-import { StyledText } from "../forked/core/lib/styled-text.js";
-import type { TextChunk } from "../forked/core/text-buffer.js";
+import { RGBA, StyledText, type TextChunk } from "@opentui/core";
 
 const SHIMMER_WINDOW = 2;
 const SHIMMER_BASE_BRIGHTNESS = 0.4;

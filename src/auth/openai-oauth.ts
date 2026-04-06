@@ -5,7 +5,7 @@
  *   1. Browser login (PKCE) — recommended, opens browser for one-click auth
  *   2. Device code — fallback for SSH / headless environments
  *
- * Token persistence in ~/.longeragent/auth.json with automatic refresh.
+ * Token persistence in ~/.vigil/auth.json with automatic refresh.
  * No external dependencies — uses Node 18+ built-in fetch, crypto, http.
  */
 
@@ -16,7 +16,13 @@ import { platform } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { confirm, select } from "@inquirer/prompts";
-import { getLongerAgentHomeDir } from "../home-path.js";
+import { getVigilHomeDir } from "../home-path.js";
+import {
+  deviceCodeLoginCLI as copilotDeviceCodeLoginCLI,
+  saveGitHubTokens,
+  clearGitHubTokens,
+  hasGitHubTokens,
+} from "./github-copilot-oauth.js";
 
 // =============================================================================
 // Constants
@@ -56,12 +62,17 @@ export interface OAuthTokens {
   refresh_token: string;
 }
 
-interface AuthStoreData {
+export interface AuthStoreData {
   version: 1;
   openai_codex?: {
     access_token: string;
     refresh_token: string;
     last_refresh: string;
+  };
+  github_copilot?: {
+    access_token: string;
+    /** ISO timestamp of when the token was obtained (for display only). */
+    obtained_at: string;
   };
 }
 
@@ -70,7 +81,7 @@ interface AuthStoreData {
 // =============================================================================
 
 function authStorePath(): string {
-  return join(getLongerAgentHomeDir(), "auth.json");
+  return join(getVigilHomeDir(), "auth.json");
 }
 
 export function loadAuthStore(): AuthStoreData {
@@ -88,9 +99,9 @@ export function loadAuthStore(): AuthStoreData {
   }
 }
 
-function saveAuthStore(store: AuthStoreData): void {
+export function saveAuthStore(store: AuthStoreData): void {
   const p = authStorePath();
-  const dir = getLongerAgentHomeDir();
+  const dir = getVigilHomeDir();
   mkdirSync(dir, { recursive: true });
   writeFileSync(p, JSON.stringify(store, null, 2) + "\n", {
     encoding: "utf-8",
@@ -360,7 +371,7 @@ export async function browserLoginHeadless(
     state,
     id_token_add_organizations: "true",
     codex_cli_simplified_flow: "true",
-    originator: "longeragent",
+    originator: "vigil",
   });
   const authorizeUrl = `${AUTHORIZE_URL}?${params.toString()}`;
 
@@ -452,7 +463,12 @@ export async function deviceCodeLoginHeadless(
 
   onProgress({ phase: "device_code", url: DEVICE_VERIFY_URL, userCode });
 
-  // Step 2: Poll for authorization code
+  // Step 2: Poll for authorization code.
+  // NOTE: we intentionally do NOT emit `phase: "polling"` inside this loop.
+  // The `device_code` phase's own rendering already shows "Waiting for
+  // sign-in..." alongside the URL and user code; switching to `polling` would
+  // replace that display with a bare status line, erasing the code before
+  // the user could copy it.
   const deadline = Date.now() + AUTH_TIMEOUT_MS;
   let codeResp: Record<string, unknown> | null = null;
 
@@ -468,7 +484,7 @@ export async function deviceCodeLoginHeadless(
       });
 
       if (status === 200) { codeResp = data; break; }
-      if (status === 403 || status === 404) { onProgress({ phase: "polling" }); continue; }
+      if (status === 403 || status === 404) { continue; }
       throw new Error(`Device auth polling returned status ${status}.`);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") continue;
@@ -510,7 +526,7 @@ export async function deviceCodeLoginHeadless(
 }
 
 // =============================================================================
-// CLI wrappers (console.log + inquirer for `longeragent oauth` command)
+// CLI wrappers (console.log + inquirer for `vigil oauth` command)
 // =============================================================================
 
 /**
@@ -585,7 +601,7 @@ export async function refreshAccessToken(
     const errCode = typeof data["error"] === "string" ? data["error"] : "";
     const reloginHint =
       errCode === "invalid_grant" || errCode === "invalid_token"
-        ? " Run 'longeragent oauth' to re-authenticate."
+        ? " Run 'vigil oauth' to re-authenticate."
         : "";
     throw new Error(`Token refresh failed: ${errDesc}.${reloginHint}`);
   }
@@ -593,7 +609,7 @@ export async function refreshAccessToken(
   const accessToken = String(data["access_token"] ?? "");
   if (!accessToken) {
     throw new Error(
-      "Token refresh response missing access_token. Run 'longeragent oauth' to re-authenticate.",
+      "Token refresh response missing access_token. Run 'vigil oauth' to re-authenticate.",
     );
   }
 
@@ -626,7 +642,7 @@ export async function ensureFreshToken(): Promise<string> {
     !codex.refresh_token.trim()
   ) {
     throw new Error(
-      "No OpenAI OAuth credentials stored. Run 'longeragent oauth' to log in.",
+      "No OpenAI OAuth credentials stored. Run 'vigil oauth' to log in.",
     );
   }
 
@@ -639,8 +655,29 @@ export async function ensureFreshToken(): Promise<string> {
 }
 
 // =============================================================================
-// CLI command: `longeragent oauth [action]`
+// CLI command: `vigil oauth [action] [service]`
 // =============================================================================
+//
+// Supports two OAuth services:
+//   - codex    — OpenAI ChatGPT login (existing)
+//   - copilot  — GitHub Copilot device flow (new)
+//
+// Command forms:
+//   vigil oauth                    → picker: service × action
+//   vigil oauth login              → picker: service
+//   vigil oauth logout             → picker: which service to clear
+//   vigil oauth status             → show all services' statuses
+//   vigil oauth login codex        → direct
+//   vigil oauth login copilot      → direct
+//   vigil oauth logout codex       → direct
+//   vigil oauth logout copilot     → direct
+//
+// Back-compat: users who previously ran `vigil oauth` or
+// `vigil oauth login` now see a 2-item picker with one extra keystroke.
+// =============================================================================
+
+type OAuthService = "codex" | "copilot";
+type OAuthAction = "login" | "status" | "logout";
 
 function isUserCancel(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
@@ -650,7 +687,11 @@ function isUserCancel(err: unknown): boolean {
   );
 }
 
-async function performLogin(): Promise<OAuthTokens> {
+// -----------------------------------------------------------------------------
+// Codex (OpenAI ChatGPT) handlers
+// -----------------------------------------------------------------------------
+
+async function codexPerformLogin(): Promise<OAuthTokens> {
   const method = await select({
     message: "Login method",
     choices: [
@@ -665,7 +706,7 @@ async function performLogin(): Promise<OAuthTokens> {
   return deviceCodeLogin();
 }
 
-async function oauthLogin(): Promise<void> {
+async function codexLogin(): Promise<void> {
   // Check if already logged in
   if (hasOAuthTokens()) {
     const token = readOAuthAccessToken()!;
@@ -674,7 +715,7 @@ async function oauthLogin(): Promise<void> {
     const expired = expiry ? expiry.getTime() < Date.now() : false;
     const tokenStatus = expired ? "expired" : "valid";
 
-    console.log(`  Existing login found (token ${tokenStatus}, expires: ${expiryStr})`);
+    console.log(`  Existing Codex login found (token ${tokenStatus}, expires: ${expiryStr})`);
     try {
       const reLogin = await confirm({
         message: "Re-authenticate with a new login?",
@@ -706,27 +747,27 @@ async function oauthLogin(): Promise<void> {
     }
   }
 
-  const tokens = await performLogin();
+  const tokens = await codexPerformLogin();
   saveOAuthTokens(tokens);
   console.log();
-  console.log("  Login successful!");
-  console.log("  OAuth tokens saved to ~/.longeragent/auth.json");
+  console.log("  Codex login successful!");
+  console.log("  OAuth tokens saved to ~/.vigil/auth.json");
   console.log();
   console.log(
-    "  To use with LongerAgent, run 'longeragent init' and select",
+    "  To use with Vigil, run 'vigil init' and select",
   );
   console.log("  'OpenAI (ChatGPT Login)'.");
   console.log("  If it is already configured, you can switch to it later with '/model'.");
   console.log();
 }
 
-function oauthStatus(): void {
+function codexStatusLines(): string[] {
+  const lines: string[] = [];
+  lines.push("  OpenAI ChatGPT (Codex)");
   if (!hasOAuthTokens()) {
-    console.log("  Not logged in.");
-    console.log("  Run 'longeragent oauth' to log in with your ChatGPT account.");
-    return;
+    lines.push("    Status:       not logged in");
+    return lines;
   }
-
   const token = readOAuthAccessToken()!;
   const expiry = getTokenExpiry(token);
   const expiryStr = expiry ? expiry.toLocaleString() : "unknown";
@@ -736,56 +777,226 @@ function oauthStatus(): void {
   const store = loadAuthStore();
   const lastRefresh = store.openai_codex?.last_refresh ?? "unknown";
 
-  console.log("  OpenAI OAuth Status");
-  console.log(`  Status:       ${expired ? "expired" : expiring ? "expiring soon" : "active"}`);
-  console.log(`  Expires:      ${expiryStr}`);
-  console.log(`  Last refresh: ${lastRefresh}`);
-  console.log(`  Auth store:   ${authStorePath()}`);
-
-  if (expired) {
-    console.log();
-    console.log("  Token has expired. Run 'longeragent oauth' to re-authenticate.");
-  } else if (expiring) {
-    console.log();
-    console.log("  Token will expire soon. It will be auto-refreshed on next use.");
-  }
+  lines.push(`    Status:       ${expired ? "expired" : expiring ? "expiring soon" : "active"}`);
+  lines.push(`    Expires:      ${expiryStr}`);
+  lines.push(`    Last refresh: ${lastRefresh}`);
+  return lines;
 }
 
-function oauthLogout(): void {
+function codexLogout(): void {
   if (!hasOAuthTokens()) {
-    console.log("  Not logged in — nothing to clear.");
+    console.log("  Codex: not logged in — nothing to clear.");
     return;
   }
   clearOAuthTokens();
-  console.log("  OAuth tokens cleared.");
+  console.log("  Codex OAuth tokens cleared.");
 }
 
+// -----------------------------------------------------------------------------
+// Copilot (GitHub) handlers
+// -----------------------------------------------------------------------------
+
+async function copilotLogin(): Promise<void> {
+  if (hasGitHubTokens()) {
+    console.log("  Existing Copilot login found (long-lived token).");
+    try {
+      const reLogin = await confirm({
+        message: "Re-authenticate with a new login?",
+        default: false,
+      });
+      if (!reLogin) {
+        console.log("  Using existing login.");
+        return;
+      }
+    } catch (err) {
+      if (isUserCancel(err)) {
+        console.log("\n  Cancelled.");
+        return;
+      }
+      throw err;
+    }
+  }
+
+  const tokens = await copilotDeviceCodeLoginCLI();
+  saveGitHubTokens(tokens);
+
+  // Prime the Copilot model-visibility cache so the picker hides Pro+
+  // exclusive models on the next /model open. Best-effort — a failure here
+  // just means the picker falls back to showing all models optimistically.
+  try {
+    const { refreshCopilotModelsCache } = await import(
+      "../providers/copilot-models-cache.js"
+    );
+    await refreshCopilotModelsCache();
+  } catch {
+    // ignore
+  }
+
+  console.log();
+  console.log("  Copilot login successful!");
+  console.log("  GitHub OAuth tokens saved to ~/.vigil/auth.json");
+  console.log();
+  console.log(
+    "  To use with Vigil, run 'vigil init' and select",
+  );
+  console.log("  'GitHub Copilot'.");
+  console.log("  If it is already configured, you can switch to it later with '/model'.");
+  console.log();
+}
+
+function copilotStatusLines(): string[] {
+  const lines: string[] = [];
+  lines.push("  GitHub Copilot");
+  if (!hasGitHubTokens()) {
+    lines.push("    Status:       not logged in");
+    return lines;
+  }
+  const store = loadAuthStore();
+  const obtainedAt = store.github_copilot?.obtained_at ?? "unknown";
+  lines.push("    Status:       active (long-lived token)");
+  lines.push(`    Obtained:     ${obtainedAt}`);
+  return lines;
+}
+
+function copilotLogout(): void {
+  if (!hasGitHubTokens()) {
+    console.log("  Copilot: not logged in — nothing to clear.");
+    return;
+  }
+  clearGitHubTokens();
+  // Also drop the per-account model visibility cache so a later login for a
+  // different account doesn't inherit the previous plan's hidden models.
+  void import("../providers/copilot-models-cache.js").then((m) => {
+    try {
+      m.clearCopilotModelsCache();
+    } catch {
+      // ignore
+    }
+  });
+  console.log("  Copilot OAuth tokens cleared.");
+}
+
+// -----------------------------------------------------------------------------
+// Service picker helpers
+// -----------------------------------------------------------------------------
+
+async function pickService(
+  message: string,
+  options: { codex: boolean; copilot: boolean },
+): Promise<OAuthService | null> {
+  const choices: Array<{ name: string; value: OAuthService }> = [];
+  if (options.codex) choices.push({ name: "OpenAI ChatGPT (Codex)", value: "codex" });
+  if (options.copilot) choices.push({ name: "GitHub Copilot", value: "copilot" });
+
+  if (choices.length === 0) return null;
+  if (choices.length === 1) return choices[0]!.value;
+
+  try {
+    return await select({ message, choices });
+  } catch (err) {
+    if (isUserCancel(err)) return null;
+    throw err;
+  }
+}
+
+function printStatusAll(): void {
+  console.log("  Vigil OAuth Status");
+  console.log();
+  for (const line of codexStatusLines()) console.log(line);
+  console.log();
+  for (const line of copilotStatusLines()) console.log(line);
+  console.log();
+  console.log(`  Auth store:   ${authStorePath()}`);
+}
+
+function normalizeService(raw?: string): OAuthService | null {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "codex" || v === "openai" || v === "openai-codex" || v === "chatgpt") return "codex";
+  if (v === "copilot" || v === "github" || v === "github-copilot") return "copilot";
+  return null;
+}
+
+// -----------------------------------------------------------------------------
+// Public entry point
+// -----------------------------------------------------------------------------
+
 /**
- * Entry point for `longeragent oauth [action]`.
+ * Entry point for `vigil oauth [action] [service]`.
+ *
+ * Both arguments are optional. If action is empty, defaults to `login`.
+ * If service is empty, shows an interactive picker (unless `status`, which
+ * always displays all services).
  */
-export async function oauthCommand(action?: string): Promise<void> {
+export async function oauthCommand(
+  action?: string,
+  service?: string,
+): Promise<void> {
   const normalized = (action ?? "").trim().toLowerCase();
+  const explicitService = normalizeService(service);
 
   console.log();
   console.log("  ╔══════════════════════════════════════╗");
-  console.log("  ║      OpenAI ChatGPT OAuth Login      ║");
+  console.log("  ║           Vigil OAuth Login          ║");
   console.log("  ╚══════════════════════════════════════╝");
   console.log();
 
+  let act: OAuthAction;
   switch (normalized) {
     case "":
     case "login":
-      await oauthLogin();
+      act = "login";
       break;
     case "status":
-      oauthStatus();
+      act = "status";
       break;
     case "logout":
-      oauthLogout();
+      act = "logout";
       break;
     default:
       console.log(`  Unknown action: ${normalized}`);
-      console.log("  Usage: longeragent oauth [login|status|logout]");
-      break;
+      console.log("  Usage: vigil oauth [login|status|logout] [codex|copilot]");
+      return;
+  }
+
+  if (act === "status") {
+    printStatusAll();
+    return;
+  }
+
+  let chosen: OAuthService | null = explicitService;
+
+  if (!chosen) {
+    if (act === "login") {
+      chosen = await pickService("Which service to log in to?", {
+        codex: true,
+        copilot: true,
+      });
+    } else {
+      // logout: only offer services that have tokens stored
+      const hasCodex = hasOAuthTokens();
+      const hasCopilot = hasGitHubTokens();
+      if (!hasCodex && !hasCopilot) {
+        console.log("  Not logged in to any service.");
+        return;
+      }
+      chosen = await pickService("Which service to log out of?", {
+        codex: hasCodex,
+        copilot: hasCopilot,
+      });
+    }
+  }
+
+  if (!chosen) {
+    console.log("  Cancelled.");
+    return;
+  }
+
+  if (act === "login") {
+    if (chosen === "codex") await codexLogin();
+    else await copilotLogin();
+  } else {
+    // act === "logout"
+    if (chosen === "codex") codexLogout();
+    else copilotLogout();
   }
 }

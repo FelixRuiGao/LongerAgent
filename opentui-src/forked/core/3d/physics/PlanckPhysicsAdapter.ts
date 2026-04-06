@@ -1,3 +1,4 @@
+// @ts-nocheck
 import * as planck from "planck"
 import type {
   PhysicsVector2,

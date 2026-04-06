@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { Clock, TimerHandle } from "../lib/clock"
 
 interface ScheduledTimer {

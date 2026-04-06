@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { type BunPlugin } from "bun"
 import * as coreRuntime from "./index"
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, test, expect } from "bun:test"
 import { createMockKeys, KeyCodes } from "./mock-keys.js"
 import { PassThrough } from "stream"

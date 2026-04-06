@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 import { BoxRenderable, type CliRenderer, createCliRenderer, TextRenderable, RGBA, t, fg, bold } from "../index.js"
 import { ScrollBoxRenderable } from "../renderables/ScrollBox.js"
 import { setupCommonDemoKeys } from "./lib/standalone-keys.js"

@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { getLongerAgentHomeDir } from "./home-path.js";
+import { getVigilHomeDir } from "./home-path.js";
 import { join, dirname, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as yaml from "js-yaml";
@@ -432,11 +432,11 @@ export class Session {
   agentTemplates: Record<string, Agent>;
   private _promptsDirs?: string[];
 
-  private _progress?: ProgressReporter;
+  _progress?: ProgressReporter;
   private _mcpManager?: MCPClientManager;
   private _mcpConnected = false;
 
-  private _createdAt: string;
+  _createdAt: string;
   private _title: string | undefined;
   private _cachedSummary: string | undefined;
 
@@ -552,8 +552,8 @@ export class Session {
   onSaveRequest?: () => void;
 
   // Counters
-  private _turnCount = 0;
-  private _compactCount = 0;
+  _turnCount = 0;
+  _compactCount = 0;
   private _usedContextIds = new Set<string>();
 
   // Tool executors
@@ -851,7 +851,7 @@ export class Session {
   // Initialisation helpers
   // ==================================================================
 
-  private _initConversation(): void {
+  _initConversation(): void {
     this._createdAt = new Date().toISOString();
     this._title = undefined;
     this._cachedSummary = undefined;
@@ -1433,7 +1433,7 @@ export class Session {
     this.requestTurnInterrupt();
   }
 
-  private _resetTransientState(): void {
+  _resetTransientState(): void {
     this._lastInputTokens = 0;
     this._lastTotalTokens = 0;
     this._lastCacheReadTokens = 0;
@@ -3628,7 +3628,22 @@ export class Session {
       const agentName = this.primaryAgent.name;
       const progress = this._progress;
 
+      // Track the last chunk kind per round so that when the provider
+      // interleaves reasoning and text items (e.g. Responses API),
+      // each contiguous segment gets its own LogEntry instead of being
+      // merged into a single sticky entry at the first-chunk position.
+      let lastStreamKind: "reasoning" | "text" | null = null;
+      let lastStreamRound = -1;
+
       onTextChunk = (roundIndex: number, chunk: string) => {
+        // If switching from reasoning → text in same round, start fresh buffers + entry
+        if (lastStreamRound === roundIndex && lastStreamKind === "reasoning") {
+          streamedAssistantEntries.delete(roundIndex);
+          textBuffers.delete(roundIndex);
+        }
+        lastStreamKind = "text";
+        lastStreamRound = roundIndex;
+
         let roundBuffer = textBuffers.get(roundIndex);
         if (!roundBuffer) {
           const stripBuf = new ContextTagStripBuffer((cleanChunk: string) => {
@@ -3671,6 +3686,13 @@ export class Session {
         if (reasoningAccumulator) reasoningAccumulator.text += chunk;
         if (progress) progress.onReasoningChunk(agentName, chunk);
         this._setSelfPhase("thinking");
+
+        // If switching from text → reasoning in same round, start a new reasoning entry
+        if (lastStreamRound === roundIndex && lastStreamKind === "text") {
+          streamedReasoningEntries.delete(roundIndex);
+        }
+        lastStreamKind = "reasoning";
+        lastStreamRound = roundIndex;
 
         const entry = streamedReasoningEntries.get(roundIndex);
         if (!entry) {
@@ -4392,7 +4414,7 @@ export class Session {
    */
   private _isAgentsMdPath(filePath: string): boolean {
     const resolved = resolve(filePath);
-    const globalPath = join(getLongerAgentHomeDir(), "AGENTS.md");
+    const globalPath = join(getVigilHomeDir(), "AGENTS.md");
     const projectPath = join(this._projectRoot, "AGENTS.md");
     return resolved === resolve(globalPath) || resolved === resolve(projectPath);
   }
@@ -4407,8 +4429,8 @@ export class Session {
   private _readAgentsMd(): string {
     const parts: string[] = [];
 
-    // 1. Global: ~/.longeragent/AGENTS.md
-    const globalPath = join(getLongerAgentHomeDir(), "AGENTS.md");
+    // 1. Global: ~/.vigil/AGENTS.md
+    const globalPath = join(getVigilHomeDir(), "AGENTS.md");
     if (existsSync(globalPath)) {
       try {
         const content = readFileSync(globalPath, "utf-8").trim();
@@ -4563,7 +4585,7 @@ export class Session {
     if (!artifacts) {
       throw new Error(
         "Session artifacts directory is unavailable after session initialization. " +
-        "Possible causes: (1) ~/.longeragent/ is not writable, (2) disk is full, " +
+        "Possible causes: (1) ~/.vigil/ is not writable, (2) disk is full, " +
         "(3) permission issues creating the artifacts directory.",
       );
     }
@@ -4578,7 +4600,7 @@ export class Session {
       "Session artifacts directory is unavailable. " +
       "This usually means no active session directory exists yet, or session " +
       "persistence failed to initialize. " +
-      "Possible causes: (1) ~/.longeragent/ is not writable, (2) disk is full, " +
+      "Possible causes: (1) ~/.vigil/ is not writable, (2) disk is full, " +
       "(3) SessionStore is missing or not ready.",
     );
   }

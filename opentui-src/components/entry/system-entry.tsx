@@ -2,8 +2,9 @@
 
 import React, { useMemo } from "react";
 
-import { StyledText, RGBA } from "@opentui/core";
-import type { TextChunk } from "../../forked/core/text-buffer.js";
+import { StyledText, RGBA, createTextAttributes, type TextChunk } from "@opentui/core";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../conversation-types.js";
 import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
@@ -28,7 +29,7 @@ interface SystemEntryProps {
 
 function SystemEntryInner(
   { entry, colors }: SystemEntryProps,
-): React.ReactElement {
+): React.ReactNode {
   const text = entry.systemText ?? "";
   const severity = entry.systemSeverity ?? "info";
   const fg = getSystemEntryColor(severity, DEFAULT_DISPLAY_THEME);
@@ -45,7 +46,7 @@ function SystemEntryInner(
     const message = text.replace(/^\[.*?\]\s*/, "");
     return (
       <box paddingLeft={1} paddingTop={1} width="100%" flexDirection="row">
-        <text content={gradientLabel} bold />
+        <text content={gradientLabel} attributes={ATTRS_BOLD} />
         <text fg={colors.text} content={`  ${message}`} />
       </box>
     );
@@ -55,7 +56,7 @@ function SystemEntryInner(
     case "error":
       return (
         <box paddingLeft={1} paddingTop={1} width="100%">
-          <text fg={fg} bold content={`[!] ${text}`} />
+          <text fg={fg} attributes={ATTRS_BOLD} content={`[!] ${text}`} />
         </box>
       );
 

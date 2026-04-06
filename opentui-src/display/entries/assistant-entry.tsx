@@ -4,12 +4,12 @@ import React from "react";
 
 import { getTreeSitterClient } from "@opentui/core";
 
-import { getLongerAgentAssistantRenderer } from "../../forked/core/lib/diagnostic.js";
+import { getVigilAssistantRenderer } from "../../forked/core/lib/diagnostic.js";
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../../components/conversation-types.js";
 
 const MARKDOWN_TREE_SITTER_CLIENT = getTreeSitterClient();
-const ASSISTANT_RENDERER_MODE = getLongerAgentAssistantRenderer();
+const ASSISTANT_RENDERER_MODE = getVigilAssistantRenderer();
 
 interface AssistantEntryProps {
   entry: PresentationEntry;
@@ -23,7 +23,7 @@ export function AssistantEntry({
   colors,
   markdownMode,
   markdownStyle,
-}: AssistantEntryProps): React.ReactElement {
+}: AssistantEntryProps): React.ReactNode {
   const text = entry.assistantText ?? "";
   const streaming = entry.assistantStreaming ?? false;
 

@@ -1,13 +1,16 @@
 /** @jsxImportSource @opentui/react */
 
 import React from "react";
+import { createTextAttributes } from "@opentui/core";
 
 import type { PresentationPanelProps } from "../conversation-types.js";
 import { PresentationEntryComponent } from "./presentation-entry.js";
 
+const ATTRS_BOLD = createTextAttributes({ bold: true });
+
 function LogoBlock(
   { lines, gradient }: { lines: readonly string[]; gradient: readonly string[] },
-): React.ReactElement {
+): React.ReactNode {
   return (
     <box paddingLeft={1} paddingRight={1} flexDirection="column" width="100%" paddingBottom={1}>
       {lines.map((line, index) => (
@@ -34,13 +37,13 @@ function PresentationPanelInner(
     onEntryClick,
     onAgentClick,
   }: PresentationPanelProps,
-): React.ReactElement {
+): React.ReactNode {
   return (
     <box flexDirection="column" gap={0}>
       {showLogoInScroll ? <LogoBlock lines={branding.logoLines} gradient={branding.logoGradient} /> : null}
       {selectedChildId ? (
         <box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-          <text fg={colors.accent} bold content={`SUB-SESSION ${selectedChildId}`} />
+          <text fg={colors.accent} attributes={ATTRS_BOLD} content={`SUB-SESSION ${selectedChildId}`} />
           <text fg={colors.dim} content="Esc back to primary session · Ctrl+C interrupt child turn" />
         </box>
       ) : null}

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Adapted from OpenTUI's MarkdownRenderable under the MIT License.
  * Local modifications:

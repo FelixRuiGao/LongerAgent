@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { TestRenderer } from "./test-renderer.js"
 
 export interface RecordBuffersOptions {

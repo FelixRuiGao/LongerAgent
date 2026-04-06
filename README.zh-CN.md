@@ -1,6 +1,5 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/FelixRuiGao/LongerAgent/main/assets/logo.png" alt="LongerAgent" width="360" />
-</p>
+# Vigil
+
 <p align="center">
   <strong>探索 Agent 自治。</strong>
 </p>

@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Testing utilities module exports
 export * from "./testing/test-renderer.js"
 export * from "./testing/mock-keys.js"

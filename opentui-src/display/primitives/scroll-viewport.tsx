@@ -20,7 +20,7 @@ export function ScrollViewport({
   stickyStart = "bottom",
   viewportPaddingRight = 1,
   children,
-}: ScrollViewportProps): React.ReactElement {
+}: ScrollViewportProps): React.ReactNode {
   return (
     <scrollbox
       ref={scrollRef}

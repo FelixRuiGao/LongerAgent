@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, describe, beforeEach, afterEach, spyOn } from "bun:test"
 import { BoxRenderable, type BoxOptions } from "./Box.js"
 import { createTestRenderer, type TestRenderer } from "../testing/test-renderer.js"

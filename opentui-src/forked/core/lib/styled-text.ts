@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { TextRenderable } from "../renderables/Text.js"
 import type { TextBuffer, TextChunk } from "../text-buffer.js"
 import { createTextAttributes } from "../utils.js"

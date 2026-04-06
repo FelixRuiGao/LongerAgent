@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 
 import { CliRenderer, createCliRenderer, BoxRenderable, TextRenderable, RGBA } from "../index.js"
 import { ASCIIFontRenderable } from "../renderables/ASCIIFont.js"

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, describe } from "bun:test"
 import { getObjectsInViewport } from "./objects-in-viewport.js"
 import type { ViewportBounds } from "../types.js"

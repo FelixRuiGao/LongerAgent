@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { type CliRenderer, createCliRenderer, t, fg, bold, BoxRenderable, TextRenderable } from "../index.js"
 import { SliderRenderable } from "../renderables/Slider.js"
 import { setupCommonDemoKeys } from "./lib/standalone-keys.js"

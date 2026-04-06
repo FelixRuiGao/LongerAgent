@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, it, beforeEach, afterEach } from "bun:test"
 import { EditBuffer } from "./edit-buffer.js"
 import { EditorView } from "./editor-view.js"

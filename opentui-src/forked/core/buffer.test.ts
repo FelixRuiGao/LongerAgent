@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, it, beforeEach, afterEach } from "bun:test"
 import { OptimizedBuffer } from "./buffer.js"
 import { RGBA } from "./lib/RGBA.js"

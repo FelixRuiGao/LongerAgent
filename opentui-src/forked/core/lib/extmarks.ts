@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { EditBuffer } from "../edit-buffer.js"
 import type { EditorView } from "../editor-view.js"
 import { ExtmarksHistory, type ExtmarksSnapshot } from "./extmarks-history.js"

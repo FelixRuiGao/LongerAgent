@@ -27,7 +27,7 @@ describe("Phase 5 file write safety", () => {
   it("write_file preserves executable mode on overwrite and leaves no temp file", async () => {
     if (process.platform === "win32") return;
 
-    const root = makeTempDir("longeragent-atomic-write-");
+    const root = makeTempDir("vigil-atomic-write-");
     try {
       const file = join(root, "script.sh");
       writeFileSync(file, "#!/bin/sh\necho old\n", "utf-8");
@@ -53,7 +53,7 @@ describe("Phase 5 file write safety", () => {
   it("edit_file preserves executable mode on atomic rewrite", async () => {
     if (process.platform === "win32") return;
 
-    const root = makeTempDir("longeragent-atomic-edit-");
+    const root = makeTempDir("vigil-atomic-edit-");
     try {
       const file = join(root, "tool.sh");
       writeFileSync(file, "#!/bin/sh\necho hello\n", "utf-8");
@@ -61,11 +61,11 @@ describe("Phase 5 file write safety", () => {
 
       const result = await executeTool(
         "edit_file",
-        { path: "tool.sh", old_str: "hello", new_str: "world" },
+        { path: "tool.sh", edits: [{ old_str: "hello", new_str: "world" }] },
         { projectRoot: root },
       );
 
-      expect(result.content).toContain("OK: File edited successfully.");
+      expect(result.content).toContain("edits applied");
       expect(readFileSync(file, "utf-8")).toContain("world");
       expect(modeBits(file)).toBe(0o755);
     } finally {
@@ -74,7 +74,7 @@ describe("Phase 5 file write safety", () => {
   });
 
   it("rejects edit_file when expected_mtime_ms is stale", async () => {
-    const root = makeTempDir("longeragent-atomic-mtime-edit-");
+    const root = makeTempDir("vigil-atomic-mtime-edit-");
     try {
       const file = join(root, "note.txt");
       writeFileSync(file, "hello\n", "utf-8");
@@ -92,8 +92,7 @@ describe("Phase 5 file write safety", () => {
         "edit_file",
         {
           path: "note.txt",
-          old_str: "hello",
-          new_str: "world",
+          edits: [{ old_str: "hello", new_str: "world" }],
           expected_mtime_ms: mtime,
         },
         { projectRoot: root },
@@ -107,7 +106,7 @@ describe("Phase 5 file write safety", () => {
   });
 
   it("rejects write_file overwrite when expected_mtime_ms is stale", async () => {
-    const root = makeTempDir("longeragent-atomic-mtime-write-");
+    const root = makeTempDir("vigil-atomic-mtime-write-");
     try {
       const file = join(root, "data.txt");
       writeFileSync(file, "v1\n", "utf-8");
@@ -138,7 +137,7 @@ describe("Phase 5 file write safety", () => {
   });
 
   it("serializes concurrent writes to the same file with a process-local lock", async () => {
-    const root = makeTempDir("longeragent-atomic-lock-");
+    const root = makeTempDir("vigil-atomic-lock-");
     const file = join(root, "same.txt");
     writeFileSync(file, "init\n", "utf-8");
 

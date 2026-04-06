@@ -11,6 +11,7 @@ import { KimiProvider } from "./kimi.js";
 import { GLMProvider } from "./glm.js";
 import { MiniMaxProvider } from "./minimax.js";
 import { OpenRouterProvider } from "./openrouter.js";
+import { CopilotProvider } from "./copilot.js";
 
 export function createProvider(config: ModelConfig): BaseProvider {
   const provider = config.provider.toLowerCase();
@@ -21,6 +22,10 @@ export function createProvider(config: ModelConfig): BaseProvider {
 
   if (provider === "openai" || provider === "openai-codex") {
     return new OpenAIResponsesProvider(config);
+  }
+
+  if (provider === "copilot") {
+    return new CopilotProvider(config);
   }
 
   if (provider === "openai-chat" || provider === "ollama" || provider === "omlx" || provider === "lmstudio") {
@@ -45,7 +50,7 @@ export function createProvider(config: ModelConfig): BaseProvider {
 
   throw new Error(
     `Unknown provider '${config.provider}'. ` +
-      "Supported: anthropic, openai, openai-codex, openai-chat, ollama, omlx, lmstudio, " +
+      "Supported: anthropic, openai, openai-codex, copilot, openai-chat, ollama, omlx, lmstudio, " +
       "kimi, kimi-cn, kimi-ai, kimi-code, " +
       "glm, glm-intl, glm-code, glm-intl-code, minimax, minimax-cn, openrouter",
   );

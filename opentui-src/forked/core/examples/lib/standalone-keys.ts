@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { resolveRenderLib, type CliRenderer, type KeyEvent } from "../../index.js"
 
 export function setupCommonDemoKeys(renderer: CliRenderer) {

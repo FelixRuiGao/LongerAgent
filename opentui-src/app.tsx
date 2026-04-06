@@ -55,16 +55,21 @@ import {
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import "./forked/patch-opentui-markdown.js";
 import {
-  getLongerAgentAssistantRenderer,
-  isLongerAgentMarkdownPatchDisabled,
-  isLongerAgentOpenTuiDiagEnabled,
-  writeLongerAgentOpenTuiDiag,
+  getVigilAssistantRenderer,
+  isVigilMarkdownPatchDisabled,
+  isVigilOpenTuiDiagEnabled,
+  writeVigilOpenTuiDiag,
 } from "./forked/core/lib/diagnostic.js";
 import { usePresentationEntries } from "./presentation/use-presentation.js";
 import { useTurnTimer } from "./presentation/use-turn-timer.js";
 import type { TabState } from "./sidebar/sidebar-tabs.js";
 import { getCurrentModelDescriptor } from "../src/model-presentation.js";
-import { UsagePoller, type UsageSnapshot } from "../src/provider-usage.js";
+import {
+  UsagePoller,
+  fetchCopilotUsage,
+  formatUsageLine,
+  type UsageSnapshot,
+} from "../src/provider-usage.js";
 import {
   readOAuthAccessToken,
   hasOAuthTokens,
@@ -75,6 +80,13 @@ import {
   type OAuthProgress,
   type OAuthTokens,
 } from "../src/auth/openai-oauth.js";
+import {
+  deviceCodeLoginHeadless as copilotDeviceCodeLoginHeadless,
+  saveGitHubTokens,
+  hasGitHubTokens,
+  getGitHubAccessToken,
+  type GitHubOAuthTokens,
+} from "../src/auth/github-copilot-oauth.js";
 import {
   buildFileReferenceLabel,
   createComposerTokenVisuals,
@@ -93,8 +105,10 @@ import { StatusPanel } from "./display/panels/status-panel.js";
 import { usePlan } from "./presentation/use-plan.js";
 import {
   type ActivityPhase,
+  type AnyOAuthTokens,
   type CommandOverlayState,
   type OAuthOverlayState,
+  type OAuthProviderId,
   type PromptSecretState,
   type PromptSelectState,
   type QuestionAnswerState,
@@ -130,7 +144,7 @@ const GOODBYE_MESSAGES = [
   "Later, gator!",
 ] as const;
 
-const ASSISTANT_RENDERER_MODE = getLongerAgentAssistantRenderer();
+const ASSISTANT_RENDERER_MODE = getVigilAssistantRenderer();
 
 const DISABLED_TEXTAREA_ACTION = "__disabled__" as unknown as KeyBinding["action"];
 
@@ -155,7 +169,7 @@ function isDeleteToVisualLineStartShortcut(
     super?: boolean;
   },
 ): boolean {
-  return (
+  return Boolean(
     (event.name === "backspace" && (event.meta || event.super))
     || (event.name === "u" && event.ctrl && !event.meta && !event.super)
   );
@@ -216,7 +230,7 @@ export function OpenTuiApp({
   verbose = false,
   onExit,
   theme: themeProp,
-}: OpenTuiAppProps): React.ReactElement {
+}: OpenTuiAppProps): React.ReactNode {
   const renderer = useRenderer();
   const terminal = useTerminalDimensions();
   const theme = themeProp ?? DEFAULT_DISPLAY_THEME;
@@ -230,8 +244,11 @@ export function OpenTuiApp({
   const [phase, setPhase] = useState<ActivityPhase>("idle");
   const [contextTokens, setContextTokens] = useState(0);
   const [cacheReadTokens, setCacheReadTokens] = useState(0);
-  const [codexUsage, setCodexUsage] = useState<UsageSnapshot | null>(null);
-  const codexPollerRef = useRef<UsagePoller | null>(null);
+  // Usage snapshot for Codex or Copilot — only one is active at a time, based
+  // on the current model provider. Hidden for all other providers.
+  const [usageSnapshot, setUsageSnapshot] = useState<UsageSnapshot | null>(null);
+  const usagePollerRef = useRef<UsagePoller | null>(null);
+  const usagePollerProviderRef = useRef<string | null>(null);
   const [childSessions, setChildSessions] = useState<ChildSessionSnapshot[]>([]);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const presentationEntries = usePresentationEntries({ session, selectedChildId, childSessions, processing });
@@ -375,41 +392,87 @@ export function OpenTuiApp({
   }
   const composerTokenVisuals = composerTokenVisualsRef.current;
 
-  // -- Codex usage poller lifecycle --
-  // Start/stop based on current provider. Runs inside the component because
-  // the poller needs to survive model switches within the same session.
+  // -- Usage poller lifecycle (Codex + Copilot) --
+  // Start/stop based on current provider. The poller survives model switches
+  // within the same session, but must be torn down and rebuilt when the user
+  // switches between Codex and Copilot (different fetch fn + different token).
   useEffect(() => {
     const provider = session.primaryAgent?.modelConfig?.provider;
-    if (provider !== "openai-codex") {
-      // Not a codex model — stop any running poller and clear state.
-      if (codexPollerRef.current) {
-        codexPollerRef.current.stop();
-        codexPollerRef.current = null;
+
+    const teardown = () => {
+      if (usagePollerRef.current) {
+        usagePollerRef.current.stop();
+        usagePollerRef.current = null;
       }
-      setCodexUsage(null);
+      usagePollerProviderRef.current = null;
+      setUsageSnapshot(null);
+    };
+
+    if (provider !== "openai-codex" && provider !== "copilot") {
+      teardown();
       return;
     }
 
-    const token = readOAuthAccessToken();
-    if (!token) {
-      setCodexUsage(null);
-      return;
+    // If the provider changed (e.g. codex → copilot), tear down the old poller
+    // because it has the wrong fetchFn baked in. If it's the same provider,
+    // just refresh the token and reuse.
+    if (
+      usagePollerProviderRef.current !== null
+      && usagePollerProviderRef.current !== provider
+    ) {
+      teardown();
     }
 
-    // Reuse existing poller if already running, just update the token.
-    if (codexPollerRef.current) {
-      codexPollerRef.current.updateToken(token);
-      return;
+    if (provider === "openai-codex") {
+      const token = readOAuthAccessToken();
+      if (!token) {
+        teardown();
+        return;
+      }
+      if (usagePollerRef.current) {
+        usagePollerRef.current.updateToken(token);
+        return;
+      }
+      const poller = new UsagePoller(); // default fetchFn = fetchCodexUsage
+      usagePollerRef.current = poller;
+      usagePollerProviderRef.current = "openai-codex";
+      poller.on("update", (snapshot: UsageSnapshot) => setUsageSnapshot(snapshot));
+      poller.start(token);
+      return () => {
+        poller.stop();
+        if (usagePollerRef.current === poller) {
+          usagePollerRef.current = null;
+          usagePollerProviderRef.current = null;
+        }
+      };
     }
 
-    const poller = new UsagePoller();
-    codexPollerRef.current = poller;
-    poller.on("update", (snapshot: UsageSnapshot) => setCodexUsage(snapshot));
-    poller.start(token);
-
+    // provider === "copilot"
+    // GitHub token is long-lived and read synchronously from disk — no await
+    // needed. `getGitHubAccessToken` throws when credentials are missing; in
+    // that case we just hide the usage indicator.
+    let ghToken: string;
+    try {
+      ghToken = getGitHubAccessToken();
+    } catch {
+      setUsageSnapshot(null);
+      return;
+    }
+    if (usagePollerRef.current) {
+      usagePollerRef.current.updateToken(ghToken);
+      return;
+    }
+    const poller = new UsagePoller({ fetchFn: fetchCopilotUsage });
+    usagePollerRef.current = poller;
+    usagePollerProviderRef.current = "copilot";
+    poller.on("update", (snapshot: UsageSnapshot) => setUsageSnapshot(snapshot));
+    poller.start(ghToken);
     return () => {
       poller.stop();
-      if (codexPollerRef.current === poller) codexPollerRef.current = null;
+      if (usagePollerRef.current === poller) {
+        usagePollerRef.current = null;
+        usagePollerProviderRef.current = null;
+      }
     };
   }, [session.primaryAgent?.modelConfig?.provider]);
 
@@ -629,17 +692,17 @@ export function OpenTuiApp({
   }, [selectedChildId, session]);
 
   useEffect(() => {
-    if (!isLongerAgentOpenTuiDiagEnabled()) return;
+    if (!isVigilOpenTuiDiagEnabled()) return;
     const assistantPEs = presentationEntries.filter((pe) => pe.kind === "assistant");
     const lastAssistant = assistantPEs.length > 0 ? assistantPEs[assistantPEs.length - 1] : null;
-    writeLongerAgentOpenTuiDiag("app.entries", {
+    writeVigilOpenTuiDiag("app.entries", {
       totalEntries: presentationEntries.length,
       assistantEntries: assistantPEs.length,
       lastAssistantLength: lastAssistant?.assistantText?.length ?? 0,
       processing,
       markdownMode,
       assistantRenderer: ASSISTANT_RENDERER_MODE,
-      markdownPatchDisabled: isLongerAgentMarkdownPatchDisabled(),
+      markdownPatchDisabled: isVigilMarkdownPatchDisabled(),
       activeAgents: childSessions.length,
     });
   }, [childSessions.length, presentationEntries, markdownMode, processing]);
@@ -663,7 +726,7 @@ export function OpenTuiApp({
         setPhase("prefilling");
         break;
       case "agent_no_reply":
-        session.appendStatusMessage("[No reply] The model chose not to reply.", "no_reply");
+        session.appendStatusMessage?.("[No reply] The model chose not to reply.", "no_reply");
         break;
       case "agent_end":
         setPhase("idle");
@@ -809,7 +872,10 @@ export function OpenTuiApp({
     focusComposerSoon();
   }, [focusComposerSoon]);
 
-  const startOAuthFlow = useCallback((method: "browser" | "device") => {
+  const startOAuthFlow = useCallback((
+    provider: OAuthProviderId,
+    method: "browser" | "device",
+  ) => {
     const controller = new AbortController();
     oauthAbortRef.current = controller;
 
@@ -836,10 +902,34 @@ export function OpenTuiApp({
       }
     };
 
-    const loginFn = method === "browser" ? browserLoginHeadless : deviceCodeLoginHeadless;
+    // Route to the correct headless login function.
+    // - codex:   browser PKCE or device code (user chose in "choose" step)
+    // - copilot: device flow only (no browser option)
+    const loginFn: (
+      opts: { onProgress: (e: OAuthProgress) => void; signal: AbortSignal },
+    ) => Promise<AnyOAuthTokens> =
+      provider === "codex"
+        ? (method === "browser" ? browserLoginHeadless : deviceCodeLoginHeadless)
+        : copilotDeviceCodeLoginHeadless;
+
     loginFn({ onProgress, signal: controller.signal })
       .then(async (tokens) => {
-        saveOAuthTokens(tokens);
+        if (provider === "codex") {
+          saveOAuthTokens(tokens as OAuthTokens);
+        } else {
+          saveGitHubTokens(tokens as GitHubOAuthTokens);
+          // Prime the Copilot models cache so picker visibility is accurate
+          // on first open. Best-effort — failures just leave the picker
+          // optimistic until the next refresh cycle.
+          try {
+            const { refreshCopilotModelsCache } = await import(
+              "../src/providers/copilot-models-cache.js"
+            );
+            await refreshCopilotModelsCache();
+          } catch {
+            // ignore
+          }
+        }
         oauthAbortRef.current = null;
         // Show "Login successful!" briefly before closing
         await new Promise((r) => setTimeout(r, 800));
@@ -862,7 +952,9 @@ export function OpenTuiApp({
     setOauthOverlay((s) => {
       if (!s || s.phase.step !== "choose") return s;
       // Schedule flow start outside updater to avoid side effects
-      queueMicrotask(() => startOAuthFlow(s.selected === 0 ? "browser" : "device"));
+      const provider = s.provider;
+      const method = s.selected === 0 ? "browser" : "device";
+      queueMicrotask(() => startOAuthFlow(provider, method));
       return s;
     });
   }, [startOAuthFlow]);
@@ -870,28 +962,52 @@ export function OpenTuiApp({
   /**
    * Show the OAuth overlay and return a promise that resolves
    * with tokens on success, or null on cancel/error.
+   *
+   * For `codex`: opens the "choose" step first (browser vs device code).
+   * For `copilot`: skips the choose step and kicks off device flow
+   * immediately (Copilot only supports device flow).
    */
-  const requestOAuthLogin = useCallback((): Promise<OAuthTokens | null> => {
-    return new Promise<OAuthTokens | null>((resolve) => {
-      setOauthOverlay({
-        phase: { step: "choose" },
-        selected: 0,
-        resolve,
-      });
+  const requestOAuthLogin = useCallback((
+    provider: OAuthProviderId,
+  ): Promise<AnyOAuthTokens | null> => {
+    return new Promise<AnyOAuthTokens | null>((resolve) => {
+      if (provider === "codex") {
+        setOauthOverlay({
+          provider,
+          phase: { step: "choose" },
+          selected: 0,
+          resolve,
+        });
+      } else {
+        // copilot: jump straight into the device flow.
+        setOauthOverlay({
+          provider,
+          phase: { step: "polling" },
+          selected: 0,
+          resolve,
+        });
+        queueMicrotask(() => startOAuthFlow("copilot", "device"));
+      }
     });
-  }, []);
+  }, [startOAuthFlow]);
 
-  // -- Startup OAuth check: prompt login if codex token is missing/expired --
+  // -- Startup OAuth check: prompt login if default model's token is missing/expired --
   const startupOAuthCheckedRef = useRef(false);
   useEffect(() => {
     if (startupOAuthCheckedRef.current) return;
     const provider = session.primaryAgent?.modelConfig?.provider;
-    if (provider !== "openai-codex") return;
-    const token = readOAuthAccessToken();
-    const needsLogin = !hasOAuthTokens() || (token && isTokenExpiring(token));
-    if (!needsLogin) return;
-    startupOAuthCheckedRef.current = true;
-    queueMicrotask(() => { requestOAuthLogin(); });
+    if (provider === "openai-codex") {
+      const token = readOAuthAccessToken();
+      const needsLogin = !hasOAuthTokens() || (token && isTokenExpiring(token));
+      if (!needsLogin) return;
+      startupOAuthCheckedRef.current = true;
+      queueMicrotask(() => { requestOAuthLogin("codex"); });
+    } else if (provider === "copilot") {
+      // GitHub App user token is non-expiring — only check presence.
+      if (hasGitHubTokens()) return;
+      startupOAuthCheckedRef.current = true;
+      queueMicrotask(() => { requestOAuthLogin("copilot"); });
+    }
   }, [session.primaryAgent?.modelConfig?.provider, requestOAuthLogin]);
 
   const showHint = useCallback((message: string) => {
@@ -2043,7 +2159,7 @@ export function OpenTuiApp({
     }
 
     // Ctrl+V: paste image from system clipboard
-    if (event.name === "v" && event.ctrl && !event.meta && !event.alt && !event.super) {
+    if (event.name === "v" && event.ctrl && !event.meta && !event.option && !event.super) {
       event.preventDefault();
       event.stopPropagation();
       void (async () => {
@@ -2448,6 +2564,9 @@ export function OpenTuiApp({
   const effectiveCacheReadTokens = childSnapshot ? childSnapshot.cacheReadTokens : cacheReadTokens;
   const effectiveProcessing = childSnapshot ? childSnapshot.running : processing;
   const effectiveEntries = presentationEntries;
+  // One-line usage indicator shown in the input area's bottom row (left of
+  // context). null when not logged in / unsupported provider / fetch pending.
+  const usageText = formatUsageLine(usageSnapshot);
 
   return (
     <OpenTuiScreen
@@ -2462,6 +2581,7 @@ export function OpenTuiApp({
       contextTokens={effectiveContextTokens}
       contextLimit={effectiveContextLimit}
       cacheReadTokens={effectiveCacheReadTokens}
+      usageText={usageText}
       presentationEntries={effectiveEntries}
       processing={effectiveProcessing}
       markdownMode={markdownMode}
@@ -2554,7 +2674,7 @@ export function OpenTuiApp({
           theme={theme}
         />
       }
-      sidebarCodexSection={codexUsage ? <CodexUsageCard snapshot={codexUsage} theme={theme} /> : undefined}
+      sidebarCodexSection={usageSnapshot ? <CodexUsageCard snapshot={usageSnapshot} theme={theme} /> : undefined}
       onBackgroundMouseDown={() => {
         if (commandOverlay.visible) setCommandOverlay(EMPTY_COMMAND_OVERLAY);
         if (commandPicker) setCommandPicker(null);

@@ -2,7 +2,7 @@
  * MCP (Model Context Protocol) client manager.
  *
  * Connects to one or more MCP servers, discovers their tools, and makes
- * them available as LongerAgent ToolDef objects that can be injected into
+ * them available as Vigil ToolDef objects that can be injected into
  * any Agent's tool list.
  *
  * Lifecycle:
@@ -192,7 +192,7 @@ async function ensureMcpSdk(): Promise<boolean> {
  * Manage connections to one or more MCP servers.
  *
  * Each server's tools are namespaced as `mcp__<server>__<tool>`
- * to avoid collisions with built-in LongerAgent tools.
+ * to avoid collisions with built-in Vigil tools.
  */
 export class MCPClientManager {
   private _configs: MCPServerConfig[];
@@ -269,7 +269,7 @@ export class MCPClientManager {
     }
 
     const client = new Client(
-      { name: "longeragent", version: VERSION },
+      { name: "vigil", version: VERSION },
       { capabilities: {} },
     );
     await client.connect(transport);
@@ -356,7 +356,7 @@ export class MCPClientManager {
     }
   }
 
-  /** Execute an MCP tool and return a LongerAgent ToolResult. */
+  /** Execute an MCP tool and return a Vigil ToolResult. */
   async callTool(
     namespacedName: string,
     args: Record<string, unknown>,

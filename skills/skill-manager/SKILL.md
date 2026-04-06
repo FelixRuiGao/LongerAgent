@@ -6,12 +6,12 @@ user-invocable: false
 
 # Skill Manager
 
-You are managing skills for LongerAgent. Skills are reusable prompt expansions stored as directories containing a SKILL.md file.
+You are managing skills for Vigil. Skills are reusable prompt expansions stored as directories containing a SKILL.md file.
 
 ## Directory Layout
 
 ```
-~/.longeragent/skills/         # or the project's skills/ directory
+~/.vigil/skills/         # or the project's skills/ directory
   skill-name/
     SKILL.md          # Required: YAML frontmatter + markdown instructions
     scripts/          # Optional: helper scripts
@@ -40,7 +40,7 @@ Use $ARGUMENTS[0], $ARGUMENTS[1], or $0, $1 for positional arguments.
 1. **Search**: Use `web_search` to find relevant skill repositories or ideas
 2. **Download**: Clone or fetch to the staging area:
    ```bash
-   git clone --depth 1 <repo-url> ~/.longeragent/skills/.staging/<skill-name>
+   git clone --depth 1 <repo-url> ~/.vigil/skills/.staging/<skill-name>
    ```
 3. **Inspect**: Read the downloaded files. Look for an existing SKILL.md, README, or relevant source files.
 4. **Organize**: Ensure `skills/.staging/<skill-name>/SKILL.md` exists with proper frontmatter:
@@ -50,11 +50,11 @@ Use $ARGUMENTS[0], $ARGUMENTS[1], or $0, $1 for positional arguments.
    - Include practical instructions in the markdown body
 5. **Install**: Move the staging directory to the skills directory:
    ```bash
-   mv ~/.longeragent/skills/.staging/<skill-name> ~/.longeragent/skills/<skill-name>
+   mv ~/.vigil/skills/.staging/<skill-name> ~/.vigil/skills/<skill-name>
    ```
    Clean up any git metadata if not needed:
    ```bash
-   rm -rf ~/.longeragent/skills/<skill-name>/.git
+   rm -rf ~/.vigil/skills/<skill-name>/.git
    ```
 
 The skill becomes available automatically on the next turn — no reload needed.
@@ -72,7 +72,7 @@ When the user describes a task pattern they want as a skill:
 
 Delete the skill directory:
 ```bash
-rm -rf ~/.longeragent/skills/<skill-name>
+rm -rf ~/.vigil/skills/<skill-name>
 ```
 
 The skill is removed automatically on the next turn.

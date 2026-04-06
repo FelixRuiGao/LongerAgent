@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Kitty Keyboard Protocol parser
 // Based on https://sw.kovidgoyal.net/kitty/keyboard-protocol/
 

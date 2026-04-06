@@ -20,7 +20,7 @@ import { OpenAIChatProvider } from "./openai-chat.js";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
-/** Map LongerAgent thinking levels to OpenRouter reasoning effort values. */
+/** Map Vigil thinking levels to OpenRouter reasoning effort values. */
 const EFFORT_MAP: Record<string, string> = {
   minimal: "minimal",
   low: "low",

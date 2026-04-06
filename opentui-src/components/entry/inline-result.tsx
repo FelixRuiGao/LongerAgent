@@ -10,7 +10,7 @@ import { SelectableRow } from "../../display/primitives/selectable-row.js";
 /** Clickable fold indicator with hover highlight. */
 function FoldIndicator(
   { text, colors, onClick }: { text: string; colors: ConversationPalette; onClick?: () => void },
-): React.ReactElement {
+): React.ReactNode {
   return (
     <SelectableRow
       hoverBackgroundColor={colors.border}
@@ -66,7 +66,7 @@ function splitIntoHunks(artifacts: ToolResultLineArtifact[]): Hunk[] {
 
 function InlineResultInner(
   { data, colors, contentWidth, onOpenDetail }: InlineResultProps,
-): React.ReactElement {
+): React.ReactNode {
   const artifacts = useMemo(() => {
     if (data.toolMetadata) {
       return buildToolResultArtifacts({
@@ -86,7 +86,7 @@ function InlineResultInner(
 
     if (isDiff) {
       const hunks = splitIntoHunks(artifacts);
-      const elements: React.ReactElement[] = [];
+      const elements: React.ReactNode[] = [];
       let elementKey = 0;
 
       const pushSeparator = () => {

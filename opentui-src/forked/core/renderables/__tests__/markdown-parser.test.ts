@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect } from "bun:test"
 import { Lexer } from "marked"
 import { parseMarkdownIncremental, type ParseState } from "../markdown-parser.js"

@@ -4,7 +4,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { execSync } from "node:child_process";
 import path from "node:path";
 
-import { RGBA } from "../../forked/core/lib/RGBA.js";
+import { RGBA, createTextAttributes } from "@opentui/core";
+
+const ATTRS_UNDERLINE = createTextAttributes({ underline: true });
 import type { PresentationEntry, ToolCategory } from "../../presentation/types.js";
 import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
@@ -38,7 +40,7 @@ function openFile(filePath: string): void {
 }
 
 /** A file-path text element with hover highlight and click-to-open. */
-function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: string; hoverBg: string }): React.ReactElement {
+function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: string; hoverBg: string }): React.ReactNode {
   const [hovered, setHovered] = useState(false);
   return (
     <box
@@ -54,9 +56,9 @@ function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: 
     >
       <text
         fg={baseColor}
-        underline
+        attributes={ATTRS_UNDERLINE}
         content={text}
-        wrapMode="truncate"
+        truncate
       />
     </box>
   );
@@ -65,7 +67,7 @@ function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: 
 /** A sub-agent name element with hover highlight and click-to-open-tab. */
 function ClickableAgentName(
   { text, baseColor, hoverBg, onClick }: { text: string; baseColor: string; hoverBg: string; onClick: () => void },
-): React.ReactElement {
+): React.ReactNode {
   const [hovered, setHovered] = useState(false);
   return (
     <box
@@ -81,9 +83,9 @@ function ClickableAgentName(
     >
       <text
         fg={baseColor}
-        underline
+        attributes={ATTRS_UNDERLINE}
         content={text}
-        wrapMode="truncate"
+        truncate
       />
     </box>
   );
@@ -128,7 +130,7 @@ interface ToolOperationEntryProps {
 
 function ToolOperationEntryInner(
   { entry, colors, contentWidth, onEntryClick, onAgentClick }: ToolOperationEntryProps,
-): React.ReactElement {
+): React.ReactNode {
   const active = entry.state === "active";
 
   const displayName = entry.toolDisplayName ?? "Tool";

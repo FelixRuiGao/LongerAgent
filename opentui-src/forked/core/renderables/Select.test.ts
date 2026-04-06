@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, beforeEach, afterEach, describe } from "bun:test"
 import { SelectRenderable, type SelectRenderableOptions, SelectRenderableEvents, type SelectOption } from "./Select.js"
 import { createTestRenderer, type MockInput, type TestRenderer } from "../testing/test-renderer.js"

@@ -9,8 +9,7 @@
 
 import { extname } from "node:path";
 
-import { RGBA, StyledText } from "@opentui/core";
-import type { TextChunk } from "../forked/core/text-buffer.js";
+import { RGBA, StyledText, type TextChunk } from "@opentui/core";
 import { displayWidthWithNewlines } from "../composer-token-logic.js";
 
 // ------------------------------------------------------------------

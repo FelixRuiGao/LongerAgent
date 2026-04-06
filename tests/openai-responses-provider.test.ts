@@ -138,6 +138,47 @@ describe("OpenAIResponsesProvider openai-codex request shaping", () => {
     expect(requestOptions?.["headers"]).toBeUndefined();
   });
 
+  it("copilot provider also gets reasoning.encrypted_content include and sanitized round-trip", async () => {
+    const reasoningState = [
+      {
+        type: "reasoning",
+        id: "rs_abc",
+        summary: [{ type: "summary_text", text: "thinking" }],
+        encrypted_content: "copilot-enc",
+      },
+    ];
+
+    const { body, requestOptions } = await captureCreateCall(
+      {
+        provider: "copilot",
+        model: "gpt-5.4",
+        extra: { store: false },
+      },
+      [
+        { role: "assistant", content: "", _reasoning_state: reasoningState },
+        { role: "user", content: "hi" },
+      ],
+      { promptCacheKey: "copilot-session-1" },
+    );
+
+    // Must get the stateless-backend `include` field
+    expect(body["include"]).toEqual(["reasoning.encrypted_content"]);
+    // Must sanitize reasoning items (strip id, keep type/summary/encrypted_content)
+    const input = body["input"] as Array<Record<string, unknown>>;
+    const reasoningItem = input.find((item) => item["type"] === "reasoning");
+    expect(reasoningItem).toEqual({
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "thinking" }],
+      encrypted_content: "copilot-enc",
+    });
+    // Must NOT get Codex-specific affinity headers (those are chatgpt.com backend only)
+    expect(requestOptions?.["headers"]).toBeUndefined();
+    // Must NOT extract system to top-level instructions (Copilot accepts developer role)
+    expect(body["instructions"]).toBeUndefined();
+    // Must NOT set prompt_cache_retention (stateless backend)
+    expect(body["prompt_cache_retention"]).toBeUndefined();
+  });
+
   it("sanitizes codex round-trip items before re-injecting them into input", async () => {
     const reasoningState = [
       {

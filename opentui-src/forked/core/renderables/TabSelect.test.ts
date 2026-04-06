@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, describe, beforeEach, afterEach } from "bun:test"
 import {
   TabSelectRenderable,

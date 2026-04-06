@@ -1,3 +1,4 @@
+// @ts-nocheck
 import RAPIER from "@dimforge/rapier2d-simd-compat"
 import type {
   PhysicsVector2,

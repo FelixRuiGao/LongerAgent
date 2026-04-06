@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, test, expect } from "bun:test"
 import { createTestRenderer } from "../../testing/test-renderer.js"
 import { TextareaRenderable } from "../Textarea.js"

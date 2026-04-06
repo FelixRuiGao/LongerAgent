@@ -32,6 +32,7 @@ const BRAND_LABEL_OVERRIDES: Record<string, string> = {
   "anthropic": "Anthropic",
   "openai": "OpenAI",
   "openai-codex": "OpenAI",
+  "copilot": "Copilot",
   "openrouter": "OpenRouter",
   "kimi": "Kimi",
   "kimi-cn": "Kimi",
@@ -51,6 +52,7 @@ const PROVIDER_LABEL_OVERRIDES: Record<string, string> = {
   "anthropic": "Anthropic",
   "openai": "OpenAI",
   "openai-codex": "OpenAI Codex",
+  "copilot": "Copilot",
   "openrouter": "OpenRouter",
   "ollama": "Ollama",
   "lmstudio": "LM Studio",
@@ -220,7 +222,7 @@ function resolveVendorLabel(selectionKey: string, modelId: string): { vendorId?:
 }
 
 function compactModelLabelForDisplay(providerId: string, modelLabel: string): string {
-  if (providerId === "anthropic" || providerId === "openrouter") {
+  if (providerId === "anthropic" || providerId === "openrouter" || providerId === "copilot") {
     return modelLabel.replace(/^Claude\s+/i, "").trim();
   }
   if (providerId.startsWith("glm")) {

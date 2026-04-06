@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createCliRenderer, TextRenderable, t, type CliRenderer, BoxRenderable, bold, fg } from "../index.js"
 import { setupCommonDemoKeys } from "./lib/standalone-keys.js"
 import { createTimeline, type JSAnimation, Timeline } from "../animation/Timeline.js"

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, describe } from "bun:test"
 import { detectLinks } from "./detect-links"
 import type { TextChunk } from "../text-buffer"

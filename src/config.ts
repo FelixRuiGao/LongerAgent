@@ -7,7 +7,8 @@ import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readOAuthAccessToken, hasOAuthTokens } from "./auth/openai-oauth.js";
-import { getLongerAgentHomeDir } from "./home-path.js";
+import { loadGitHubTokens, hasGitHubTokens } from "./auth/github-copilot-oauth.js";
+import { getVigilHomeDir } from "./home-path.js";
 import {
   findProviderPreset,
   findProviderPresetModel,
@@ -19,7 +20,7 @@ import {
 } from "./managed-provider-credentials.js";
 import type { LocalProviderConfig } from "./persistence.js";
 
-export { LONGERAGENT_HOME_DIR } from "./home-path.js";
+export { VIGIL_HOME_DIR } from "./home-path.js";
 
 // ------------------------------------------------------------------
 // Data interfaces
@@ -364,6 +365,7 @@ function hasResolvableApiKey(value: unknown): boolean {
   if (typeof value !== "string" || value.trim() === "") return false;
   // OAuth token check
   if (value === "oauth:openai-codex") return hasOAuthTokens();
+  if (value === "oauth:copilot") return hasGitHubTokens();
   if (value.startsWith("${") && value.endsWith("}")) {
     const envName = value.slice(2, -1);
     const resolved = process.env[envName];
@@ -435,12 +437,12 @@ function optionalConfigBooleanField(
 // Config path resolution
 // ------------------------------------------------------------------
 
-/** Default home directory for LongerAgent configuration. */
+/** Default home directory for Vigil configuration. */
 export interface ResolvedPaths {
   templatesPath: string | null;
   promptsPath: string | null;
   skillsPath: string | null;
-  homeDir: string;                // ~/.longeragent/
+  homeDir: string;                // ~/.vigil/
 }
 
 /**
@@ -448,13 +450,13 @@ export interface ResolvedPaths {
  *
  * Discovery chain (highest priority first):
  *   1. CLI flag (--templates)
- *   2. ~/.longeragent/
+ *   2. ~/.vigil/
  *   3. Current working directory
  */
 export function resolveAssetPaths(opts?: {
   templatesFlag?: string;
 }): ResolvedPaths {
-  const home = getLongerAgentHomeDir();
+  const home = getVigilHomeDir();
 
   // --- Templates ---
   let templatesPath: string | null = null;
@@ -589,6 +591,12 @@ export class Config {
       ) {
         return "oauth:openai-codex";
       }
+      if (
+        providerId === "copilot"
+        && (source === "_COPILOT_OAUTH" || source === "oauth:copilot")
+      ) {
+        return "oauth:copilot";
+      }
       if (source.startsWith("${") && source.endsWith("}")) {
         return source;
       }
@@ -611,7 +619,7 @@ export class Config {
       }
     }
 
-    // Managed cloud providers: resolve directly from fixed LongerAgent env slots.
+    // Managed cloud providers: resolve directly from fixed Vigil env slots.
     for (const spec of MANAGED_PROVIDER_CREDENTIAL_SPECS) {
       const raw = process.env[spec.internalEnvVar];
       if (typeof raw !== "string" || raw.trim() === "") continue;
@@ -657,10 +665,25 @@ export class Config {
           throw new Error(
             `Missing OAuth token for model config '${name}' (${provider}/${modelName}): ` +
             "no OpenAI OAuth credentials stored.\n" +
-            "Run 'longeragent oauth' to log in with your ChatGPT account.",
+            "Run 'vigil oauth' to log in with your ChatGPT account.",
           );
         }
         return token;
+      }
+      if (apiKeyRaw === "oauth:copilot") {
+        // CopilotProvider ignores this value at runtime (it mints short-lived
+        // tokens via copilotTokenManager). We just need a non-empty string so
+        // downstream SDK construction doesn't fail. Use the stored GitHub OAuth
+        // token for parallelism with the Codex branch.
+        const gh = loadGitHubTokens();
+        if (!gh) {
+          throw new Error(
+            `Missing OAuth token for model config '${name}' (${provider}/${modelName}): ` +
+            "no GitHub Copilot credentials stored.\n" +
+            "Run 'vigil oauth' to log in with your GitHub account.",
+          );
+        }
+        return gh.access_token;
       }
       if (!apiKeyEnv) return apiKeyRaw;
       const fromEnv = process.env[apiKeyEnv];
@@ -670,7 +693,7 @@ export class Config {
       throw new Error(
         `Missing API key for model config '${name}' (${provider}/${modelName}): ` +
         `environment variable '${apiKeyEnv}' is not set.\n` +
-        "Run 'longeragent init' to configure API keys, or export that variable and retry.",
+        "Run 'vigil init' to configure API keys, or export that variable and retry.",
       );
     })();
 

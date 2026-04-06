@@ -2,7 +2,7 @@
 
 import React from "react";
 
-import { RGBA } from "../../forked/core/lib/RGBA.js";
+import { RGBA } from "@opentui/core";
 import type { PresentationEntry } from "../../presentation/types.js";
 import { THINKING_COLOR } from "../../presentation/colors.js";
 import {
@@ -28,7 +28,7 @@ const LINE_PREFIX = "  ";
 
 function ThinkingEntryInner(
   { entry, colors, onEntryClick }: ThinkingEntryProps,
-): React.ReactElement {
+): React.ReactNode {
   const active = entry.state === "active";
   const spinner = useSpinner(THINKING_SPINNER_FRAMES, THINKING_SPINNER_INTERVAL, active);
   const shimmer = useShimmer("Thinking", thinkingBaseColor, active);

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { CodeRenderable } from "./Code.js"
 import { SyntaxStyle } from "../syntax-style.js"

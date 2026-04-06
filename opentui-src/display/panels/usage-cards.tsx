@@ -1,8 +1,11 @@
 /** @jsxImportSource @opentui/react */
 
 import React from "react";
+import { createTextAttributes } from "@opentui/core";
 
 import { formatResetRemaining, type UsageSnapshot } from "../../../src/provider-usage.js";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 import {
   readOAuthAccessToken,
   getTokenExpiry,
@@ -26,7 +29,7 @@ export function ContextUsageCard(
     cacheReadTokens?: number;
     theme: DisplayTheme;
   },
-): React.ReactElement {
+): React.ReactNode {
   const percentText = formatUsagePercent(contextTokens, contextLimit);
   const barWidth = 20;
   const limit = contextLimit && contextLimit > 0 ? contextLimit : 1;
@@ -41,7 +44,7 @@ export function ContextUsageCard(
 
   return (
     <box flexDirection="column" width="100%" gap={0}>
-      <text fg={theme.colors.dim} bold content="CONTEXT" />
+      <text fg={theme.colors.dim} attributes={ATTRS_BOLD} content="CONTEXT" />
       <box flexDirection="row">
         {filledBlocks > 0 ? <text fg={barColor} content={"━".repeat(filledBlocks)} /> : null}
         {emptyBlocks > 0 ? <text fg={theme.colors.border} content={"─".repeat(emptyBlocks)} /> : null}
@@ -66,7 +69,7 @@ export function CodexUsageCard(
     snapshot: UsageSnapshot | null;
     theme: DisplayTheme;
   },
-): React.ReactElement | null {
+): React.ReactNode {
   if (!snapshot || snapshot.windows.length === 0 || snapshot.error) return null;
 
   const now = Date.now();
@@ -75,7 +78,7 @@ export function CodexUsageCard(
 
   return (
     <box flexDirection="column" width="100%" gap={0}>
-      <text fg={theme.colors.dim} bold content="CODEX USAGE" />
+      <text fg={theme.colors.dim} attributes={ATTRS_BOLD} content="CODEX USAGE" />
       {snapshot.windows.map((window, index) => {
         const pctStr = window.remainPercent.toFixed(0).padStart(3);
         const reset = formatResetRemaining(window.resetAt, now);
@@ -84,7 +87,7 @@ export function CodexUsageCard(
           <text
             key={`codex-window-${index}`}
             fg={theme.colors.muted}
-            content={`${window.label.padEnd(3)} ${pctStr}% left${resetSuffix}`}
+            content={`${window.label.padEnd(3)}: ${pctStr}% left${resetSuffix}`}
           />
         );
       })}

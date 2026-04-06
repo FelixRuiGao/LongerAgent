@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { CliRenderer, BoxRenderable, TextRenderable, createCliRenderer, type KeyEvent } from "../index.js"
 import { setupCommonDemoKeys } from "./lib/standalone-keys.js"
 

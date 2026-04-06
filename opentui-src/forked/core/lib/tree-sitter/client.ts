@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { EventEmitter } from "events"
 import { createDebounce, clearDebounceScope, DebounceController } from "../debounce.js"
 import { ProcessQueue } from "../queue.js"

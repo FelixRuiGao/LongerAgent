@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { toArrayBuffer, type Pointer } from "bun:ffi"
 import { resolveRenderLib } from "./zig"
 import { SpanInfoStruct } from "./zig-structs"

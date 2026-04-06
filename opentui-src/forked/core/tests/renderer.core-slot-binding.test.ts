@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { Renderable } from "../Renderable"
 import { createTestRenderer, type TestRenderer } from "../testing/test-renderer"

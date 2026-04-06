@@ -335,7 +335,12 @@ describe("resume command", () => {
     );
     expect(store.sessionDir).toBe("");
     expect(store.restoreBindingState).toHaveBeenCalledTimes(1);
-    expect(setStore).not.toHaveBeenCalled();
+    // setStore is intentionally called BEFORE prepareRestoreFromLog (see
+    // src/commands.ts) so that _childSessionDir() resolves agent paths from
+    // the target session's artifacts during restore. On failure we only roll
+    // back the store's binding state (sessionDir → ""); the session.setStore
+    // call itself is not reverted because the store object is unchanged.
+    expect(setStore).toHaveBeenCalledTimes(1);
 
     rmSync(tmpDir, { recursive: true, force: true });
   });

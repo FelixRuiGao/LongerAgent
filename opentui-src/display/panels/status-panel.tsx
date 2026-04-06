@@ -1,9 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
 import React from "react";
-import { StyledText, RGBA } from "@opentui/core";
-import { createTextAttributes } from "../../forked/core/utils.js";
-import type { TextChunk } from "../../forked/core/text-buffer.js";
+import { StyledText, RGBA, createTextAttributes, type TextChunk } from "@opentui/core";
 
 import type { PlanCheckpoint } from "../../../src/plan-state.js";
 import type { ChildSessionSnapshot } from "../../../src/session-tree-types.js";
@@ -65,7 +63,7 @@ function lifecycleLabel(lifecycle: string): string {
   }
 }
 
-function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSessionSnapshot[]; colors: ConversationPalette; onAgentClick?: (agentId: string) => void }): React.ReactElement {
+function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSessionSnapshot[]; colors: ConversationPalette; onAgentClick?: (agentId: string) => void }): React.ReactNode {
   return (
     <box flexDirection="column" gap={0} flexGrow={1}>
       {agents.map((agent) => {
@@ -86,12 +84,12 @@ function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSes
             <box flexDirection="column" width="100%">
               <box flexDirection="row" width="100%">
                 <text fg={statusColor} content={`${icon} `} flexShrink={0} />
-                <text fg={nameColor} content={agent.id} flexShrink={1} wrapMode="truncate" />
+                <text fg={nameColor} content={agent.id} flexShrink={1} truncate />
                 <text fg={statusColor} content={` [${label}]`} flexShrink={0} />
                 <box flexGrow={1} />
               </box>
               <box flexDirection="row" width="100%" paddingLeft={2}>
-                <text fg={descColor} content={statsLine} wrapMode="truncate" />
+                <text fg={descColor} content={statsLine} truncate />
               </box>
             </box>
           </SelectableRow>
@@ -123,7 +121,7 @@ function buildCheckpointStyledText(cp: PlanCheckpoint): StyledText {
   }
 }
 
-function TodoRows({ todos }: { todos: readonly PlanCheckpoint[] }): React.ReactElement {
+function TodoRows({ todos }: { todos: readonly PlanCheckpoint[] }): React.ReactNode {
   const nonDone = todos.filter((cp) => cp.status !== "done");
   const done = todos.filter((cp) => cp.status === "done");
   const sorted = [...nonDone, ...done];
@@ -134,7 +132,7 @@ function TodoRows({ todos }: { todos: readonly PlanCheckpoint[] }): React.ReactE
         <text
           key={i}
           content={buildCheckpointStyledText(cp)}
-          wrapMode="truncate"
+          truncate
         />
       ))}
     </box>
@@ -150,7 +148,7 @@ function StatusPanelInner({
   showTodos,
   colors,
   onAgentClick,
-}: StatusPanelProps): React.ReactElement | null {
+}: StatusPanelProps): React.ReactNode {
   const openTodos = todos.filter((cp) => cp.status !== "done");
   const doneCount = todos.length - openTodos.length;
   const runningCount = agents.filter((a) => a.lifecycle === "running").length;

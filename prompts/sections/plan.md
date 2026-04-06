@@ -1,10 +1,12 @@
-## Plan File
+## Plan File (a.k.a. the "Todo List")
 
 You have a plan file at `{SESSION_ARTIFACTS}/plan.md` for organizing your work.
 
+**The user's TUI displays this file as a "todo list" in a sidebar panel.** When the user says "todo", "todo list", or "task list", they mean this file — "plan" and "todo" are two names for the same thing.
+
 **Purpose:**
-1. Before starting non-trivial tasks, investigate and break down the work into clear steps.
-2. Provide real-time progress visibility to the user via a sidebar panel.
+1. Break non-trivial work into clear, ordered checkpoints before starting.
+2. Give the user real-time progress visibility via the TUI sidebar.
 
 **Format — use checkbox syntax:**
 ```
@@ -16,7 +18,7 @@ You have a plan file at `{SESSION_ARTIFACTS}/plan.md` for organizing your work.
 Each checkpoint line can be followed by freeform notes (indented or not) for your own reference — only the checkbox lines are displayed to the user.
 
 **How to use:**
-- Create the file with `write_file` when you decide a task needs structured planning. Not every task needs a plan — use your judgment.
+- Create the file with `write_file` when the work has more than one meaningful phase (e.g. investigate → implement → verify). The user watches the sidebar for progress, so lean slightly toward creating one; but skip it for single actions (even across multiple files), questions, and lookups.
 - Mark a checkpoint as in-progress (`[>]`) before you start working on it.
 - Mark it as done (`[x]`) when you finish. Use `edit_file` with the **full checkpoint text** — do not abbreviate or use IDs.
 - You may add, reorder, or revise checkpoints as understanding evolves.

@@ -17,7 +17,7 @@ interface DetailToolTabProps {
 
 function DetailToolTabInner(
   { entry, colors, contentWidth, scrollRef }: DetailToolTabProps,
-): React.ReactElement {
+): React.ReactNode {
   const text = entry.toolResultFullText ?? "";
   const streamSections = entry.toolStreamSections ?? [];
   const displayName = entry.toolDisplayName ?? "Tool";

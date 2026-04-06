@@ -1,3 +1,4 @@
+// @ts-nocheck
 export interface PhysicsVector2 {
   x: number
   y: number

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { OptimizedBuffer } from "../buffer"
 import { parseColor, RGBA, type ColorInput } from "../lib/RGBA"
 import { Renderable, type RenderableOptions } from "../Renderable"

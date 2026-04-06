@@ -6,6 +6,12 @@ import type {
 } from "../../src/ask.js";
 import type { PromptChoice } from "../../src/provider-credential-flow.js";
 import type { OAuthTokens } from "../../src/auth/openai-oauth.js";
+import type { GitHubOAuthTokens } from "../../src/auth/github-copilot-oauth.js";
+
+export type OAuthProviderId = "codex" | "copilot";
+
+/** Union of token types the overlay can deliver on success. */
+export type AnyOAuthTokens = OAuthTokens | GitHubOAuthTokens;
 
 export type ActivityPhase =
   | "idle"
@@ -46,9 +52,11 @@ export type OAuthOverlayPhase =
   | { step: "error"; message: string };
 
 export interface OAuthOverlayState {
+  /** Which service this overlay is logging in to. */
+  provider: OAuthProviderId;
   phase: OAuthOverlayPhase;
   selected: number;
-  resolve: (tokens: OAuthTokens | null) => void;
+  resolve: (tokens: AnyOAuthTokens | null) => void;
 }
 
 export interface QuestionAnswerState {

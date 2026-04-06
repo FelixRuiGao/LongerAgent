@@ -4,7 +4,7 @@ describe("CLI startup", () => {
   afterEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
-    delete process.env["LONGERAGENT_TEST_KEY"];
+    delete process.env["VIGIL_TEST_KEY"];
   });
 
   it("loads dotenv before dispatching the init subcommand", async () => {
@@ -13,19 +13,19 @@ describe("CLI startup", () => {
     vi.doMock("../src/dotenv.js", () => ({
       loadDotenv: () => {
         events.push("dotenv");
-        process.env["LONGERAGENT_TEST_KEY"] = "loaded";
+        process.env["VIGIL_TEST_KEY"] = "loaded";
       },
     }));
 
     vi.doMock("../src/init-wizard.js", () => ({
       runInitWizard: async () => {
-        events.push(`init:${process.env["LONGERAGENT_TEST_KEY"] ?? "missing"}`);
-        return { homeDir: "/tmp/longeragent-test" };
+        events.push(`init:${process.env["VIGIL_TEST_KEY"] ?? "missing"}`);
+        return { homeDir: "/tmp/vigil-test" };
       },
     }));
 
     const { main } = await import("../src/cli.js");
-    await main(["node", "longeragent", "init"]);
+    await main(["node", "vigil", "init"]);
 
     expect(events).toEqual(["dotenv", "init:loaded"]);
   });

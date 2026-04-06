@@ -1,9 +1,12 @@
 /** @jsxImportSource @opentui/react */
 
 import React from "react";
+import { createTextAttributes } from "@opentui/core";
 
 import type { ConversationPalette } from "../components/conversation-types.js";
 import { shortenPath } from "../display/utils/format.js";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 
 export type SidebarMode = "open" | "close" | "auto";
 
@@ -30,7 +33,7 @@ function RightSidebarInner({
   planSection,
   contextSection,
   codexSection,
-}: RightSidebarProps): React.ReactElement | null {
+}: RightSidebarProps): React.ReactNode {
   if (!visible) return null;
 
   return (
@@ -78,13 +81,13 @@ function RightSidebarInner({
         <>
           <box height={1} />
           <box flexDirection="column" width="100%">
-            <text fg={colors.dim} bold content="SHELLS" />
+            <text fg={colors.dim} attributes={ATTRS_BOLD} content="SHELLS" />
             {activeShells.map((shell) => (
               <text
                 key={shell.id}
                 fg={shell.status === "running" ? colors.green : colors.muted}
                 content={`${shell.status === "running" ? "●" : "○"} ${shell.command.slice(0, width - 6)}`}
-                wrapMode="truncate"
+                truncate
               />
             ))}
           </box>
@@ -93,7 +96,7 @@ function RightSidebarInner({
 
       {/* Project path — pinned to bottom */}
       <box flexDirection="column" width="100%" flexGrow={1} justifyContent="flex-end">
-        <text fg={colors.muted} content={shortenPath(cwd)} wrapMode="truncate" />
+        <text fg={colors.muted} content={shortenPath(cwd)} truncate />
       </box>
     </box>
   );

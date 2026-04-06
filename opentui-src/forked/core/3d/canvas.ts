@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { GPUCanvasContextMock } from "bun-webgpu"
 import { RGBA } from "../lib/RGBA.js"
 import { SuperSampleType } from "./WGPURenderer.js"

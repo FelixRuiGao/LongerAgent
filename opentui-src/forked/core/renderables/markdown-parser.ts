@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Lexer, type MarkedToken } from "marked"
 
 export interface ParseState {

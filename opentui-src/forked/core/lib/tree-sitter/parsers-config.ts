@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * This file contains the configuration for the defaulttree-sitter parsers.
  * It is used by ./assets/update.ts to generate the default-parsers.ts file.

@@ -13,7 +13,7 @@ interface TurnSummaryEntryProps {
 
 function TurnSummaryEntryInner(
   { entry, colors, contentWidth }: TurnSummaryEntryProps,
-): React.ReactElement {
+): React.ReactNode {
   const text = entry.turnSummaryText ?? "";
   const interrupted = entry.turnSummaryInterrupted ?? false;
   const hints = entry.turnSummaryHints ?? [];

@@ -36,7 +36,7 @@ function TabButton({
   colors: DisplayThemeColorTokens;
   onSelect: () => void;
   onClose: () => void;
-}): React.ReactElement {
+}): React.ReactNode {
   const [hovered, setHovered] = useState(false);
   const label = formatTabLabel(tab, maxWidth);
 
@@ -78,7 +78,7 @@ function HorizontalTabBarInner({
   onCloseTab,
   colors,
   maxTabWidth = DEFAULT_MAX_TAB_WIDTH,
-}: HorizontalTabBarProps): React.ReactElement {
+}: HorizontalTabBarProps): React.ReactNode {
   return (
     <box flexDirection="row" width="100%" gap={1} flexShrink={0}>
       {tabs.map((tab) => (

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Buffer } from "node:buffer"
 import type { CliRenderer } from "../renderer.js"
 import { ANSI } from "../ansi.js"

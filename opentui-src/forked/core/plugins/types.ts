@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { CliRenderer } from "../renderer"
 
 export type PluginContext = object

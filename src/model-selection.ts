@@ -1,4 +1,5 @@
 import { hasOAuthTokens } from "./auth/openai-oauth.js";
+import { hasGitHubTokens } from "./auth/github-copilot-oauth.js";
 import {
   PROVIDER_PRESETS,
   buildProviderPresetRawConfig,
@@ -111,6 +112,14 @@ function getProviderKeySource(
     }
   }
 
+  if (provider === "copilot") {
+    try {
+      if (hasGitHubTokens()) return "oauth:copilot";
+    } catch {
+      // Ignore auth lookup failures here.
+    }
+  }
+
   return undefined;
 }
 
@@ -195,7 +204,13 @@ export function resolveModelSelection(
       if (parsed.provider === "openai-codex") {
         throw new Error(
           "Not logged in to OpenAI (ChatGPT).\n" +
-          "Run 'longeragent oauth' to log in with your ChatGPT account.",
+          "Run 'vigil oauth' to log in with your ChatGPT account.",
+        );
+      }
+      if (parsed.provider === "copilot") {
+        throw new Error(
+          "Not logged in to GitHub Copilot.\n" +
+          "Run 'vigil oauth' to log in with your GitHub account.",
         );
       }
       const preset = findProviderPreset(parsed.provider);
@@ -205,7 +220,7 @@ export function resolveModelSelection(
       throw new Error(
         `Missing API key for provider '${parsed.provider}'${preset ? ` (${preset.name})` : ""}.` +
         envHint +
-        `\nOr run 'longeragent init' to configure.` +
+        `\nOr run 'vigil init' to configure.` +
         `\nTip: select ${parsed.provider}:${parsed.model} in /model to import or paste a key.`,
       );
     }

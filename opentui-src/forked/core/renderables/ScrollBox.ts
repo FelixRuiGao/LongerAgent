@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { type KeyEvent } from "../lib/index.js"
 import { getObjectsInViewport } from "../lib/objects-in-viewport.js"
 import { LinearScrollAccel, MacOSScrollAccel, type ScrollAcceleration } from "../lib/scroll-acceleration.js"

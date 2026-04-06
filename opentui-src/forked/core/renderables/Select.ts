@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { OptimizedBuffer } from "../buffer.js"
 import { fonts, measureText, renderFontToFrameBuffer } from "../lib/ascii.font.js"
 import type { KeyEvent } from "../lib/KeyHandler.js"

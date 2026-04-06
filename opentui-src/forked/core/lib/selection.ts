@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Renderable, type ViewportBounds } from "../index.js"
 import { coordinateToCharacterIndex, fonts } from "./ascii.font.js"
 

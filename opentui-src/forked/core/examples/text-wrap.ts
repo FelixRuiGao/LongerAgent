@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 /**
  * Text wrapping example
  * Demonstrates automatic text wrapping when the wrap option is enabled

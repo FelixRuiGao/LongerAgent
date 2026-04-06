@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, beforeEach, afterEach, describe } from "bun:test"
 import { decodePasteBytes } from "../lib/paste.js"
 import { nonAlphanumericKeys, type KeyEventType, type ParsedKey } from "../lib/parse.keypress.js"

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Parser, Query, Tree, Language } from "web-tree-sitter"
 import type { Edit, QueryCapture, Range } from "web-tree-sitter"
 import { mkdir } from "fs/promises"

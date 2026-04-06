@@ -43,7 +43,7 @@ export class OpenAIChatProvider extends BaseProvider {
   }
 
   private _resolveToolArgsMode(): ToolArgsMode {
-    const raw = process.env["LONGERAGENT_TOOL_ARGS_MODE"]?.trim().toLowerCase();
+    const raw = process.env["VIGIL_TOOL_ARGS_MODE"]?.trim().toLowerCase();
     if (raw === "legacy" || raw === "auto") {
       return raw;
     }

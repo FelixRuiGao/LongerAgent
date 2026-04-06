@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, it, beforeEach, afterEach } from "bun:test"
 import { TextRenderable, type TextOptions } from "./Text.js"
 import { TextNodeRenderable } from "./TextNode.js"

@@ -1,4 +1,6 @@
 import { hasOAuthTokens } from "./auth/openai-oauth.js";
+import { hasGitHubTokens } from "./auth/github-copilot-oauth.js";
+import { isModelVisibleForCurrentPlan } from "./providers/copilot-models-cache.js";
 import {
   PROVIDER_PRESETS,
   findProviderPreset,
@@ -63,7 +65,13 @@ function modelCredentialInfo(providerId: string, providerHasKey: Map<string, boo
   if (providerId === "openai-codex") {
     return {
       credentialState: "oauth_missing",
-      credentialHint: "not logged in: run longeragent oauth",
+      credentialHint: "not logged in: run vigil oauth",
+    };
+  }
+  if (providerId === "copilot") {
+    return {
+      credentialState: "oauth_missing",
+      credentialHint: "not logged in: run vigil oauth",
     };
   }
   if (isManagedProvider(providerId)) {
@@ -74,7 +82,7 @@ function modelCredentialInfo(providerId: string, providerHasKey: Map<string, boo
   }
   return {
     credentialState: "missing",
-    credentialHint: "key missing: run longeragent init",
+    credentialHint: "key missing: run vigil init",
   };
 }
 
@@ -178,6 +186,11 @@ export function buildModelPickerTree(ctx: ModelPickerTreeContext): ModelPickerTr
   } catch {
     // Ignore auth lookup failures here.
   }
+  try {
+    if (hasGitHubTokens()) providerHasKey.set("copilot", true);
+  } catch {
+    // Ignore auth lookup failures here.
+  }
   if (currentProvider && session.primaryAgent?.modelConfig?.apiKey) {
     providerHasKey.set(currentProvider, true);
   }
@@ -188,7 +201,13 @@ export function buildModelPickerTree(ctx: ModelPickerTreeContext): ModelPickerTr
 
   const buildModelChildren = (providerId: string): ModelPickerTreeNode[] => {
     const providerMap = byProvider.get(providerId) ?? new Map();
-    const items = Array.from(providerMap.entries())
+    const filteredEntries =
+      providerId === "copilot"
+        ? Array.from(providerMap.entries()).filter(([, item]) =>
+            isModelVisibleForCurrentPlan(item.modelId),
+          )
+        : Array.from(providerMap.entries());
+    const items = filteredEntries
       .map(([selectionKey, item]) => {
         const descriptor = describeModel({
           providerId,

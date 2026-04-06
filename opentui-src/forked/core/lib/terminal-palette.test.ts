@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect } from "bun:test"
 import { TerminalPalette } from "./terminal-palette.js"
 import { EventEmitter } from "events"

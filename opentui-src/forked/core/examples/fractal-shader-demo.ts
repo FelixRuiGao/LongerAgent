@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 
 import { BoxRenderable, CliRenderer, createCliRenderer, RGBA, TextRenderable, type KeyEvent } from "../index.js"
 import { setupCommonDemoKeys } from "./lib/standalone-keys.js"

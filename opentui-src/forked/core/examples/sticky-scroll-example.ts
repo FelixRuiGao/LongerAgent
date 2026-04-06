@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { BoxRenderable, type CliRenderer, createCliRenderer, TextRenderable, t, fg, bold } from "../index.js"
 import { ScrollBoxRenderable } from "../renderables/ScrollBox.js"
 import { setupCommonDemoKeys } from "./lib/standalone-keys.js"

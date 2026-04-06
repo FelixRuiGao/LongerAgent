@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { OrthographicCamera, PerspectiveCamera, Scene } from "three"
 
 import { OptimizedBuffer } from "../buffer.js"

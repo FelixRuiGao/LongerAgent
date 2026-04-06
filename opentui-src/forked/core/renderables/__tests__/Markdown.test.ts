@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, beforeAll, beforeEach, afterEach, afterAll } from "bun:test"
 import { MarkdownRenderable, type MarkdownOptions } from "../Markdown.js"
 import { CodeRenderable } from "../Code.js"

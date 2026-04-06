@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Copied from https://github.com/enquirer/enquirer/blob/36785f3399a41cd61e9d28d1eb9c2fcd73d69b4c/lib/keypress.js
 import { Buffer } from "node:buffer"
 import { parseKittyKeyboard } from "./parse.keypress-kitty.js"

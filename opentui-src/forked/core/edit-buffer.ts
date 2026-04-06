@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { resolveRenderLib, type LogicalCursor, type RenderLib } from "./zig.js"
 import { type Pointer } from "bun:ffi"
 import { type WidthMethod, type Highlight } from "./types.js"

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, test, expect, beforeEach } from "bun:test"
 import { MouseParser, type RawMouseEvent } from "./parse.mouse"
 

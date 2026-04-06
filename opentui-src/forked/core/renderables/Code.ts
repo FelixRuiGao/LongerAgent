@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { type RenderContext } from "../types.js"
 import { StyledText } from "../lib/styled-text.js"
 import { SyntaxStyle } from "../syntax-style.js"

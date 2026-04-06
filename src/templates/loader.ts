@@ -247,7 +247,7 @@ export function loadTemplate(
  * @param config       Global Config instance.
  * @param mcpManager   Optional MCP client manager.
  * @param promptsDirs  Ordered prompts directories (user first, bundled second).
- * @param userRoot     Optional user override templates root (~/.longeragent/agent_templates/).
+ * @param userRoot     Optional user override templates root (~/.vigil/agent_templates/).
  * @returns `{ name: agent }` record.
  */
 export function loadTemplates(

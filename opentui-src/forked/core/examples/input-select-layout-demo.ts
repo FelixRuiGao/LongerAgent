@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { CliRenderer, BoxRenderable, TextRenderable, createCliRenderer, type KeyEvent } from "../index.js"
 import { InputRenderable, InputRenderableEvents } from "../renderables/Input.js"
 import { SelectRenderable, SelectRenderableEvents, type SelectOption } from "../renderables/Select.js"

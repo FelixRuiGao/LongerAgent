@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Renderable, type RenderableOptions, RenderableEvents } from "../../Renderable.js"
 import { OptimizedBuffer } from "../../buffer.js"
 import { BoxRenderable } from "../../renderables/index.js"

@@ -2,8 +2,9 @@
 
 import React, { useMemo } from "react";
 
-import { StyledText, RGBA } from "@opentui/core";
-import type { TextChunk } from "../../forked/core/text-buffer.js";
+import { StyledText, RGBA, createTextAttributes, type TextChunk } from "@opentui/core";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../conversation-types.js";
 
@@ -37,7 +38,7 @@ interface UserEntryProps {
 
 function UserEntryInner(
   { entry, colors }: UserEntryProps,
-): React.ReactElement {
+): React.ReactNode {
   const text = entry.userText ?? "";
   const queued = entry.userQueued ?? false;
   const hasTokens = IMAGE_TOKEN_PATTERN.test(text);
@@ -54,7 +55,7 @@ function UserEntryInner(
       <box backgroundColor={colors.userBg} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
         {styledContent
           ? <text content={styledContent} wrapMode="word" width="100%" />
-          : <text fg={colors.text} bold content={text} wrapMode="word" width="100%" />
+          : <text fg={colors.text} attributes={ATTRS_BOLD} content={text} wrapMode="word" width="100%" />
         }
         {queued ? <text fg={colors.orange} content=" [queued]" /> : null}
       </box>

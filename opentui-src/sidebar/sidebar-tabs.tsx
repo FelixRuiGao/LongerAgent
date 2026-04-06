@@ -30,7 +30,7 @@ interface SidebarTabsProps {
 
 function SidebarTabsInner(
   { tabs, activeTabId, onSelect, onClose, colors, expanded }: SidebarTabsProps,
-): React.ReactElement {
+): React.ReactNode {
   return (
     <box flexDirection="column" width="100%">
       {tabs.map((tab) => {

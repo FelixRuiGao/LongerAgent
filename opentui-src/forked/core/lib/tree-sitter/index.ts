@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { singleton } from "../singleton.js"
 import { TreeSitterClient } from "./client.js"
 import type { TreeSitterClientOptions } from "./types.js"

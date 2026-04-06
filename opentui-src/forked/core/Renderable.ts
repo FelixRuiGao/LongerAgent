@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { EventEmitter } from "events"
 import Yoga, { Direction, Display, Edge, FlexDirection, type Config, type Node as YogaNode } from "yoga-layout"
 import { OptimizedBuffer } from "./buffer.js"

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { KeyEvent, PasteEvent } from "../lib/KeyHandler.js"
 import { decodePasteBytes, stripAnsiSequences } from "../lib/paste.js"
 import { RGBA, parseColor, type ColorInput } from "../lib/RGBA.js"

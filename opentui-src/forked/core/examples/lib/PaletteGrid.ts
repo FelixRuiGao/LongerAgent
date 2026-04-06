@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { RenderableOptions } from "../../Renderable.js"
 import { RGBA } from "../../lib/RGBA.js"
 import { FrameBufferRenderable, type FrameBufferOptions } from "../../renderables/FrameBuffer.js"

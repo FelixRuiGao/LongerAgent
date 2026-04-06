@@ -118,6 +118,47 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
         config: { store: false, supports_web_search: false } },
     ],
   },
+  // ── GitHub Copilot (device flow) ──
+  // Single top-level provider dispatching internally to /v1/messages (Claude via
+  // AWS Bedrock) or /responses (GPT) depending on model id. Auth via GitHub
+  // device flow; token refresh managed by CopilotProvider + copilotTokenManager.
+  //
+  // Copilot's gateway rejects server-side web search on both paths (Anthropic
+  // `web_search_20250305` and OpenAI `web_search_preview`), and its /responses
+  // endpoint is stateless (`store: true` is rejected) — the same shape as the
+  // Codex backend, so reasoning round-trip requires `include: reasoning.encrypted_content`.
+  {
+    id: "copilot", name: "GitHub Copilot", envVar: "_COPILOT_OAUTH",
+    models: [
+      { key: "claude-opus-4.6", id: "claude-opus-4.6",
+        label: "Claude Opus 4.6", optionNote: "3× premium",
+        config: { supports_web_search: false } },
+      { key: "claude-opus-4.6-fast", id: "claude-opus-4.6-fast",
+        label: "Claude Opus 4.6 Fast", optionNote: "30× premium",
+        config: { supports_web_search: false } },
+      { key: "claude-sonnet-4.6", id: "claude-sonnet-4.6",
+        label: "Claude Sonnet 4.6", optionNote: "1× premium",
+        config: { supports_web_search: false } },
+      { key: "gpt-5.2", id: "gpt-5.2",
+        label: "GPT-5.2", optionNote: "1× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.2-codex", id: "gpt-5.2-codex",
+        label: "GPT-5.2 Codex", optionNote: "1× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.3-codex", id: "gpt-5.3-codex",
+        label: "GPT-5.3 Codex", optionNote: "1× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.4", id: "gpt-5.4",
+        label: "GPT-5.4", optionNote: "1× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.4-mini", id: "gpt-5.4-mini",
+        label: "GPT-5.4 Mini", optionNote: "0.33× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5-mini", id: "gpt-5-mini",
+        label: "GPT-5 Mini", optionNote: "free",
+        config: { store: false, supports_web_search: false } },
+    ],
+  },
   // ── Moonshot (Kimi) — three-level: group → region/plan → model ──
   {
     id: "kimi", name: "Moonshot (Kimi) Global", envVar: getManagedCredentialEnvVar("kimi")!,

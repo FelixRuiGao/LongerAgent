@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { singleton } from "./singleton.ts"
 
 /**

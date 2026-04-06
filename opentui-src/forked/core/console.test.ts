@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, describe, mock, beforeEach } from "bun:test"
 import { TerminalConsole, ConsolePosition } from "./console.js"
 import { MouseEvent } from "./renderer.js"

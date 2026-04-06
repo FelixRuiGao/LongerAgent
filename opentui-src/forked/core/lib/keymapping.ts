@@ -1,3 +1,4 @@
+// @ts-nocheck
 export interface KeyBinding<Action extends string = string> {
   name: string
   ctrl?: boolean

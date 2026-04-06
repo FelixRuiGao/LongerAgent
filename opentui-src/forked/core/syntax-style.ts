@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { RGBA, parseColor, type ColorInput } from "./lib/RGBA.js"
 import { resolveRenderLib, type RenderLib } from "./zig.js"
 import { type Pointer } from "bun:ffi"

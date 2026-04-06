@@ -133,8 +133,8 @@ function countMessageTokens(messages: Array<Record<string, unknown>>): number {
 
 describe("session storage lifecycle", () => {
   it("round-trips global TUI preferences through SessionStore", () => {
-    const baseDir = makeTempDir("longeragent-prefs-base-");
-    const projectRoot = makeTempDir("longeragent-prefs-project-");
+    const baseDir = makeTempDir("vigil-prefs-base-");
+    const projectRoot = makeTempDir("vigil-prefs-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       store.saveGlobalPreferences({
@@ -162,8 +162,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("constructs with a store that has no active session directory", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -180,8 +180,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("creates session storage on the first turn and hydrates system paths", async () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -203,8 +203,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("returns /new-style state to unbound storage and recreates on next turn", async () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -240,8 +240,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("uses global preference defaults when resetting for /new", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -265,8 +265,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("restores cache-read token counters from log", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -300,8 +300,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("restores model config before thinking/cache state from log", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store, {
@@ -358,8 +358,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("reconstructs runtime model configs from persisted model identity", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store, {
@@ -422,8 +422,8 @@ describe("session storage lifecycle", () => {
 
   it("estimates initial input tokens for a fresh session before the first user message", () => {
     const previousHome = process.env["HOME"];
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       process.env["HOME"] = baseDir;
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
@@ -446,8 +446,8 @@ describe("session storage lifecycle", () => {
 
   it("includes tool definitions in the initial input token estimate", async () => {
     const previousHome = process.env["HOME"];
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       process.env["HOME"] = baseDir;
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
@@ -482,8 +482,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("fails restore without mutating the current session when model config is invalid", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
@@ -520,8 +520,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("does not mutate the live session when staged restore preflight fails", () => {
-    const baseDir = makeTempDir("longeragent-restore-preflight-base-");
-    const projectRoot = makeTempDir("longeragent-restore-preflight-project-");
+    const baseDir = makeTempDir("vigil-restore-preflight-base-");
+    const projectRoot = makeTempDir("vigil-restore-preflight-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
@@ -566,8 +566,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("restores the latest tool summary from tool results instead of bare tool names", () => {
-    const baseDir = makeTempDir("longeragent-restore-summary-base-");
-    const projectRoot = makeTempDir("longeragent-restore-summary-project-");
+    const baseDir = makeTempDir("vigil-restore-summary-base-");
+    const projectRoot = makeTempDir("vigil-restore-summary-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       store.createSession();
@@ -622,8 +622,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("keeps the first user message as persisted session summary after summarize", () => {
-    const baseDir = makeTempDir("longeragent-summary-base-");
-    const projectRoot = makeTempDir("longeragent-summary-project-");
+    const baseDir = makeTempDir("vigil-summary-base-");
+    const projectRoot = makeTempDir("vigil-summary-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
@@ -649,8 +649,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("requestTurnInterrupt captures snapshot, kills active workers, and drops unconsumed state", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -770,8 +770,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("requestTurnInterrupt rejects interruption during compact phase", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -792,8 +792,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("interruption cleanup drops incomplete reasoning, marks partial text, and closes pending tool calls", () => {
-    const baseDir = makeTempDir("longeragent-lifecycle-base-");
-    const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -855,7 +855,7 @@ describe("session storage lifecycle", () => {
       expect(tuiEntries).toEqual([
         { kind: "tool_call", text: "edit_file src/a.ts", id: "tc-001", startedAt: expect.any(Number), elapsedMs: expect.any(Number), meta: { toolName: "edit_file", toolArgs: { path: "src/a.ts" } } },
         { kind: "assistant", text: "partial", id: "as-001" },
-        { kind: "tool_result", text: "[Interrupted] Tool was not executed.", id: expect.any(String), dim: true, meta: { toolName: "edit_file", isError: false } },
+        { kind: "tool_result", text: "[Interrupted] Tool was not executed.", fullText: "[Interrupted] Tool was not executed.", id: expect.any(String), dim: true, meta: { toolName: "edit_file", isError: false } },
       ]);
 
       const apiMessages = projectToApiMessages(log);
@@ -871,8 +871,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("formats truncated sub-agent output with line-aware resume guidance", async () => {
-      const baseDir = makeTempDir("longeragent-lifecycle-base-");
-      const projectRoot = makeTempDir("longeragent-lifecycle-project-");
+      const baseDir = makeTempDir("vigil-lifecycle-base-");
+      const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);

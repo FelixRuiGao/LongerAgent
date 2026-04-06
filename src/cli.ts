@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * CLI entry point for LongerAgent.
+ * CLI entry point for Vigil.
  *
  * Usage:
  *
- *   longeragent                       # auto-detect config
- *   longeragent init                  # run initialization wizard
- *   longeragent --templates ./tpls    # explicit templates path
- *   longeragent --verbose             # enable debug logging
+ *   vigil                       # auto-detect config
+ *   vigil init                  # run initialization wizard
+ *   vigil --templates ./tpls    # explicit templates path
+ *   vigil --verbose             # enable debug logging
  */
 
 import { existsSync, realpathSync, statSync } from "node:fs";
@@ -24,7 +24,7 @@ import { loadSkillsMulti } from "./skills/loader.js";
 import { SessionStore, fixStorage } from "./persistence.js";
 import { loadMcpServers } from "./mcp-config.js";
 import { loadDotenv } from "./dotenv.js";
-import { getLongerAgentHomeDir } from "./home-path.js";
+import { getVigilHomeDir } from "./home-path.js";
 import { checkForUpdates } from "./update-check.js";
 import { VERSION } from "./version.js";
 import {
@@ -35,8 +35,7 @@ import {
 import type { PersistedModelSelection } from "./model-selection.js";
 import { applyPersistedModelSelectionToSession } from "./model-restore.js";
 import { hasAnyManagedCredential, isManagedProvider } from "./managed-provider-credentials.js";
-import type { Session as TuiSession } from "./ui/contracts.js";
-import { setAccent } from "./tui/theme.js";
+import { setAccent } from "./accent.js";
 
 // ------------------------------------------------------------------
 // Primary agent resolution
@@ -70,7 +69,7 @@ function identifyPrimaryAgent(
 export async function main(argv: string[] = process.argv): Promise<void> {
   const program = new Command();
   program
-    .name("longeragent")
+    .name("vigil")
     .version(VERSION, "-V, --version", "Output the current version")
     .description("A terminal AI coding agent built for long sessions")
     .option("--templates <path>", "Path to agent_templates directory")
@@ -80,7 +79,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   let ranSubcommand = false;
   program
     .command("init")
-    .description("Initialize LongerAgent configuration")
+    .description("Initialize Vigil configuration")
     .action(async () => {
       ranSubcommand = true;
       const { runInitWizard } = await import("./init-wizard.js");
@@ -88,12 +87,12 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     });
 
   program
-    .command("oauth [action]")
-    .description("Manage OpenAI ChatGPT OAuth login (login/status/logout)")
-    .action(async (action?: string) => {
+    .command("oauth [action] [service]")
+    .description("Manage OAuth login for Codex or Copilot (login/status/logout)")
+    .action(async (action?: string, service?: string) => {
       ranSubcommand = true;
       const { oauthCommand } = await import("./auth/openai-oauth.js");
-      await oauthCommand(action);
+      await oauthCommand(action, service);
     });
 
   program
@@ -124,9 +123,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   // when no subcommand is provided.
   program.action(() => {});
 
-  // Load ~/.longeragent/.env before dispatching any subcommand so `init`
+  // Load ~/.vigil/.env before dispatching any subcommand so `init`
   // can detect previously saved keys and offer the expected reuse flow.
-  loadDotenv(getLongerAgentHomeDir());
+  loadDotenv(getVigilHomeDir());
 
   await program.parseAsync(argv);
 
@@ -183,7 +182,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     } catch {
       console.error(
         "Error: no providers configured.\n" +
-        "  Run 'longeragent init' to set up providers.",
+        "  Run 'vigil init' to set up providers.",
       );
       process.exit(1);
     }
@@ -214,7 +213,23 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       console.warn(
         `Warning: OAuth token refresh failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-      console.warn("Run 'longeragent oauth' to re-authenticate.\n");
+      console.warn("Run 'vigil oauth' to re-authenticate.\n");
+    }
+  }
+
+  // Startup credentials check for any model using GitHub Copilot OAuth.
+  // The GitHub App user token is non-expiring, so there's nothing to refresh
+  // — we just verify that credentials are present and warn the user if not.
+  const copilotEntries = config.listModelEntries().filter(
+    (e) => e.apiKeyRaw === "oauth:copilot",
+  );
+  if (copilotEntries.length > 0) {
+    const { hasGitHubTokens } = await import(
+      "./auth/github-copilot-oauth.js"
+    );
+    if (!hasGitHubTokens()) {
+      console.warn("Warning: GitHub Copilot credentials missing.");
+      console.warn("Run 'vigil oauth' to log in.\n");
     }
   }
 
@@ -318,11 +333,18 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   // Show update notice (if background check found a newer version)
   showUpdateNotice();
 
-  // Launch TUI
-  const { launchTui } = await import("./tui/launch.js");
-  await launchTui(session as unknown as TuiSession, commandRegistry, store, {
-    verbose: opts.verbose,
-  });
+  // Launch TUI (OpenTUI-based). The OpenTUI entry point performs its own
+  // runtime bootstrap via `bootstrapOpenTuiRuntime()`; the session/registry
+  // prepared above is kept to honor CLI-level side effects such as the init
+  // wizard, OAuth token refresh, and accent restoration.
+  void session;
+  void commandRegistry;
+  void store;
+  // Dynamic path to keep opentui-src out of src/'s rootDir typecheck scope.
+  // At runtime, tsx/bun/node resolves this relative to the current file.
+  const opentuiEntry = "../opentui-src/main.js";
+  const mod = (await import(opentuiEntry)) as { launchTui: () => Promise<void> };
+  await mod.launchTui();
 }
 
 function normalizeEntryPath(pathValue: string | undefined): string | null {

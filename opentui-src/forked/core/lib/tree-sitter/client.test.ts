@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, beforeEach, afterEach, beforeAll, describe } from "bun:test"
 import { TreeSitterClient } from "./client.js"
 import { tmpdir } from "os"

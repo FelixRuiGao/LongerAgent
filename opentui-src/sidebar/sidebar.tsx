@@ -1,10 +1,13 @@
 /** @jsxImportSource @opentui/react */
 
 import React from "react";
+import { createTextAttributes } from "@opentui/core";
 
 import type { ConversationPalette } from "../components/conversation-types.js";
 import { SidebarTabs, type TabState } from "./sidebar-tabs.js";
 import type { DisplayThemeBrandingTokens } from "../display/theme/index.js";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 
 interface SidebarProps {
   tabs: TabState[];
@@ -31,11 +34,11 @@ function SidebarTitle(
     expanded: boolean;
     branding: DisplayThemeBrandingTokens;
   },
-): React.ReactElement {
+): React.ReactNode {
   if (!expanded) {
     return (
       <box flexDirection="row">
-        <text fg={branding.logoGradient[0]} bold content={branding.sidebarWordmark[0] ?? "V"} />
+        <text fg={branding.logoGradient[0]} attributes={ATTRS_BOLD} content={branding.sidebarWordmark[0] ?? "V"} />
       </box>
     );
   }
@@ -45,7 +48,7 @@ function SidebarTitle(
         <text
           key={`sidebar-title-${i}`}
           fg={branding.logoGradient[branding.sidebarGradientIndices[i] ?? 0]}
-          bold
+          attributes={ATTRS_BOLD}
           content={ch}
         />
       ))}
@@ -53,7 +56,7 @@ function SidebarTitle(
   );
 }
 
-function LeftSidebarInner(props: SidebarProps): React.ReactElement {
+function LeftSidebarInner(props: SidebarProps): React.ReactNode {
   const {
     tabs,
     activeTabId,

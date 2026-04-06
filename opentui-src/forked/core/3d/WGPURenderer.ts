@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { PerspectiveCamera, OrthographicCamera, Color, NoToneMapping, LinearSRGBColorSpace, Scene } from "three"
 import { WebGPURenderer } from "three/webgpu"
 import type { OptimizedBuffer } from "../buffer.js"

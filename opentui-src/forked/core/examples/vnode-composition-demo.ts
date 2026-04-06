@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createCliRenderer, MouseEvent, type CliRenderer } from "../renderer.js"
 import {
   Box,

@@ -1,3 +1,4 @@
+// @ts-nocheck
 export class RGBA {
   buffer: Float32Array
 

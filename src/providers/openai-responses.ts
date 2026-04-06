@@ -44,8 +44,8 @@ export class OpenAIResponsesProvider extends BaseProvider {
    */
   override readonly budgetCalcMode = "full_context" as const;
 
-  private _config: ModelConfig;
-  private _client: OpenAI;
+  protected _config: ModelConfig;
+  protected _client: OpenAI;
 
   constructor(config: ModelConfig) {
     super();
@@ -61,6 +61,23 @@ export class OpenAIResponsesProvider extends BaseProvider {
 
   private _isCodexProvider(): boolean {
     return this._config.provider === "openai-codex";
+  }
+
+  /**
+   * Stateless Responses backends that require `include: reasoning.encrypted_content`
+   * and sanitized reasoning round-trip items (type + summary + encrypted_content only).
+   *
+   * Includes:
+   *   - openai-codex (chatgpt.com/backend-api/codex) — rejects store=true
+   *   - copilot (api.individual.githubcopilot.com/responses) — rejects store=true
+   *
+   * Both backends drop echoed reasoning items that lack encrypted_content, producing
+   * 400 invalid_request_body on the follow-up turn. Verified by experiments under
+   * `experiments/copilot-probe/`.
+   */
+  private _isStatelessResponsesBackend(): boolean {
+    const p = this._config.provider;
+    return p === "openai-codex" || p === "copilot";
   }
 
   private _buildRequestOptions(
@@ -83,8 +100,8 @@ export class OpenAIResponsesProvider extends BaseProvider {
     return Object.keys(requestOptions).length > 0 ? requestOptions : undefined;
   }
 
-  private _ensureCodexInclude(kwargs: Record<string, unknown>): void {
-    if (!this._isCodexProvider()) return;
+  private _ensureStatelessInclude(kwargs: Record<string, unknown>): void {
+    if (!this._isStatelessResponsesBackend()) return;
 
     const existing = Array.isArray(kwargs["include"])
       ? (kwargs["include"] as unknown[]).filter((v): v is string => typeof v === "string")
@@ -97,7 +114,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
     kwargs["include"] = existing;
   }
 
-  private _sanitizeCodexRoundtripItems(items: unknown): Record<string, unknown>[] {
+  private _sanitizeStatelessRoundtripItems(items: unknown): Record<string, unknown>[] {
     if (!Array.isArray(items)) return [];
 
     const sanitized: Record<string, unknown>[] = [];
@@ -199,8 +216,8 @@ export class OpenAIResponsesProvider extends BaseProvider {
         const reasoningBlocks = m["_reasoning_state"];
 
         if (reasoningBlocks && Array.isArray(reasoningBlocks)) {
-          const roundtripItems = this._isCodexProvider()
-            ? this._sanitizeCodexRoundtripItems(reasoningBlocks)
+          const roundtripItems = this._isStatelessResponsesBackend()
+            ? this._sanitizeStatelessRoundtripItems(reasoningBlocks)
             : (reasoningBlocks as Record<string, unknown>[]);
           items.push(...roundtripItems);
           const text = (m["content"] as string) || (m["text"] as string) || "";
@@ -360,8 +377,8 @@ export class OpenAIResponsesProvider extends BaseProvider {
         }
       }
       if (outputItemsForRoundtrip.length > 0) {
-        reasoningState = this._isCodexProvider()
-          ? this._sanitizeCodexRoundtripItems(outputItemsForRoundtrip)
+        reasoningState = this._isStatelessResponsesBackend()
+          ? this._sanitizeStatelessRoundtripItems(outputItemsForRoundtrip)
           : outputItemsForRoundtrip;
       }
     }
@@ -478,14 +495,15 @@ export class OpenAIResponsesProvider extends BaseProvider {
       Object.assign(kwargs, this._config.extra);
     }
     this._applyThinkingParams(kwargs, options);
-    this._ensureCodexInclude(kwargs);
+    this._ensureStatelessInclude(kwargs);
 
     // Prompt cache optimization
     if (options?.promptCacheKey) {
       kwargs["prompt_cache_key"] = options.promptCacheKey;
     }
-    // prompt_cache_retention: Codex backend rejects it; other models gated by capability table.
-    if (!isCodex && getExtendedCacheSupport(this._config.model)) {
+    // prompt_cache_retention: stateless backends (Codex, Copilot) reject it — they
+    // never persist responses in the first place. Other models gated by capability table.
+    if (!this._isStatelessResponsesBackend() && getExtendedCacheSupport(this._config.model)) {
       kwargs["prompt_cache_retention"] = "24h";
     }
 

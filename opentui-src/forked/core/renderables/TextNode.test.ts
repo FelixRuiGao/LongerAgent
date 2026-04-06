@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, it } from "bun:test"
 import { TextNodeRenderable, isTextNodeRenderable } from "./TextNode.js"
 import { RGBA } from "../lib/RGBA.js"

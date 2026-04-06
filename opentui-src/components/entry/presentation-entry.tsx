@@ -13,7 +13,7 @@ import { TurnSummaryEntry } from "./turn-summary-entry.js";
 
 function PresentationEntryInner(
   props: PresentationEntryItemProps,
-): React.ReactElement {
+): React.ReactNode {
   const { entry, colors, contentWidth, markdownMode, markdownStyle, onEntryClick, onAgentClick } = props;
 
   const renderers = {
@@ -51,7 +51,7 @@ function PresentationEntryInner(
         contentWidth={contentWidth}
       />
     ),
-  } satisfies Record<PresentationEntryItemProps["entry"]["kind"], () => React.ReactElement>;
+  } satisfies Record<PresentationEntryItemProps["entry"]["kind"], () => React.ReactNode>;
 
   return renderers[entry.kind]?.() ?? <box />;
 }

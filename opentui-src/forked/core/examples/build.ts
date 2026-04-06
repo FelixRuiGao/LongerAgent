@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 
 import { mkdirSync } from "node:fs"
 import { readFile } from "node:fs/promises"

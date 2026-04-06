@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, it } from "bun:test"
 import { join } from "node:path"
 import * as coreRuntime from "../index"

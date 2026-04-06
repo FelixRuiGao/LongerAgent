@@ -1,6 +1,6 @@
 ---
 name: tui-test
-description: Interactively test the LongerAgent TUI via tmux. Use when you need to visually verify TUI rendering, test keyboard interactions, debug layout issues, or validate slash command behavior.
+description: Interactively test the Vigil TUI via tmux. Use when you need to visually verify TUI rendering, test keyboard interactions, debug layout issues, or validate slash command behavior.
 ---
 
 # TUI Interactive Testing via tmux

@@ -52,6 +52,8 @@ export interface OpenTuiScreenProps {
   contextTokens: number;
   contextLimit?: number;
   cacheReadTokens?: number;
+  /** Pre-formatted usage line (e.g. "5h: 90% left | wk: 80% left" or "month: 300/300 left"); null to hide. */
+  usageText?: string | null;
   presentationEntries: readonly PresentationEntry[];
   processing: boolean;
   markdownMode: "rendered" | "raw";
@@ -136,6 +138,7 @@ export function OpenTuiScreen({
   contextTokens,
   contextLimit,
   cacheReadTokens,
+  usageText,
   presentationEntries,
   processing,
   markdownMode,
@@ -203,7 +206,7 @@ export function OpenTuiScreen({
   agentsPanelOpen,
   onAgentsPanelClick,
   scrolledAway = false,
-}: OpenTuiScreenProps): React.ReactElement {
+}: OpenTuiScreenProps): React.ReactNode {
   const conversationColumnWidth = terminal.width - (theme.spacing.screenPaddingX * 2);
   const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
   const pickerMaxVisible = computePickerMaxVisible(terminal.height, theme.layout);
@@ -247,6 +250,7 @@ export function OpenTuiScreen({
       contextTokens={contextTokens}
       contextLimit={contextLimit}
       cacheReadTokens={cacheReadTokens ?? 0}
+      usageText={usageText ?? null}
       contentWidth={Math.max(20, conversationColumnWidth - effectiveSidebarWidth)}
       colors={theme.colors}
       inputVisibleLines={inputVisibleLines}

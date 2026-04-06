@@ -15,7 +15,7 @@ interface DetailThinkingTabProps {
 
 function DetailThinkingTabInner(
   { entry, colors, scrollRef }: DetailThinkingTabProps,
-): React.ReactElement {
+): React.ReactNode {
   const text = entry.thinkingFullText ?? "";
 
   return (

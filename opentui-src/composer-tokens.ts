@@ -1,4 +1,4 @@
-import { SyntaxStyle, type TextareaRenderable, type ColorInput } from "@opentui/core";
+import { SyntaxStyle, parseColor, type TextareaRenderable, type ColorInput } from "@opentui/core";
 import {
   buildFileReferenceLabel,
   displayWidthWithNewlines,
@@ -23,7 +23,7 @@ export interface ComposerTokenVisuals {
 }
 
 const COMPOSER_TOKEN_TYPE = "composer-token";
-const COMPOSER_EXTMARK_PATCHED = Symbol("longeragent.composer-extmarks-patched");
+const COMPOSER_EXTMARK_PATCHED = Symbol("vigil.composer-extmarks-patched");
 
 export function createComposerTokenVisuals(colors: {
   accent: ColorInput;
@@ -32,15 +32,15 @@ export function createComposerTokenVisuals(colors: {
 }): ComposerTokenVisuals {
   const syntaxStyle = SyntaxStyle.create();
   const fileStyleId = syntaxStyle.registerStyle("composer.token.file", {
-    fg: colors.cyan,
+    fg: parseColor(colors.cyan),
     bold: true,
   });
   const pasteStyleId = syntaxStyle.registerStyle("composer.token.paste", {
-    fg: colors.yellow,
+    fg: parseColor(colors.yellow),
     bold: true,
   });
   const imageStyleId = syntaxStyle.registerStyle("composer.token.image", {
-    fg: colors.accent,
+    fg: parseColor(colors.accent),
     bold: true,
   });
   return {

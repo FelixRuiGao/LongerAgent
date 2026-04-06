@@ -2,7 +2,9 @@
 
 import React from "react";
 
-import type { KeyBinding, TextareaRenderable } from "@opentui/core";
+import { createTextAttributes, type KeyBinding, type TextareaRenderable } from "@opentui/core";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 import type { ConversationPalette } from "../components/conversation-types.js";
 import type { ComposerTokenVisuals } from "../composer-tokens.js";
 import type { ActivityPhase } from "../display/types.js";
@@ -32,6 +34,12 @@ interface InputAreaProps {
   contextTokens: number;
   contextLimit: number | undefined;
   cacheReadTokens: number;
+  /**
+   * Pre-formatted one-line usage indicator (e.g. "5h: 90% left | wk: 80% left"
+   * or "month: 300/300 left"). When null, the indicator is hidden entirely.
+   * Only shown when cwd + usage + context all fit inside contentWidth.
+   */
+  usageText: string | null;
   /** Width of the content column (terminal width minus screen padding). */
   contentWidth: number;
   colors: ConversationPalette;
@@ -101,7 +109,25 @@ function getPhaseColor(phase: ActivityPhase, colors: ConversationPalette): strin
   }
 }
 
-function InputAreaInner(props: InputAreaProps): React.ReactElement {
+/**
+ * Decide whether the usage indicator fits on the bottom row alongside cwd
+ * and context. `hint` is NOT reserved — it has flexShrink={1} + truncate,
+ * so it collapses to whatever space is left. If the fixed-shrink parts
+ * (cwd + usage + context + separators) fit inside contentWidth, we show
+ * the usage indicator; otherwise it's hidden entirely.
+ */
+function shouldShowUsage(
+  contentWidth: number,
+  cwdLen: number,
+  usageLen: number,
+  contextLen: number,
+): boolean {
+  const inner = contentWidth - 2; // paddingLeft=1 + paddingRight=1
+  const fixedWidth = cwdLen + usageLen + contextLen + 4; // "  " × 2 separators
+  return inner >= fixedWidth;
+}
+
+function InputAreaInner(props: InputAreaProps): React.ReactNode {
   const {
     inputRef,
     processing,
@@ -116,6 +142,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
     contextTokens,
     contextLimit,
     cacheReadTokens,
+    usageText,
     contentWidth,
     colors,
     inputVisibleLines,
@@ -232,7 +259,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
         borderStyle="rounded"
         borderColor={colors.dim}
       >
-        <text fg={colors.accent} bold content="❯ " flexShrink={0} />
+        <text fg={colors.accent} attributes={ATTRS_BOLD} content="❯ " flexShrink={0} />
         <textarea
           ref={(node: any) => {
             (inputRef as any).current = node;
@@ -249,22 +276,25 @@ function InputAreaInner(props: InputAreaProps): React.ReactElement {
           maxHeight={maxInputLines}
           minHeight={1}
           syntaxStyle={composerTokenVisuals.syntaxStyle}
-          keyBindings={keyBindings}
+          keyBindings={[...keyBindings]}
           onSubmit={onSubmit}
           wrapMode="word"
           scrollMargin={0}
         />
       </box>
 
-      {/* Bottom row: cwd (left) + hint (middle) + context (right) — hidden when overlays are open */}
+      {/* Bottom row: cwd (left) + hint (middle) + usage + context (right) — hidden when overlays are open */}
       {!commandOverlayVisible && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !pendingAsk ? (
         <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
           <text fg={colors.muted} content={cwd} flexShrink={0} />
           {hint ? (
-            <text fg={colors.dim} content={`  ${hint}`} wrapMode="truncate" flexGrow={1} flexShrink={1} />
+            <text fg={colors.dim} content={`  ${hint}`} truncate flexGrow={1} flexShrink={1} />
           ) : (
             <box flexGrow={1} />
           )}
+          {usageText && shouldShowUsage(contentWidth, cwd.length, usageText.length, contextText.length) ? (
+            <text fg={colors.dim} content={`  ${usageText}`} flexShrink={0} />
+          ) : null}
           <text fg={colors.dim} content={`  ${contextText}`} flexShrink={0} />
         </box>
       ) : null}

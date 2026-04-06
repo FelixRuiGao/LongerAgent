@@ -2,7 +2,7 @@
  * Non-blocking update checker.
  *
  * Checks the npm registry for a newer version at most once per 24 hours.
- * Caches the result in ~/.longeragent/.update-check.json.
+ * Caches the result in ~/.vigil/.update-check.json.
  *
  * The latest package.json may contain an `updateNotice` string field —
  * if present, it is displayed alongside the version update message.
@@ -12,11 +12,11 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getLongerAgentHomeDir } from "./home-path.js";
+import { getVigilHomeDir } from "./home-path.js";
 
 const CACHE_FILE = ".update-check.json";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const PACKAGE_NAME = "longer-agent";
+const PACKAGE_NAME = "vigil-code";
 
 interface UpdateCache {
   lastCheck: number;
@@ -31,7 +31,7 @@ interface RegistryResponse {
 }
 
 function cachePath(): string {
-  return join(getLongerAgentHomeDir(), CACHE_FILE);
+  return join(getVigilHomeDir(), CACHE_FILE);
 }
 
 function readCache(): UpdateCache | null {
@@ -46,7 +46,7 @@ function readCache(): UpdateCache | null {
 
 function writeCache(cache: UpdateCache): void {
   try {
-    const dir = getLongerAgentHomeDir();
+    const dir = getVigilHomeDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(cachePath(), JSON.stringify(cache));
   } catch { /* ignore */ }

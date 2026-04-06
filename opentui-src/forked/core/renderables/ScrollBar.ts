@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { OptimizedBuffer } from "../buffer.js"
 import { parseColor, RGBA, type ColorInput } from "../lib/index.js"
 import type { KeyEvent } from "../lib/KeyHandler.js"

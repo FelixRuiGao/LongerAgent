@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { CliRenderer } from "../renderer"
 import type {
   Plugin,

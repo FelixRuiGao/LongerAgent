@@ -27,7 +27,7 @@ import {
 import { gunzipSync, gzipSync } from "node:zlib";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { getLongerAgentHomeDir } from "./home-path.js";
+import { getVigilHomeDir } from "./home-path.js";
 import { LogIdAllocator, type LogEntry, type LogEntryType, type TuiDisplayKind } from "./log-entry.js";
 import type { ChildSessionMetaRecord } from "./session-tree-types.js";
 
@@ -49,7 +49,7 @@ function projectSlug(projectPath: string): string {
 
 function resolvePreferredBaseDir(baseDir?: string): string {
   if (baseDir) return baseDir.replace(/^~/, homedir());
-  return getLongerAgentHomeDir();
+  return getVigilHomeDir();
 }
 
 function resolveSessionTimezone(): string {
@@ -133,7 +133,7 @@ export class SessionStore {
   private _candidateBaseDirs(): string[] {
     const candidates = [
       this._preferredBaseDir,
-      join(tmpdir(), "longeragent", "sessions"),
+      join(tmpdir(), "vigil", "sessions"),
     ];
     const seen = new Set<string>();
     const dedup: string[] = [];

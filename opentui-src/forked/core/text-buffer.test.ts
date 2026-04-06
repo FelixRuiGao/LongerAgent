@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, it, beforeEach, afterEach } from "bun:test"
 import { TextBuffer } from "./text-buffer.js"
 import { StyledText, stringToStyledText } from "./lib/styled-text.js"

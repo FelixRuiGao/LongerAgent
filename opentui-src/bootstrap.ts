@@ -9,7 +9,7 @@ import { loadSkillsMulti } from "../src/skills/loader.js";
 import { SessionStore } from "../src/persistence.js";
 import { loadMcpServers } from "../src/mcp-config.js";
 import { loadDotenv } from "../src/dotenv.js";
-import { getLongerAgentHomeDir } from "../src/home-path.js";
+import { getVigilHomeDir } from "../src/home-path.js";
 import {
   buildDefaultRegistry,
   registerSkillCommands,
@@ -48,7 +48,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   templates?: string;
   verbose?: boolean;
 }): Promise<OpenTuiRuntime> {
-  loadDotenv(getLongerAgentHomeDir());
+  loadDotenv(getVigilHomeDir());
 
   const verbose = opts?.verbose ?? false;
   const store = new SessionStore({ projectPath: process.cwd() });
@@ -67,7 +67,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
 
   if (!hasProviders) {
     throw new Error(
-      "No providers configured. Run `longeragent init` first, then retry the OpenTUI prototype.",
+      "No providers configured. Run `vigil init` first, then retry the OpenTUI prototype.",
     );
   }
 

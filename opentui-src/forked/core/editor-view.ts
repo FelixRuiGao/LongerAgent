@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { RGBA } from "./lib/RGBA.js"
 import { resolveRenderLib, type RenderLib, type VisualCursor, type LineInfo } from "./zig.js"
 import { type Pointer } from "bun:ffi"

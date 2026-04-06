@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect } from "bun:test"
 import { InternalKeyHandler, KeyEvent } from "./KeyHandler.js"
 import { parseKeypress } from "./parse.keypress.js"

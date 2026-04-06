@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { MeasureMode } from "yoga-layout"
 import { type RenderableOptions, Renderable } from "../Renderable"
 import type { OptimizedBuffer } from "../buffer"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 
 import { createCliRenderer, RGBA, TextRenderable, BoxRenderable, FrameBufferRenderable } from "../index.js"
 import { ThreeCliRenderer } from "../3d/WGPURenderer.js"

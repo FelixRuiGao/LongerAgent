@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { EventEmitter } from "events"
 import { type KeyEventType, type ParsedKey } from "./parse.keypress.js"
 import type { PasteMetadata } from "./paste.js"

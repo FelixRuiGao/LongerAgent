@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { ColorInput } from "./RGBA.js"
 
 export interface BorderCharacters {

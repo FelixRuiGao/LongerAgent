@@ -65,11 +65,11 @@ async function runStreamToolCall(
   argChunks: string[],
   mode?: "legacy" | "auto",
 ): Promise<Record<string, unknown>> {
-  const prev = process.env["LONGERAGENT_TOOL_ARGS_MODE"];
+  const prev = process.env["VIGIL_TOOL_ARGS_MODE"];
   if (mode) {
-    process.env["LONGERAGENT_TOOL_ARGS_MODE"] = mode;
+    process.env["VIGIL_TOOL_ARGS_MODE"] = mode;
   } else {
-    delete process.env["LONGERAGENT_TOOL_ARGS_MODE"];
+    delete process.env["VIGIL_TOOL_ARGS_MODE"];
   }
 
   try {
@@ -96,9 +96,9 @@ async function runStreamToolCall(
     return response.toolCalls[0]?.arguments ?? {};
   } finally {
     if (prev === undefined) {
-      delete process.env["LONGERAGENT_TOOL_ARGS_MODE"];
+      delete process.env["VIGIL_TOOL_ARGS_MODE"];
     } else {
-      process.env["LONGERAGENT_TOOL_ARGS_MODE"] = prev;
+      process.env["VIGIL_TOOL_ARGS_MODE"] = prev;
     }
   }
 }

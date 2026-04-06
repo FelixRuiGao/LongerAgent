@@ -1,7 +1,9 @@
 /** @jsxImportSource @opentui/react */
 
 import React from "react";
-import { RGBA } from "@opentui/core";
+import { RGBA, createTextAttributes } from "@opentui/core";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 import type { DisplayThemeColorTokens } from "../theme/types.js";
 
 const BACKDROP_COLOR = RGBA.fromInts(0, 0, 0, 150);
@@ -32,7 +34,7 @@ export function CenteredModal({
   colors,
   panelBg,
   children,
-}: CenteredModalProps): React.ReactElement | null {
+}: CenteredModalProps): React.ReactNode {
   if (!visible) return null;
 
   const effectiveWidth = Math.min(width, terminalWidth - 2);
@@ -61,7 +63,7 @@ export function CenteredModal({
       >
         {/* Header: title */}
         <box width="100%" paddingLeft={2} paddingRight={2}>
-          <text color={colors.text} bold>{title}</text>
+          <text fg={colors.text} attributes={ATTRS_BOLD} content={title} />
         </box>
 
         {/* Content — scrollable */}

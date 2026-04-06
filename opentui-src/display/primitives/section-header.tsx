@@ -1,6 +1,10 @@
 /** @jsxImportSource @opentui/react */
 
 import React from "react";
+import { createTextAttributes } from "@opentui/core";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
+const ATTRS_NONE = createTextAttributes({});
 
 interface SectionHeaderProps {
   label: string;
@@ -16,10 +20,10 @@ export function SectionHeader({
   bold = true,
   paddingLeft = 0,
   paddingBottom = 0,
-}: SectionHeaderProps): React.ReactElement {
+}: SectionHeaderProps): React.ReactNode {
   return (
     <box paddingLeft={paddingLeft} paddingBottom={paddingBottom}>
-      <text fg={color} bold={bold} content={label} />
+      <text fg={color} attributes={bold ? ATTRS_BOLD : ATTRS_NONE} content={label} />
     </box>
   );
 }

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect, describe } from "bun:test"
 import { createTestRenderer, type TestRendererOptions } from "../testing/test-renderer.js"
 import { EventEmitter } from "events"

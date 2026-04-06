@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Renderable, type RenderableOptions } from "../Renderable.js"
 import { convertGlobalToLocalSelection, Selection, type LocalSelectionBounds } from "../lib/selection.js"
 import { EditBuffer, type LogicalCursor } from "../edit-buffer.js"

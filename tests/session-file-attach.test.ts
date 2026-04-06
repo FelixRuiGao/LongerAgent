@@ -43,7 +43,7 @@ async function callProcessFileAttachments(
 
 describe("Session file attachment integration", () => {
   it("injects text file context and removes @path from user text", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "longeragent-attach-text-"));
+    const dir = mkdtempSync(join(tmpdir(), "vigil-attach-text-"));
     try {
       const filePath = join(dir, "note.txt");
       writeFileSync(filePath, "hello from file\nsecond line\n", "utf-8");
@@ -62,7 +62,7 @@ describe("Session file attachment integration", () => {
   });
 
   it("builds multimodal content parts for image attachments", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "longeragent-attach-img-"));
+    const dir = mkdtempSync(join(tmpdir(), "vigil-attach-img-"));
     try {
       const imgPath = join(dir, "tiny.png");
       // Bytes are enough for attachment packaging; image decoding is not performed here.
@@ -92,8 +92,8 @@ describe("Session file attachment integration", () => {
   });
 
   it("allows explicit external @file attachments in the current turn", async () => {
-    const projectDir = mkdtempSync(join(tmpdir(), "longeragent-project-"));
-    const externalDir = mkdtempSync(join(tmpdir(), "longeragent-external-"));
+    const projectDir = mkdtempSync(join(tmpdir(), "vigil-project-"));
+    const externalDir = mkdtempSync(join(tmpdir(), "vigil-external-"));
     try {
       const externalFile = join(externalDir, "secret.txt");
       writeFileSync(externalFile, "top secret\n", "utf-8");
@@ -112,8 +112,8 @@ describe("Session file attachment integration", () => {
   });
 
   it("converts PDF attachments to a hidden markdown view and keeps the original path for follow-up reads", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "longeragent-attach-pdf-"));
-    const artifactsDir = mkdtempSync(join(tmpdir(), "longeragent-attach-artifacts-"));
+    const dir = mkdtempSync(join(tmpdir(), "vigil-attach-pdf-"));
+    const artifactsDir = mkdtempSync(join(tmpdir(), "vigil-attach-artifacts-"));
     try {
       const pdfPath = join(dir, "paper.pdf");
       writeFileSync(pdfPath, Buffer.from("%PDF-1.4\nfake\n"));
@@ -147,8 +147,8 @@ describe("Session file attachment integration", () => {
   });
 
   it("routes DOCX and XLSX reads through the same extracted-markdown path", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "longeragent-attach-docproj-"));
-    const artifactsDir = mkdtempSync(join(tmpdir(), "longeragent-attach-docproj-artifacts-"));
+    const dir = mkdtempSync(join(tmpdir(), "vigil-attach-docproj-"));
+    const artifactsDir = mkdtempSync(join(tmpdir(), "vigil-attach-docproj-artifacts-"));
     try {
       const docxPath = join(dir, "spec.docx");
       const xlsxPath = join(dir, "table.xlsx");
@@ -177,8 +177,8 @@ describe("Session file attachment integration", () => {
   });
 
   it("reports PPTX projection as unavailable in the current runtime", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "longeragent-attach-pptx-"));
-    const artifactsDir = mkdtempSync(join(tmpdir(), "longeragent-attach-pptx-artifacts-"));
+    const dir = mkdtempSync(join(tmpdir(), "vigil-attach-pptx-"));
+    const artifactsDir = mkdtempSync(join(tmpdir(), "vigil-attach-pptx-artifacts-"));
     try {
       const pptxPath = join(dir, "slides.pptx");
       writeFileSync(pptxPath, Buffer.from("fake-pptx"));

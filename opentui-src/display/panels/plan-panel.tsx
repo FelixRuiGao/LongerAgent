@@ -1,9 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
 import React, { useState } from "react";
-import { StyledText, RGBA } from "@opentui/core";
-import { createTextAttributes } from "../../forked/core/utils.js";
-import type { TextChunk } from "../../forked/core/text-buffer.js";
+import { StyledText, RGBA, createTextAttributes, type TextChunk } from "@opentui/core";
 import { useShimmer } from "../../presentation/use-shimmer.js";
 
 import type { PlanCheckpoint } from "../../../src/plan-state.js";
@@ -61,7 +59,7 @@ function PlanBarLine({
   onToggle: () => void;
   onMouseOver: () => void;
   onMouseOut: () => void;
-}): React.ReactElement {
+}): React.ReactNode {
   const total = checkpoints.length;
   const doneCount = checkpoints.filter((c) => c.status === "done").length;
   const activeCount = checkpoints.filter((c) => c.status === "active").length;
@@ -112,7 +110,7 @@ function PlanBarLine({
       onMouseOver={onMouseOver}
       onMouseOut={onMouseOut}
     >
-      <text content={barContent} wrapMode="truncate" />
+      <text content={barContent} truncate />
       <box flexGrow={1} />
       {activeLabel ? <text content={shimmer} /> : null}
     </box>
@@ -155,7 +153,7 @@ export function PlanPanel({
   expanded,
   contentWidth,
   onToggle,
-}: PlanPanelProps): React.ReactElement | null {
+}: PlanPanelProps): React.ReactNode {
   if (checkpoints.length === 0) return null;
 
   const [hovered, setHovered] = useState(false);
@@ -193,7 +191,7 @@ export function PlanPanel({
           <text
             key={`cp-${i}`}
             content={buildCheckpointStyledText(cp)}
-            wrapMode="truncate"
+            truncate
           />
         ))
       ) : null}

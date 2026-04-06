@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 
 // Interactive demo to test the focus restore fix on Windows Terminal.
 //

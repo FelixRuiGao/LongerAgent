@@ -1,7 +1,7 @@
 /**
  * MCP server configuration loader.
  *
- * Loads MCP server definitions from ~/.longeragent/mcp.json.
+ * Loads MCP server definitions from ~/.vigil/mcp.json.
  * Format matches the mcp_servers section of the old config.yaml but in JSON.
  */
 

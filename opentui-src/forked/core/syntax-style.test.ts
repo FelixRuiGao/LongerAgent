@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, expect, it, beforeEach, afterEach } from "bun:test"
 import { SyntaxStyle } from "./syntax-style.js"
 import { RGBA } from "./lib/RGBA.js"

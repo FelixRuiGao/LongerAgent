@@ -1,6 +1,6 @@
 {
-  "name": "longer-agent",
-  "version": "0.1.3",
+  "name": "vigil-code",
+  "version": "0.2.0",
   "updateNotice": "",
   "description": "A terminal AI coding agent built for long sessions — three-layer context management, persistent memory, and parallel sub-agents",
   "type": "module",
@@ -8,16 +8,16 @@
   "author": "Felix Rui Gao",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/FelixRuiGao/LongerAgent.git"
+    "url": "git+https://github.com/FelixRuiGao/Vigil.git"
   },
-  "homepage": "https://github.com/FelixRuiGao/LongerAgent",
+  "homepage": "https://github.com/FelixRuiGao/Vigil",
   "bugs": {
-    "url": "https://github.com/FelixRuiGao/LongerAgent/issues"
+    "url": "https://github.com/FelixRuiGao/Vigil/issues"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "longeragent": "dist/cli.js"
+    "vigil": "dist/cli.js"
   },
   "files": [
     "dist/",

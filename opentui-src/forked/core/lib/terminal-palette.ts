@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { SystemClock, type Clock, type TimerHandle } from "./clock"
 
 type Hex = string | null

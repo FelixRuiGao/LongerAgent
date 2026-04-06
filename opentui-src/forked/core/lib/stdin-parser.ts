@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Byte-level stdin parser that turns raw terminal input into typed StdinEvents.
 //
 // This replaces a two-phase token -> decode pipeline with a single state machine

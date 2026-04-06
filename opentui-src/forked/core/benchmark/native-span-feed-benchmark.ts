@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { dlopen, FFIType, suffix } from "bun:ffi"
 import { setRenderLibPath } from "../zig"
 

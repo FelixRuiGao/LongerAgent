@@ -19,8 +19,8 @@ function makeTempDir(prefix: string): string {
 
 describe("path security integration", () => {
   it("enforces project-root boundary for file tools via executeTool context", async () => {
-    const projectRoot = makeTempDir("longeragent-tool-root-");
-    const externalRoot = makeTempDir("longeragent-tool-ext-");
+    const projectRoot = makeTempDir("vigil-tool-root-");
+    const externalRoot = makeTempDir("vigil-tool-ext-");
     try {
       const insideFile = join(projectRoot, "inside.txt");
       writeFileSync(insideFile, "hello\n", "utf-8");
@@ -39,7 +39,7 @@ describe("path security integration", () => {
         ["read_file", { path: outsideFile }],
         ["list_dir", { path: externalRoot }],
         ["grep", { pattern: "outside", path: externalRoot }],
-        ["edit_file", { path: outsideFile, old_str: "outside", new_str: "edited" }],
+        ["edit_file", { path: outsideFile, edits: [{ old_str: "outside", new_str: "edited" }] }],
         ["write_file", { path: join(externalRoot, "new.txt"), content: "x" }],
       ];
 
@@ -54,7 +54,7 @@ describe("path security integration", () => {
   });
 
   it("rejects spawn_file call files outside SESSION_ARTIFACTS", async () => {
-    const artifactsDir = makeTempDir("longeragent-artifacts-");
+    const artifactsDir = makeTempDir("vigil-artifacts-");
     try {
       const fakeSession = Object.create(Session.prototype) as any;
       fakeSession._resolveSessionArtifacts = () => artifactsDir;
@@ -93,8 +93,8 @@ describe("path security integration", () => {
   });
 
   it("enforces SESSION_ARTIFACTS boundary for template_path (including symlink escapes)", () => {
-    const artifactsDir = makeTempDir("longeragent-template-artifacts-");
-    const externalDir = makeTempDir("longeragent-template-ext-");
+    const artifactsDir = makeTempDir("vigil-template-artifacts-");
+    const externalDir = makeTempDir("vigil-template-ext-");
     try {
       const validTemplate = join(artifactsDir, "my-template");
       mkdirSync(validTemplate, { recursive: true });

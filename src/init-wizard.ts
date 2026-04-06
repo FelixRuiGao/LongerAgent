@@ -1,15 +1,15 @@
 /**
- * Initialization wizard for LongerAgent.
+ * Initialization wizard for Vigil.
  *
  * Provides an interactive first-run setup experience using @inquirer/prompts.
- * Saves provider configuration to ~/.longeragent/tui-preferences.json.
+ * Saves provider configuration to ~/.vigil/tui-preferences.json.
  * Supports Ctrl+C / ESC to go back to the previous step.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, select, input, confirm } from "@inquirer/prompts";
-import { getLongerAgentHomeDir } from "./home-path.js";
+import { getVigilHomeDir } from "./home-path.js";
 import {
   PROVIDER_PRESETS,
   type ProviderPreset,
@@ -345,7 +345,7 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       return { providerId: provider.id, skipped: true };
     }
 
-    console.log(`  ✓ Saved to ~/.longeragent/.env as ${result.envVar}\n`);
+    console.log(`  ✓ Saved to ~/.vigil/.env as ${result.envVar}\n`);
 
     let defaultModelConfigName: string | undefined;
     if (provider.models.length > 0) {
@@ -375,14 +375,14 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       message: `${provider.name}: ${envVarName} detected in environment`,
       choices: [
         { name: "Use it", value: "use" },
-        { name: "Paste a different key for LongerAgent", value: "paste" },
+        { name: "Paste a different key for Vigil", value: "paste" },
       ],
     });
     if (choice === "paste") {
       const key = await input({ message: `${provider.name}: Paste API key` });
       if (key.trim()) {
         setDotenvKey(envVarName, key.trim());
-        console.log(`  ✓ Saved to ~/.longeragent/.env\n`);
+        console.log(`  ✓ Saved to ~/.vigil/.env\n`);
       }
     }
   } else {
@@ -391,7 +391,7 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
     });
     if (key.trim()) {
       setDotenvKey(envVarName, key.trim());
-      console.log(`  ✓ Saved to ~/.longeragent/.env\n`);
+      console.log(`  ✓ Saved to ~/.vigil/.env\n`);
     }
   }
 
@@ -418,7 +418,7 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
 const enum Step { CHECK_EXISTING, SELECT_PROVIDERS, CONFIGURE_PROVIDERS, SELECT_DEFAULT, WRITE }
 
 export async function runInitWizard(): Promise<WizardResult> {
-  const homeDir = getLongerAgentHomeDir();
+  const homeDir = getVigilHomeDir();
   const existing = loadExistingPreferences(homeDir);
   const hasLegacyCloudProviders = Boolean(
     existing?.providerEnvVars
@@ -431,7 +431,7 @@ export async function runInitWizard(): Promise<WizardResult> {
 
   console.log();
   console.log("  ╔══════════════════════════════════════╗");
-  console.log("  ║    Welcome to LongerAgent Setup!     ║");
+  console.log("  ║       Welcome to Vigil Setup!        ║");
   console.log("  ╚══════════════════════════════════════╝");
   console.log("  (Ctrl+C to go back, double Ctrl+C to quit)\n");
 
@@ -625,7 +625,7 @@ export async function runInitWizard(): Promise<WizardResult> {
   }
 
   console.log();
-  console.log("  Run 'longeragent' to start.");
+  console.log("  Run 'vigil' to start.");
   console.log();
 
   return { homeDir };

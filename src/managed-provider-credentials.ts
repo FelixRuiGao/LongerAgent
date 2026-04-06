@@ -1,7 +1,7 @@
 /**
  * Managed cloud provider credential slots.
  *
- * These providers always resolve credentials from LongerAgent-managed env vars.
+ * These providers always resolve credentials from Vigil-managed env vars.
  * External shell env vars are treated only as import candidates during setup.
  */
 
@@ -12,15 +12,15 @@ export interface ManagedProviderCredentialSpec {
 }
 
 export const MANAGED_PROVIDER_CREDENTIAL_SPECS: ManagedProviderCredentialSpec[] = [
-  { providerId: "glm", internalEnvVar: "LONGERAGENT_GLM_API_KEY", externalEnvVars: ["GLM_API_KEY"] },
-  { providerId: "glm-intl", internalEnvVar: "LONGERAGENT_GLM_INTL_API_KEY", externalEnvVars: ["GLM_INTL_API_KEY"] },
-  { providerId: "glm-code", internalEnvVar: "LONGERAGENT_GLM_CODE_API_KEY", externalEnvVars: ["GLM_CODE_API_KEY"] },
-  { providerId: "glm-intl-code", internalEnvVar: "LONGERAGENT_GLM_INTL_CODE_API_KEY", externalEnvVars: ["GLM_INTL_CODE_API_KEY"] },
-  { providerId: "kimi", internalEnvVar: "LONGERAGENT_KIMI_API_KEY", externalEnvVars: ["MOONSHOT_API_KEY", "KIMI_API_KEY"] },
-  { providerId: "kimi-cn", internalEnvVar: "LONGERAGENT_KIMI_CN_API_KEY", externalEnvVars: ["MOONSHOT_API_KEY", "KIMI_CN_API_KEY"] },
-  { providerId: "kimi-code", internalEnvVar: "LONGERAGENT_KIMI_CODE_API_KEY", externalEnvVars: ["KIMI_CODE_API_KEY"] },
-  { providerId: "minimax", internalEnvVar: "LONGERAGENT_MINIMAX_API_KEY", externalEnvVars: ["MINIMAX_API_KEY"] },
-  { providerId: "minimax-cn", internalEnvVar: "LONGERAGENT_MINIMAX_CN_API_KEY", externalEnvVars: ["MINIMAX_CN_API_KEY"] },
+  { providerId: "glm", internalEnvVar: "VIGIL_GLM_API_KEY", externalEnvVars: ["GLM_API_KEY"] },
+  { providerId: "glm-intl", internalEnvVar: "VIGIL_GLM_INTL_API_KEY", externalEnvVars: ["GLM_INTL_API_KEY"] },
+  { providerId: "glm-code", internalEnvVar: "VIGIL_GLM_CODE_API_KEY", externalEnvVars: ["GLM_CODE_API_KEY"] },
+  { providerId: "glm-intl-code", internalEnvVar: "VIGIL_GLM_INTL_CODE_API_KEY", externalEnvVars: ["GLM_INTL_CODE_API_KEY"] },
+  { providerId: "kimi", internalEnvVar: "VIGIL_KIMI_API_KEY", externalEnvVars: ["MOONSHOT_API_KEY", "KIMI_API_KEY"] },
+  { providerId: "kimi-cn", internalEnvVar: "VIGIL_KIMI_CN_API_KEY", externalEnvVars: ["MOONSHOT_API_KEY", "KIMI_CN_API_KEY"] },
+  { providerId: "kimi-code", internalEnvVar: "VIGIL_KIMI_CODE_API_KEY", externalEnvVars: ["KIMI_CODE_API_KEY"] },
+  { providerId: "minimax", internalEnvVar: "VIGIL_MINIMAX_API_KEY", externalEnvVars: ["MINIMAX_API_KEY"] },
+  { providerId: "minimax-cn", internalEnvVar: "VIGIL_MINIMAX_CN_API_KEY", externalEnvVars: ["MINIMAX_CN_API_KEY"] },
 ];
 
 const SPEC_BY_PROVIDER = new Map(

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { TextRenderable } from "./index.js"
 import { BaseRenderable, type BaseRenderableOptions } from "../Renderable.js"
 import { RGBA, parseColor } from "../lib/RGBA.js"

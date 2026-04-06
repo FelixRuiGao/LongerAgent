@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 
 import { createCliRenderer, CliRenderer, FrameBufferRenderable, BoxRenderable, OptimizedBuffer } from "../index.js"
 import { RGBA } from "../lib/index.js"

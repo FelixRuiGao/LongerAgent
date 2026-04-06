@@ -1,3 +1,4 @@
+// @ts-nocheck
 export type PasteKind = "text" | "binary" | "unknown"
 
 export interface PasteMetadata {

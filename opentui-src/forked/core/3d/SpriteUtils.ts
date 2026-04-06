@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { TextureUtils } from "./TextureUtils.js"
 import { Sprite, SpriteMaterial, DataTexture, type SpriteMaterialParameters } from "three"
 

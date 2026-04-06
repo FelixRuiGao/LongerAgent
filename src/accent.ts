@@ -1,9 +1,9 @@
 /**
- * Centralized TUI theme.
+ * Centralized accent color configuration.
  *
  * `theme.accent` is the primary brand color used for logo, prompts,
- * headings, and highlights.  Change it at runtime via `setAccent()`.
- * Ink accepts: named colors, "bright" variants, or hex strings like "#7c3aed".
+ * headings, and highlights. Change it at runtime via `setAccent()`.
+ * Accepts: named colors, "bright" variants, or hex strings like "#7c3aed".
  */
 
 export const DEFAULT_ACCENT = "#4b4bf0";

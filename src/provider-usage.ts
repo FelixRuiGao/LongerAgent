@@ -12,12 +12,16 @@ import { EventEmitter } from "node:events";
 // ------------------------------------------------------------------
 
 export interface UsageWindow {
-  /** Human label for the window, e.g. "5h" or "Wk". */
+  /** Human label for the window, e.g. "5h", "Wk", "month". */
   label: string;
   /** Percentage of quota remaining (0–100). */
   remainPercent: number;
   /** Absolute reset time (ms since epoch), if available. */
   resetAt?: number;
+  /** Absolute remaining count, when the provider exposes discrete integer quotas (Copilot). */
+  absoluteRemaining?: number;
+  /** Absolute total entitlement, paired with absoluteRemaining (Copilot). */
+  absoluteTotal?: number;
 }
 
 export interface UsageSnapshot {
@@ -191,11 +195,21 @@ export interface UsagePollerEvents {
   error: [error: Error];
 }
 
+/** Function that fetches a usage snapshot given some credential token. */
+export type UsageFetchFn = (token: string) => Promise<UsageSnapshot>;
+
+export interface UsagePollerOptions {
+  /** Snapshot producer. Defaults to Codex fetch for backward compatibility. */
+  fetchFn?: UsageFetchFn;
+  /** Poll interval in ms. Defaults to 60s. */
+  intervalMs?: number;
+}
+
 /**
- * Periodically polls Codex usage and emits "update" events.
+ * Periodically polls a quota/usage endpoint and emits "update" events.
  *
  * Usage:
- *   const poller = new UsagePoller();
+ *   const poller = new UsagePoller({ fetchFn: fetchCopilotUsage });
  *   poller.on("update", (snapshot) => { ... });
  *   poller.start(token);
  *   // later:
@@ -206,10 +220,18 @@ export class UsagePoller extends EventEmitter {
   private _token: string | null = null;
   private _snapshot: UsageSnapshot | null = null;
   private _intervalMs: number;
+  private _fetchFn: UsageFetchFn;
 
-  constructor(intervalMs = DEFAULT_POLL_INTERVAL_MS) {
+  constructor(opts: UsagePollerOptions | number = {}) {
     super();
-    this._intervalMs = intervalMs;
+    // Back-compat: constructor used to accept just an intervalMs number.
+    if (typeof opts === "number") {
+      this._intervalMs = opts;
+      this._fetchFn = fetchCodexUsage;
+    } else {
+      this._intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+      this._fetchFn = opts.fetchFn ?? fetchCodexUsage;
+    }
   }
 
   get snapshot(): UsageSnapshot | null {
@@ -244,11 +266,141 @@ export class UsagePoller extends EventEmitter {
   private async _poll(): Promise<void> {
     if (!this._token) return;
     try {
-      const snapshot = await fetchCodexUsage(this._token);
+      const snapshot = await this._fetchFn(this._token);
       this._snapshot = snapshot;
       this.emit("update", snapshot);
     } catch (err) {
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
     }
   }
+}
+
+// ------------------------------------------------------------------
+// Copilot usage fetch
+// ------------------------------------------------------------------
+
+type CopilotQuotaDetail = {
+  entitlement?: number;
+  remaining?: number;
+  percent_remaining?: number;
+  unlimited?: boolean;
+  overage_permitted?: boolean;
+};
+
+type CopilotUserResponse = {
+  copilot_plan?: string;
+  access_type_sku?: string;
+  quota_reset_date_utc?: string;
+  quota_snapshots?: {
+    premium_interactions?: CopilotQuotaDetail;
+  };
+};
+
+/**
+ * Fetch GitHub Copilot usage from api.github.com/copilot_internal/user.
+ * Called with the LONG-LIVED GitHub OAuth token, NOT the short-lived Copilot
+ * API token — this endpoint is on api.github.com, not api.githubcopilot.com.
+ */
+export async function fetchCopilotUsage(
+  githubToken: string,
+): Promise<UsageSnapshot> {
+  const now = Date.now();
+
+  let res: Response;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    res = await fetch("https://api.github.com/copilot_internal/user", {
+      method: "GET",
+      headers: {
+        authorization: `token ${githubToken}`,
+        accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+  } catch (err) {
+    return {
+      windows: [],
+      error: `fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+      fetchedAt: now,
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { windows: [], error: "token_expired", fetchedAt: now };
+  }
+  if (!res.ok) {
+    return { windows: [], error: `HTTP ${res.status}`, fetchedAt: now };
+  }
+
+  let data: CopilotUserResponse;
+  try {
+    data = (await res.json()) as CopilotUserResponse;
+  } catch {
+    return { windows: [], error: "invalid JSON", fetchedAt: now };
+  }
+
+  const premium = data.quota_snapshots?.premium_interactions;
+  const windows: UsageWindow[] = [];
+
+  if (premium) {
+    const entitlement = typeof premium.entitlement === "number" ? premium.entitlement : 0;
+    const remaining = typeof premium.remaining === "number" ? premium.remaining : 0;
+    const pctRemaining =
+      typeof premium.percent_remaining === "number"
+        ? clamp(premium.percent_remaining, 0, 100)
+        : entitlement > 0
+          ? clamp((remaining / entitlement) * 100, 0, 100)
+          : 100;
+
+    const resetMs = data.quota_reset_date_utc
+      ? Date.parse(data.quota_reset_date_utc)
+      : undefined;
+
+    windows.push({
+      label: "month",
+      remainPercent: pctRemaining,
+      resetAt: Number.isFinite(resetMs) ? resetMs : undefined,
+      absoluteRemaining: remaining,
+      absoluteTotal: entitlement,
+    });
+  }
+
+  return {
+    windows,
+    plan: data.copilot_plan,
+    fetchedAt: now,
+  };
+}
+
+// ------------------------------------------------------------------
+// Formatting for the input-area usage indicator
+// ------------------------------------------------------------------
+
+/**
+ * Format a usage snapshot into a one-line string for the input-area
+ * indicator. Returns null if no data is available (callers should hide
+ * the indicator entirely in that case).
+ *
+ * Examples:
+ *   "5h: 90% left | wk: 80% left"        (Codex, percent-based)
+ *   "month: 300/300 left"                (Copilot, discrete count)
+ */
+export function formatUsageLine(
+  snapshot: UsageSnapshot | null | undefined,
+): string | null {
+  if (!snapshot) return null;
+  if (snapshot.error) return null;
+  if (snapshot.windows.length === 0) return null;
+
+  const parts = snapshot.windows.map((w) => {
+    const value =
+      w.absoluteRemaining !== undefined && w.absoluteTotal !== undefined
+        ? `${w.absoluteRemaining}/${w.absoluteTotal}`
+        : `${w.remainPercent.toFixed(0)}%`;
+    return `${w.label}: ${value} left`;
+  });
+
+  return parts.join(" | ");
 }

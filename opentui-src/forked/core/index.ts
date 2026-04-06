@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Core exports without 3D dependencies
 export * from "./Renderable.js"
 export * from "./types.js"

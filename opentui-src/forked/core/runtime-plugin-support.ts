@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { plugin as registerBunPlugin } from "bun"
 import {
   createRuntimePlugin,

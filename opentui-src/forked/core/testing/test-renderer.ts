@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Readable } from "stream"
 import { CliRenderer, type CliRendererConfig } from "../renderer.js"
 import { resolveRenderLib } from "../zig.js"

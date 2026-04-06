@@ -1,3 +1,4 @@
+// @ts-nocheck
 export interface HighlightRange {
   startCol: number
   endCol: number

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { CliRenderer, createCliRenderer, TextRenderable, BoxRenderable, type KeyEvent } from "../index.js"
 import { setupCommonDemoKeys } from "./lib/standalone-keys.js"
 import { parseColor } from "../lib/RGBA.js"

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { BaseRenderable, Renderable, type RenderableOptions } from "../Renderable"
 import type { CliRenderer } from "../renderer"
 import type { RenderContext } from "../types"

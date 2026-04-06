@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Edge, Gutter } from "yoga-layout"
 import { type RenderableOptions, Renderable } from "../Renderable.js"
 import type { OptimizedBuffer } from "../buffer.js"

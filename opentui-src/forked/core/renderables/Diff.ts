@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Renderable, type RenderableOptions } from "../Renderable.js"
 import type { RenderContext } from "../types.js"
 import { CodeRenderable, type CodeOptions } from "./Code.js"

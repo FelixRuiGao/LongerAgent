@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { mkdir, readFile, writeFile } from "fs/promises"
 import * as path from "path"
 

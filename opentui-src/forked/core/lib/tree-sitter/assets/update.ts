@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// @ts-nocheck
 
 import { readFile, writeFile, mkdir } from "fs/promises"
 import * as path from "path"

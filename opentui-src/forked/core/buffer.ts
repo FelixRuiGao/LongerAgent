@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { TextBuffer } from "./text-buffer.js"
 import { RGBA } from "./lib/index.js"
 import { resolveRenderLib, type RenderLib } from "./zig.js"

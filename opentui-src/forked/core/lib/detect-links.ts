@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { TextChunk } from "../text-buffer"
 import type { SimpleHighlight } from "./tree-sitter/types"
 

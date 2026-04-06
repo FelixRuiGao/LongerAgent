@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const LONGERAGENT_HOME_DIR = ".longeragent";
+export const VIGIL_HOME_DIR = ".vigil";
 
-export function getLongerAgentHomeDir(): string {
-  return join(homedir(), LONGERAGENT_HOME_DIR);
+export function getVigilHomeDir(): string {
+  return join(homedir(), VIGIL_HOME_DIR);
 }

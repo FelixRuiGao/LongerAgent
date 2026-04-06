@@ -40,7 +40,7 @@ function makeSession(projectRoot: string): Session {
 
 describe("background shell tools", () => {
   it("tracks shell lifecycle and exposes output via bash_output", async () => {
-    const root = makeTempDir("longeragent-shell-root-");
+    const root = makeTempDir("vigil-shell-root-");
     const session = makeSession(root);
     try {
       const started = (session as any)._execBashBackground({
@@ -64,7 +64,7 @@ describe("background shell tools", () => {
   });
 
   it("truncates unread shell output and advances the unread cursor", async () => {
-    const root = makeTempDir("longeragent-shell-trunc-root-");
+    const root = makeTempDir("vigil-shell-trunc-root-");
     const session = makeSession(root);
     try {
       const command = "i=1; while [ $i -le 120 ]; do printf 'line-%03d\\n' \"$i\"; i=$((i+1)); done";

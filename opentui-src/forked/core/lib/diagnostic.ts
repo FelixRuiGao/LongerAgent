@@ -1,31 +1,32 @@
+// @ts-nocheck
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
 import { env, registerEnvVar } from "./env.js"
 
 registerEnvVar({
-  name: "LONGERAGENT_OPENTUI_DIAG",
-  description: "Enable synchronous JSONL diagnostics for LongerAgent's OpenTUI integration.",
+  name: "VIGIL_OPENTUI_DIAG",
+  description: "Enable synchronous JSONL diagnostics for Vigil's OpenTUI integration.",
   type: "boolean",
   default: false,
 })
 
 registerEnvVar({
-  name: "LONGERAGENT_OPENTUI_DIAG_PATH",
-  description: "Path for LongerAgent OpenTUI diagnostic JSONL output.",
+  name: "VIGIL_OPENTUI_DIAG_PATH",
+  description: "Path for Vigil OpenTUI diagnostic JSONL output.",
   type: "string",
-  default: "/tmp/longeragent-opentui-diag.jsonl",
+  default: "/tmp/vigil-opentui-diag.jsonl",
 })
 
 registerEnvVar({
-  name: "LONGERAGENT_OPENTUI_DISABLE_MARKDOWN_PATCH",
-  description: "Disable LongerAgent's local OpenTUI markdown monkey patch.",
+  name: "VIGIL_OPENTUI_DISABLE_MARKDOWN_PATCH",
+  description: "Disable Vigil's local OpenTUI markdown monkey patch.",
   type: "boolean",
   default: false,
 })
 
 registerEnvVar({
-  name: "LONGERAGENT_OPENTUI_ASSISTANT_RENDERER",
+  name: "VIGIL_OPENTUI_ASSISTANT_RENDERER",
   description: "Assistant message renderer: 'markdown' or 'code'.",
   type: "string",
   default: "markdown",
@@ -81,46 +82,46 @@ function sanitize(value: unknown, depth: number = 0): unknown {
 }
 
 function appendLine(line: string): void {
-  const path = getLongerAgentOpenTuiDiagPath()
+  const path = getVigilOpenTuiDiagPath()
   mkdirSync(dirname(path), { recursive: true })
   appendFileSync(path, line, "utf8")
   currentBytes += Buffer.byteLength(line)
 }
 
-export function isLongerAgentOpenTuiDiagEnabled(): boolean {
-  return Boolean(env.LONGERAGENT_OPENTUI_DIAG)
+export function isVigilOpenTuiDiagEnabled(): boolean {
+  return Boolean(env.VIGIL_OPENTUI_DIAG)
 }
 
-export function getLongerAgentOpenTuiDiagPath(): string {
-  return String(env.LONGERAGENT_OPENTUI_DIAG_PATH)
+export function getVigilOpenTuiDiagPath(): string {
+  return String(env.VIGIL_OPENTUI_DIAG_PATH)
 }
 
-export function isLongerAgentMarkdownPatchDisabled(): boolean {
-  return Boolean(env.LONGERAGENT_OPENTUI_DISABLE_MARKDOWN_PATCH)
+export function isVigilMarkdownPatchDisabled(): boolean {
+  return Boolean(env.VIGIL_OPENTUI_DISABLE_MARKDOWN_PATCH)
 }
 
-export function getLongerAgentAssistantRenderer(): "markdown" | "code" {
-  const value = String(env.LONGERAGENT_OPENTUI_ASSISTANT_RENDERER ?? "markdown").trim().toLowerCase()
+export function getVigilAssistantRenderer(): "markdown" | "code" {
+  const value = String(env.VIGIL_OPENTUI_ASSISTANT_RENDERER ?? "markdown").trim().toLowerCase()
   return value === "code" ? "code" : "markdown"
 }
 
-export function resetLongerAgentOpenTuiDiagLog(context: Record<string, unknown> = {}): void {
-  if (!isLongerAgentOpenTuiDiagEnabled()) return
+export function resetVigilOpenTuiDiagLog(context: Record<string, unknown> = {}): void {
+  if (!isVigilOpenTuiDiagEnabled()) return
 
-  const path = getLongerAgentOpenTuiDiagPath()
+  const path = getVigilOpenTuiDiagPath()
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, "", "utf8")
   currentBytes = 0
   didReset = true
   didTruncate = false
   sequence = 0
-  writeLongerAgentOpenTuiDiag("diag.start", context)
+  writeVigilOpenTuiDiag("diag.start", context)
 }
 
-export function writeLongerAgentOpenTuiDiag(event: string, payload: Record<string, unknown> = {}): void {
-  if (!isLongerAgentOpenTuiDiagEnabled()) return
+export function writeVigilOpenTuiDiag(event: string, payload: Record<string, unknown> = {}): void {
+  if (!isVigilOpenTuiDiagEnabled()) return
   if (!didReset) {
-    resetLongerAgentOpenTuiDiagLog({ reason: "implicit-reset" })
+    resetVigilOpenTuiDiagLog({ reason: "implicit-reset" })
   }
 
   const record = {

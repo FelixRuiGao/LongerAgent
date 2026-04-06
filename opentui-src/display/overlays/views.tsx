@@ -28,12 +28,12 @@ import { SelectableRow } from "../primitives/selectable-row.js";
 
 interface OverlayFrameProps {
   theme: DisplayTheme;
-  width?: string | number;
-  height?: string | number;
+  width?: number | "auto" | `${number}%`;
+  height?: number | "auto" | `${number}%`;
   children: React.ReactNode;
 }
 
-function OverlayFrame({ theme, width = "100%", height, children }: OverlayFrameProps): React.ReactElement {
+function OverlayFrame({ theme, width = "100%", height, children }: OverlayFrameProps): React.ReactNode {
   return (
     <PanelSurface
       colors={theme.colors}
@@ -63,7 +63,7 @@ function OverlayOptionRow({
   selected,
   width,
   onPress,
-}: OverlayOptionRowProps): React.ReactElement {
+}: OverlayOptionRowProps): React.ReactNode {
   const prefix = selected ? "> " : "  ";
   return (
     <SelectableRow
@@ -92,7 +92,7 @@ export function CommandOverlayView(
     maxVisible: number;
     onItemClick: (index: number) => void;
   },
-): React.ReactElement | null {
+): React.ReactNode {
   if (!overlay.visible || overlay.items.length === 0) return null;
   const start = Math.max(0, Math.min(
     overlay.selected - Math.floor(maxVisible / 2),
@@ -134,7 +134,7 @@ export function CommandPickerView(
     maxVisible: number;
     onItemClick: (index: number) => void;
   },
-): React.ReactElement | null {
+): React.ReactNode {
   if (!isCommandPickerActive(pickerProp)) return null;
 
   const picker = { ...pickerProp, maxVisible };
@@ -179,7 +179,7 @@ export function CheckboxPickerView(
     contentWidth: number;
     onItemClick: (index: number) => void;
   },
-): React.ReactElement | null {
+): React.ReactNode {
   if (!isCheckboxPickerActive(picker)) return null;
 
   const { start, end } = getCheckboxPickerVisibleRange(picker);
@@ -222,7 +222,7 @@ export function PromptSelectView(
     maxVisible: number;
     onItemClick: (index: number) => void;
   },
-): React.ReactElement | null {
+): React.ReactNode {
   if (!prompt || prompt.options.length === 0) return null;
 
   const start = Math.max(0, Math.min(
@@ -270,7 +270,7 @@ export function PromptSecretView(
     onSubmit: (value: string) => void;
     theme: DisplayTheme;
   },
-): React.ReactElement | null {
+): React.ReactNode {
   if (!prompt) return null;
 
   const promptHeight = Math.max(3, prompt.message.split("\n").length + 2);
@@ -287,7 +287,7 @@ export function PromptSecretView(
         textColor={theme.colors.text}
         focusedTextColor={theme.colors.text}
         placeholderColor={theme.colors.dim}
-        onSubmit={onSubmit}
+        onSubmit={onSubmit as any}
       />
       <text fg={theme.colors.dim} content="Enter confirm · Esc cancel" />
     </OverlayFrame>
@@ -304,8 +304,13 @@ export function OAuthOverlayView(
     theme: DisplayTheme;
     contentWidth: number;
   },
-): React.ReactElement | null {
+): React.ReactNode {
   if (!state) return null;
+
+  const titleText =
+    state.provider === "copilot"
+      ? "GitHub Copilot Login"
+      : "OpenAI ChatGPT Login";
 
   const { phase } = state;
   if (phase.step === "choose") {
@@ -315,7 +320,7 @@ export function OAuthOverlayView(
     ];
     return (
       <OverlayFrame theme={theme} height={options.length + 2}>
-        <text fg={theme.colors.yellow} content="OpenAI ChatGPT Login" />
+        <text fg={theme.colors.yellow} content={titleText} />
         {options.map((label, index) => (
           <OverlayOptionRow
             key={`oauth-opt-${index}`}
@@ -352,7 +357,7 @@ export function OAuthOverlayView(
 
   return (
     <OverlayFrame theme={theme} height={lines.length + 2}>
-      <text fg={theme.colors.yellow} content="OpenAI ChatGPT Login" />
+      <text fg={theme.colors.yellow} content={titleText} />
       {lines.map((line, index) => (
         <text key={`oauth-line-${index}`} fg={theme.colors.text} content={truncateToWidth(line, contentWidth)} />
       ))}

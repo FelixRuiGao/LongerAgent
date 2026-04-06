@@ -23,7 +23,7 @@ export function AskPanelView({
   onInput,
   onSubmit,
   theme,
-}: AskPanelProps & { theme: DisplayTheme }): React.ReactElement {
+}: AskPanelProps & { theme: DisplayTheme }): React.ReactNode {
   if (ask.kind !== "agent_question") {
     return (
       <PanelSurface colors={theme.colors} spacing={theme.spacing}>
@@ -128,7 +128,7 @@ export function AskPanelView({
             placeholderColor={theme.colors.dim}
             onInput={onInput}
             onChange={onInput}
-            onSubmit={onSubmit}
+            onSubmit={onSubmit as any}
           />
           <text
             fg={theme.colors.dim}

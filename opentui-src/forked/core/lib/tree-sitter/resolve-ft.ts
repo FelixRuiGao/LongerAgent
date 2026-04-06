@@ -1,3 +1,4 @@
+// @ts-nocheck
 export function extToFiletype(extension: string): string | undefined {
   const extensionToFiletype: Map<string, string> = new Map([
     ["js", "javascript"],

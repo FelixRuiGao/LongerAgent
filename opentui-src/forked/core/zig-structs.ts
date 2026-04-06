@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { defineStruct, defineEnum } from "bun-ffi-structs"
 import { ptr, toArrayBuffer, type Pointer } from "bun:ffi"
 import { RGBA } from "./lib/RGBA.js"

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Writable } from "stream"
 import { EventEmitter } from "events"
 
