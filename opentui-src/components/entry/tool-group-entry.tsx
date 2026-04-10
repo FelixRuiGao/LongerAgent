@@ -7,6 +7,7 @@ import path from "node:path";
 import { RGBA, createTextAttributes } from "@opentui/core";
 
 const ATTRS_UNDERLINE = createTextAttributes({ underline: true });
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 import type { PresentationEntry } from "../../presentation/types.js";
 import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
@@ -64,15 +65,15 @@ function ToolGroupEntryInner(
   const items = entry.groupEntries ?? [];
   const summary = entry.groupSummary ?? "Explore";
 
-  const shimmer = useShimmer(EXPLORE_LABEL, TOOL_NAME_RGBA, active);
+  const shimmer = useShimmer(EXPLORE_LABEL, TOOL_NAME_RGBA, active, ATTRS_BOLD);
 
   const indicatorColor = getActivityIndicatorColor(
-    { active, error: entry.state === "error" },
+    { active, error: entry.state === "error", interrupted: entry.toolInterrupted === true },
     DEFAULT_DISPLAY_THEME,
     "tool",
   );
 
-  const indicator = active ? "›" : entry.state === "error" ? "✗" : "✓";
+  const indicator = active ? "›" : entry.state === "error" ? "⏺" : "⏺";
 
   const toggleExpand = (e: any) => {
     e.stopPropagation();
@@ -94,13 +95,13 @@ function ToolGroupEntryInner(
           <>
             <text content={shimmer} flexShrink={0} />
             <text content="  " flexShrink={0} />
-            <text fg={TOOL_NAME_COLOR} content={entry.groupLatestToolName ?? ""} flexShrink={0} />
+            <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={entry.groupLatestToolName ?? ""} flexShrink={0} />
             <text content="  " flexShrink={0} />
             <text fg={colors.dim} content={entry.groupLatestToolText ?? ""} truncate flexGrow={1} flexShrink={1} />
           </>
         ) : (
           <>
-            <text fg={TOOL_NAME_COLOR} content={summary} flexShrink={0} />
+            <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={summary} flexShrink={0} />
             <text content=" " flexShrink={0} onMouseDown={toggleExpand} />
             <text fg={colors.dim} content={expanded ? "▾" : "▸"} flexShrink={0} onMouseDown={toggleExpand} />
             <text content=" " flexShrink={0} onMouseDown={toggleExpand} />
@@ -114,9 +115,9 @@ function ToolGroupEntryInner(
           {items.map((item) => {
             const name = item.toolDisplayName ?? "?";
             const text = item.toolText ?? "";
-            const itemIndicator = item.state === "error" ? "✗" : "✓";
+            const itemIndicator = item.state === "error" ? "⏺" : "⏺";
             const itemColor = getActivityIndicatorColor(
-              { active: false, error: item.state === "error" },
+              { active: false, error: item.state === "error", interrupted: item.toolInterrupted === true },
               DEFAULT_DISPLAY_THEME,
               "tool",
             );

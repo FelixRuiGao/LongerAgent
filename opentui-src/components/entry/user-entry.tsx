@@ -2,9 +2,7 @@
 
 import React, { useMemo } from "react";
 
-import { StyledText, RGBA, createTextAttributes, type TextChunk } from "@opentui/core";
-
-const ATTRS_BOLD = createTextAttributes({ bold: true });
+import { StyledText, RGBA, type TextChunk } from "@opentui/core";
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../conversation-types.js";
 
@@ -20,13 +18,13 @@ function buildUserStyledText(text: string, accentColor: string, textColor: strin
   let match: RegExpExecArray | null;
   while ((match = IMAGE_TOKEN_PATTERN.exec(text)) !== null) {
     if (match.index > lastIndex) {
-      chunks.push({ __isChunk: true, text: text.slice(lastIndex, match.index), fg: textFg, attributes: 1 });
+      chunks.push({ __isChunk: true, text: text.slice(lastIndex, match.index), fg: textFg, attributes: 0 });
     }
     chunks.push({ __isChunk: true, text: match[0], fg: accentFg, attributes: 1 });
     lastIndex = match.index + match[0].length;
   }
   if (lastIndex < text.length) {
-    chunks.push({ __isChunk: true, text: text.slice(lastIndex), fg: textFg, attributes: 1 });
+    chunks.push({ __isChunk: true, text: text.slice(lastIndex), fg: textFg, attributes: 0 });
   }
   return new StyledText(chunks);
 }
@@ -55,7 +53,7 @@ function UserEntryInner(
       <box backgroundColor={colors.userBg} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
         {styledContent
           ? <text content={styledContent} wrapMode="word" width="100%" />
-          : <text fg={colors.text} attributes={ATTRS_BOLD} content={text} wrapMode="word" width="100%" />
+          : <text fg={colors.text} content={text} wrapMode="word" width="100%" />
         }
         {queued ? <text fg={colors.orange} content=" [queued]" /> : null}
       </box>

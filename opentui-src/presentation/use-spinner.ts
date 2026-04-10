@@ -7,8 +7,8 @@ export const THINKING_SPINNER_INTERVAL = 600;
 export const TOOL_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 export const TOOL_SPINNER_INTERVAL = 80;
 
-export const DECODING_SPINNER_FRAMES = ["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸"] as const;
-export const DECODING_SPINNER_INTERVAL = 500;
+export const DECODING_SPINNER_FRAMES = ["〡", "〢", "〣"] as const;
+export const DECODING_SPINNER_INTERVAL = 400;
 
 export const PREFILL_SPINNER_FRAMES = ["░", "▒", "▓", "▒"] as const;
 export const PREFILL_SPINNER_INTERVAL = 600;

@@ -7,6 +7,7 @@ import path from "node:path";
 import { RGBA, createTextAttributes } from "@opentui/core";
 
 const ATTRS_UNDERLINE = createTextAttributes({ underline: true });
+const ATTRS_BOLD = createTextAttributes({ bold: true });
 import type { PresentationEntry, ToolCategory } from "../../presentation/types.js";
 import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
@@ -136,17 +137,20 @@ function ToolOperationEntryInner(
   const displayName = entry.toolDisplayName ?? "Tool";
   const category = entry.toolCategory ?? "observe";
   const barColor = BAR_COLORS[category];
-  const shimmer = useShimmer(displayName, TOOL_NAME_RGBA, active);
+  const shimmer = useShimmer(displayName, TOOL_NAME_RGBA, active, ATTRS_BOLD);
+  const interrupted = entry.toolInterrupted === true;
 
   const indicator = active
     ? "›"
     : entry.state === "error"
-      ? "✗"
-      : "✓";
+      ? "⏺"
+      : "⏺";
 
   const indicatorColor = active
     ? TOOL_NAME_COLOR
-    : entry.state === "error"
+    : interrupted
+      ? DEFAULT_DISPLAY_THEME.colors.waitingStatus
+      : entry.state === "error"
       ? DEFAULT_DISPLAY_THEME.presentation.errorColor
       : DEFAULT_DISPLAY_THEME.presentation.successColor;
 
@@ -192,7 +196,7 @@ function ToolOperationEntryInner(
         {active ? (
           <text content={shimmer} flexShrink={0} />
         ) : (
-          <text fg={TOOL_NAME_COLOR} content={displayName} flexShrink={0} />
+          <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={displayName} flexShrink={0} />
         )}
         {suffix ? (
           <text fg={ARG_COLOR} content={` ${suffix}`} flexShrink={0} />

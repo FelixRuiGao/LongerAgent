@@ -4,7 +4,9 @@ import type {
   PresentationState,
   InlineResultData,
 } from "./types.js";
+import { basename } from "node:path";
 import type { FileModifyDisplayData } from "../../src/diff-hunk.js";
+import { PLAN_FILENAME } from "../../src/plan-state.js";
 import { getToolProfile, HIDDEN_TOOLS } from "./tool-profiles.js";
 
 // ------------------------------------------------------------------
@@ -59,23 +61,40 @@ function isToolResultInterrupted(entry: ReconciledConversationEntry): boolean {
   return entry.entry.text.startsWith("[Interrupted]");
 }
 
+/** File-mutating tools whose `path` arg should be checked for plan file targeting. */
+const FILE_MUTATING_TOOLS = new Set(["write_file", "edit_file"]);
+
 /**
  * Check if a tool_call + its optional result represent a plan file operation.
- * Plan file operations are tagged with planFileOperation in toolMetadata.
+ *
+ * Two detection paths (earliest wins):
+ *  1. **Streaming** — the tool_call args contain `path` whose basename is
+ *     `plan.md`. Available as soon as the args are streamed in, so the TUI can
+ *     suppress display immediately instead of waiting for execution to finish.
+ *  2. **Post-execution** — the tool_result metadata has `planFileOperation: true`,
+ *     set by `withPlanHook` in session.ts after the file write completes.
  */
 function isPlanFileOperation(
   callEntry: ReconciledConversationEntry,
   nextEntry: ReconciledConversationEntry | undefined,
 ): boolean {
-  // Check if the result entry has the planFileOperation flag
+  // Path 1: early detection from tool_call args (works during streaming)
+  const toolName = getToolName(callEntry);
+  if (FILE_MUTATING_TOOLS.has(toolName)) {
+    const args = getToolArgs(callEntry);
+    const filePath = typeof args.path === "string" ? args.path : "";
+    if (filePath && basename(filePath) === PLAN_FILENAME) return true;
+  }
+
+  // Path 2: post-execution metadata flag (authoritative, set by session.ts)
   if (nextEntry?.entry.kind === "tool_result") {
     const resultMeta = (nextEntry.entry.meta as Record<string, unknown>) ?? {};
     const toolMetadata = resultMeta.toolMetadata as Record<string, unknown> | undefined;
     if (toolMetadata?.planFileOperation === true) return true;
   }
-  // Also check the call entry meta (for streaming scenarios where result not yet available)
   const callMeta = getMeta(callEntry);
   if ((callMeta.toolMetadata as Record<string, unknown> | undefined)?.planFileOperation === true) return true;
+
   return false;
 }
 
@@ -198,6 +217,47 @@ function transformSubAgentDone(entry: ReconciledConversationEntry): Presentation
   };
 }
 
+function transformAgentResult(entry: ReconciledConversationEntry): PresentationEntry {
+  const meta = getMeta(entry);
+  const agentName = typeof meta.agentId === "string" && meta.agentId.trim()
+    ? meta.agentId
+    : "sub-agent";
+  const outcome = typeof meta.outcome === "string" ? meta.outcome : "completed";
+  const elapsedMs = typeof meta.elapsedMs === "number" ? meta.elapsedMs : 0;
+  const preview = typeof meta.preview === "string" ? meta.preview.trimEnd() : "";
+
+  const state: PresentationState = outcome === "failed" ? "error" : "done";
+  const elapsedStr = elapsedMs > 0 ? `${(elapsedMs / 1000).toFixed(1)}s` : "";
+  const outcomeSuffix = outcome === "completed"
+    ? ""
+    : outcome === "failed"
+      ? ", error"
+      : ", interrupted";
+  const suffix = elapsedStr
+    ? `(${elapsedStr}${outcomeSuffix})`
+    : outcomeSuffix
+      ? `(${outcomeSuffix.slice(2)})`
+      : "";
+
+  const inlineResult: InlineResultData | null = preview.length > 0
+    ? { text: preview, dim: false, maxLines: 50 }
+    : null;
+
+  return {
+    id: entry.id,
+    contentVersion: entry.contentVersion,
+    kind: "tool_operation",
+    state,
+    toolDisplayName: "Agent",
+    toolCategory: "orchestrate",
+    toolText: agentName,
+    toolSuffix: suffix,
+    toolInterrupted: outcome === "interrupted",
+    toolAgentName: agentName,
+    toolInlineResult: inlineResult,
+  };
+}
+
 function transformSystem(entry: ReconciledConversationEntry): PresentationEntry {
   const kind = entry.entry.kind;
   let severity: PresentationEntry["systemSeverity"] = "info";
@@ -251,6 +311,7 @@ function buildToolOperation(
     );
 
   let state: PresentationState;
+  let toolInterrupted = false;
   if (toolStillWorking) {
     state = "active";
   } else if (!resultEntry && activeEntryId && activeEntryId === callEntry.id) {
@@ -263,6 +324,7 @@ function buildToolOperation(
   } else if (isToolResultError(resultEntry)) {
     state = "error";
   } else if (isToolResultInterrupted(resultEntry)) {
+    toolInterrupted = true;
     state = "error";
   } else {
     state = "done";
@@ -330,6 +392,7 @@ function buildToolOperation(
     toolCategory: profile.category,
     toolText: profile.text(toolArgs),
     toolSuffix: profile.suffix?.(resultMeta) ?? "",
+    toolInterrupted,
     toolAgentName,
     toolStartedAt: callEntry.entry.startedAt,
     toolElapsedMs: callEntry.entry.elapsedMs,
@@ -511,6 +574,12 @@ export function presentationTransform(
 
       case "tool_result": {
         result.push(transformSystem(entry));
+        i++;
+        break;
+      }
+
+      case "agent_result": {
+        result.push(transformAgentResult(entry));
         i++;
         break;
       }

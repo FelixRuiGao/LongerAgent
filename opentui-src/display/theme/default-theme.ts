@@ -77,7 +77,7 @@ const DEFAULT_DISPLAY_TOKENS: DisplayThemeTokens = {
     codeBorderHover: "#504860",
     codeLabelForeground: "#636a76",
     codeCopyForeground: "#454a54",
-    codeCopyFlash: "#ffb703",
+    codeCopyFlash: "#8ab4f8",
     codeForeground: "#a0a8b4",
     syntax: {
       keyword: "#e0a050",
@@ -143,7 +143,7 @@ const DEFAULT_DISPLAY_TOKENS: DisplayThemeTokens = {
       orchestrate: "#b4a0ec",
     },
     thinkingColor: "#5a7eb0",
-    successColor: "#6b8f48",
+    successColor: "#2e9e53",
     errorColor: "#f85656",
     toolNameColor: "#8ab4f8",
     modelProviderColors: {

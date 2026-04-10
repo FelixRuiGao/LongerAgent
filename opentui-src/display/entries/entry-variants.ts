@@ -23,9 +23,11 @@ export function getActivityIndicatorColor(
   {
     active,
     error,
+    interrupted,
   }: {
     active: boolean;
     error: boolean;
+    interrupted?: boolean;
   },
   theme: DisplayTheme,
   kind: "thinking" | "tool",
@@ -37,6 +39,9 @@ export function getActivityIndicatorColor(
   }
   if (error) {
     return theme.presentation.errorColor;
+  }
+  if (interrupted) {
+    return theme.colors.waitingStatus;
   }
   return theme.presentation.successColor;
 }

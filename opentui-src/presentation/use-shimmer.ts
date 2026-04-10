@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { RGBA, StyledText, type TextChunk } from "@opentui/core";
 
-const SHIMMER_WINDOW = 2;
-const SHIMMER_BASE_BRIGHTNESS = 0.4;
+const SHIMMER_WINDOW = 4;
+const SHIMMER_BASE_BRIGHTNESS = 0.6;
 const SHIMMER_PEAK_BRIGHTNESS = 1.0;
-const SHIMMER_INTERVAL = 100;
+const SHIMMER_INTERVAL = 70;
 
 function gaussian(x: number, sigma: number): number {
   return Math.exp(-(x * x) / (2 * sigma * sigma));
@@ -24,6 +24,7 @@ export function useShimmer(
   text: string,
   baseColor: RGBA,
   active: boolean,
+  attributes?: number,
 ): StyledText {
   const [position, setPosition] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -52,7 +53,7 @@ export function useShimmer(
   }, [active, textLen]);
 
   if (!active || textLen === 0) {
-    const chunk: TextChunk = { __isChunk: true, text, fg: baseColor };
+    const chunk: TextChunk = { __isChunk: true, text, fg: baseColor, attributes };
     return new StyledText([chunk]);
   }
 
@@ -70,6 +71,7 @@ export function useShimmer(
       __isChunk: true,
       text: text[i],
       fg: color,
+      attributes,
     });
   }
 

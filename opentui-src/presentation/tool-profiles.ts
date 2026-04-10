@@ -163,7 +163,7 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
       const q = str(args.question);
       return q.length > 80 ? q.slice(0, 80) + "..." : q;
     },
-    inlineResult: { maxLines: 4 },
+    inlineResult: { maxLines: Number.POSITIVE_INFINITY },
   },
   show_context: {
     category: "observe",

@@ -61,4 +61,105 @@ describe("OpenTUI presentation transform", () => {
       state: "active",
     });
   });
+
+  it("maps agent_result entries to tool_operation entries using structured meta", () => {
+    const entries: ReconciledConversationEntry[] = [
+      reconciled("ar-001", {
+        id: "ar-001",
+        kind: "agent_result",
+        text: "",
+        meta: {
+          agentId: "reviewer-1",
+          outcome: "interrupted",
+          cause: "user_mass_interrupt",
+          elapsedMs: 4200,
+          preview: "line 1\nline 2",
+        },
+      }),
+    ];
+
+    const result = presentationTransform(entries, [], false, null);
+
+    expect(result).toEqual([
+      {
+        id: "ar-001",
+        contentVersion: 1,
+        kind: "tool_operation",
+        state: "done",
+        toolDisplayName: "Agent",
+        toolCategory: "orchestrate",
+        toolText: "reviewer-1",
+        toolSuffix: "(4.2s, interrupted)",
+        toolInterrupted: true,
+        toolAgentName: "reviewer-1",
+        toolInlineResult: {
+          text: "line 1\nline 2",
+          dim: false,
+          maxLines: 50,
+        },
+      },
+    ]);
+  });
+
+  it("does not truncate ask inline previews", () => {
+    const entries: ReconciledConversationEntry[] = [
+      reconciled("tc-ask", {
+        id: "tc-ask",
+        kind: "tool_call",
+        text: "ask",
+        meta: {
+          toolName: "ask",
+          toolArgs: {
+            questions: [
+              {
+                question: "你最喜欢的编程语言是什么？",
+                options: [
+                  { label: "Python" },
+                  { label: "JavaScript/TypeScript" },
+                  { label: "Rust" },
+                ],
+              },
+            ],
+          },
+          toolExecState: "completed",
+          toolStreamState: "closed",
+        },
+      }),
+      reconciled("tr-ask", {
+        id: "tr-ask",
+        kind: "tool_result",
+        text: [
+          "Q: 你最喜欢的编程语言是什么？",
+          "  ○ Python",
+          "  ● JavaScript/TypeScript",
+          "  ○ Rust",
+          "  ○ Go",
+          "  ○ C++",
+          "  ○ 其他",
+        ].join("\n"),
+        fullText: [
+          "Question 1: \"你最喜欢的编程语言是什么？\"",
+          "Answer: JavaScript/TypeScript",
+        ].join("\n"),
+        meta: {
+          toolName: "ask",
+          isError: false,
+        },
+      }),
+    ];
+
+    const result = presentationTransform(entries, [], false, null);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      kind: "tool_operation",
+      toolDisplayName: "Ask",
+      toolInlineResult: {
+        text: entries[1].entry.text,
+        dim: false,
+        maxLines: Number.POSITIVE_INFINITY,
+      },
+      toolResultFullText: entries[1].entry.fullText,
+    });
+  });
 });
