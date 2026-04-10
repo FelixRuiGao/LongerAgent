@@ -47,7 +47,7 @@ describe("P4 shell governance", () => {
     try {
       const result = await executeTool(
         "bash",
-        { command: "printf %s \"$AGENTFLOW_TEST_SECRET\"" },
+        { command: "printf %s \"$AGENTFLOW_TEST_SECRET\"", timeout: 30 },
         { projectRoot: process.cwd() },
       );
       expect(result.content).not.toContain("super-secret-value");
@@ -67,14 +67,14 @@ describe("P4 shell governance", () => {
     try {
       const denied = await executeTool(
         "bash",
-        { command: "pwd", cwd: externalRoot },
+        { command: "pwd", cwd: externalRoot, timeout: 30 },
         { projectRoot },
       );
       expect(denied.content).toContain("project root boundary");
 
       const allowed = await executeTool(
         "bash",
-        { command: "pwd", cwd: externalRoot },
+        { command: "pwd", cwd: externalRoot, timeout: 30 },
         { projectRoot, externalPathAllowlist: [externalRoot] },
       );
       expect(allowed.content).toContain("STDOUT:");

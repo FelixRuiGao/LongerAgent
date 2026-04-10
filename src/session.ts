@@ -31,6 +31,7 @@ import type {
   ToolExecutor,
   ToolPreflightContext,
   ToolPreflightDecision,
+  ResolveToolCallVisibilityCallback,
 } from "./agents/tool-loop.js";
 import { createEphemeralLogState } from "./ephemeral-log.js";
 import { isCompactMarker, allocateContextId, stripContextTags, ContextTagStripBuffer } from "./context-rendering.js";
@@ -92,6 +93,7 @@ import {
   createTurnStart,
   createTurnEnd,
   createUserMessage as createUserMessageEntry,
+  createAgentResult,
   createAssistantText,
   createReasoning,
   createToolCall,
@@ -117,6 +119,8 @@ import {
   type GlobalTuiPreferences,
   type LoadLogResult,
   type LogSessionMeta,
+  type VigilSettings,
+  type ModelSelectionState,
 } from "./persistence.js";
 import {
   CHILD_SESSION_CAPABILITIES,
@@ -124,7 +128,6 @@ import {
   type SessionCapabilities,
 } from "./session-capabilities.js";
 import type {
-  AgentMessage,
   ArchivedChildRecord,
   ChildSessionLifecycle,
   ChildSessionMetaRecord,
@@ -132,6 +135,8 @@ import type {
   ChildSessionOutcome,
   ChildSessionPhase,
   ChildSessionSnapshot,
+  MessageEnvelope,
+  MessageType,
 } from "./session-tree-types.js";
 import {
   resolvePersistedModelSelection,
@@ -142,6 +147,31 @@ import {
   DEFAULT_THRESHOLDS,
   computeHysteresisThresholds,
 } from "./settings.js";
+// ------------------------------------------------------------------
+// Message migration helper (old AgentMessage → MessageEnvelope)
+// ------------------------------------------------------------------
+
+function migrateMessageEnvelope(raw: Record<string, unknown>): MessageEnvelope {
+  // New format already — pass through
+  if (raw.type && typeof raw.type === "string" &&
+      ["user_input", "peer_message", "system_notice"].includes(raw.type as string)) {
+    return raw as unknown as MessageEnvelope;
+  }
+  // Old format: { from, to, content, timestamp }
+  const from = (raw.from as string) ?? "system";
+  let type: MessageType = "system_notice";
+  if (from === "user") type = "user_input";
+  else if (from === "main") type = "user_input";
+  else if (from === "system") type = "system_notice";
+  else type = "peer_message"; // agent name
+  return {
+    type,
+    sender: from,
+    content: (raw.content as string) ?? "",
+    timestamp: (raw.timestamp as number) ?? 0,
+  };
+}
+
 // ------------------------------------------------------------------
 // Constants
 // ------------------------------------------------------------------
@@ -267,6 +297,27 @@ const COMM_TOOL_NAMES = new Set([
   "bash_background", "bash_output", "kill_shell", "send",
 ]);
 
+const SAFE_INTERRUPT_TOOLS = new Set([
+  "ask",
+  "check_status",
+  "distill_context",
+  "glob",
+  "grep",
+  "kill_agent",
+  "list_dir",
+  "read_file",
+  "send",
+  "show_context",
+  "skill",
+  "spawn",
+  "spawn_file",
+  "time",
+  "wait",
+  "web_fetch",
+  "web_search",
+  "bash_output",
+]);
+
 // ------------------------------------------------------------------
 // InlineImageInput — clipboard / drag-drop image passed to turn()
 // ------------------------------------------------------------------
@@ -278,7 +329,7 @@ export interface InlineImageInput {
 }
 
 // ------------------------------------------------------------------
-// AgentMessage — message envelope for push delivery & future routing
+// MessageEnvelope — typed message envelope (see session-tree-types.ts)
 // ------------------------------------------------------------------
 
 
@@ -301,8 +352,6 @@ interface ChildSessionHandle {
   resultText: string;
   elapsed: number;
   startTime: number;
-  deliveredResultRevision: number;
-  outputRevision: number;
   turnPromise: Promise<string> | null;
   abortController: AbortController | null;
   recentEvents: string[];
@@ -317,6 +366,7 @@ interface ChildSessionHandle {
   /** Resolve when _finishChildTurn completes. Created in _startChildTurn, resolved in _finishChildTurn. */
   settlePromise: Promise<void> | null;
   settleResolve: (() => void) | null;
+  terminationCause?: "natural" | "parent_kill" | "user_targeted_kill" | "user_mass_interrupt";
 }
 
 interface AgentTeam {
@@ -339,14 +389,6 @@ interface BackgroundShellEntry {
   explicitKill: boolean;
 }
 
-interface InterruptSnapshot {
-  turnIndex: number;
-  hadActiveAgents: boolean;
-  hadActiveShells: boolean;
-  hadUnconsumed: boolean;
-  deliveryContent: string;
-}
-
 interface PreparedChildRestore {
   record: ChildSessionMetaRecord;
   agent: Agent;
@@ -359,7 +401,7 @@ interface PreparedSessionRestore {
   rootState: Session;
   children: PreparedChildRestore[];
   archivedRecords?: ArchivedChildRecord[];
-  rootInbox?: AgentMessage[];
+  rootInbox?: MessageEnvelope[];
   warnings: string[];
 }
 
@@ -538,11 +580,11 @@ export class Session {
   private _agentState: "working" | "idle" | "waiting" = "idle";
 
   // Inbox: holds messages for push delivery into tool results.
-  // AgentMessage envelope includes from/to for future agent-to-agent routing.
-  private _inbox: AgentMessage[] = [];
+  // Typed message inbox — all messages flow through _deliverMessage.
+  private _inbox: MessageEnvelope[] = [];
+  private _agentResultSeq = 0;
   private _currentTurnSignal: AbortSignal | null = null;
   private _currentTurnAbortController: AbortController | null = null;
-  private _interruptSnapshot: InterruptSnapshot | null = null;
 
   // Turn serialization — prevents concurrent turn() calls from corrupting state
   private _turnInFlight: Promise<string | void> | null = null;
@@ -707,27 +749,6 @@ export class Session {
         : handle.elapsed,
       cacheReadTokens: session.lastCacheReadTokens,
     };
-  }
-
-  private _hasUndeliveredChildResults(): boolean {
-    const childSessions = this._childSessions ?? new Map<string, ChildSessionHandle>();
-    for (const handle of childSessions.values()) {
-      if (handle.outputRevision > handle.deliveredResultRevision) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private _consumeUndeliveredChildResults(): Array<{ handle: ChildSessionHandle; text: string }> {
-    const results: Array<{ handle: ChildSessionHandle; text: string }> = [];
-    const childSessions = this._childSessions ?? new Map<string, ChildSessionHandle>();
-    for (const handle of childSessions.values()) {
-      if (handle.outputRevision <= handle.deliveredResultRevision) continue;
-      handle.deliveredResultRevision = handle.outputRevision;
-      results.push({ handle, text: handle.resultText });
-    }
-    return results;
   }
 
   private _buildSubSessionBrief(): string {
@@ -965,7 +986,7 @@ export class Session {
       if (entry.discarded) continue;
       if (entry.turnIndex !== turnIndex) continue;
       if (entry.roundIndex !== roundIndex) continue;
-      if (entry.type === "tool_call") return true;
+      if (entry.type === "tool_call" && entry.apiRole === "assistant") return true;
     }
     return false;
   }
@@ -1034,14 +1055,15 @@ export class Session {
    *   working → inbox (delivered via tool_result push or activation boundary drain)
    *   waiting → inbox + wake wait
    */
-  private _deliverMessage(msg: AgentMessage): void {
+  private _deliverMessage(msg: MessageEnvelope): void {
     if (this._agentState === "idle") {
       this._injectMessageDirect(msg);
       return;
     }
     // working / waiting → enqueue
     this._inbox.push(msg);
-    if (this._agentState === "waiting") {
+    // Check _waitHandle (not _agentState) to wake — eliminates race window
+    if (this._waitHandle) {
       this._wakeWait();
     }
   }
@@ -1050,17 +1072,36 @@ export class Session {
    * Public wrapper for TUI / GUI to deliver messages.
    * Preserves the original (source, content) signature for external callers.
    */
-  deliverMessage(source: "user" | "system" | "sub-agent", content: string): void {
-    this._deliverMessage({ from: source, to: "main", content, timestamp: Date.now() });
+  deliverMessage(source: "user" | "system", content: string): void {
+    this._deliverMessage({
+      type: source === "user" ? "user_input" : "system_notice",
+      sender: source,
+      content,
+      timestamp: Date.now(),
+    });
   }
 
   /**
    * Direct injection (idle-state safety net).
    */
-  private _injectMessageDirect(msg: AgentMessage): void {
+  private _injectMessageDirect(msg: MessageEnvelope): void {
     const ctxId = this._allocateContextId();
-    const display = `[Message from ${msg.from}]`;
-    const content = `[Message from ${msg.from}]\n${msg.content}`;
+    let display: string;
+    let content: string;
+    switch (msg.type) {
+      case "user_input":
+        display = msg.content.slice(0, 200);
+        content = msg.content;
+        break;
+      case "peer_message":
+        display = `[Message from ${msg.sender}]`;
+        content = `[Message from ${msg.sender}]\n${msg.content}`;
+        break;
+      case "system_notice":
+        display = `[System] ${msg.content.slice(0, 100)}`;
+        content = `[System] ${msg.content}`;
+        break;
+    }
     // v2 log (source of truth)
     this._appendEntry(
       createUserMessageEntry(
@@ -1079,13 +1120,6 @@ export class Session {
    */
   private _hasInboxMessages(): boolean {
     return this._inbox.length > 0;
-  }
-
-  /**
-   * Check whether any agent has finished/errored but not yet delivered.
-   */
-  private _hasUndeliveredAgentResults(): boolean {
-    return this._hasUndeliveredChildResults();
   }
 
   private _hasTrackedShells(): boolean {
@@ -1147,146 +1181,87 @@ export class Session {
     return lines.join("\n");
   }
 
+  // ------------------------------------------------------------------
+  // Unified inbox drain — single renderer for all message consumers
+  // ------------------------------------------------------------------
+
   /**
-   * Build unified delivery content: drain queue + build agent report.
-   * Used by check_status, wait, and activation boundary injection.
+   * Drain (or peek at) the inbox, rendering each message by type in arrival order.
+   * Returns null if inbox is empty. This is the SOLE rendering function for inbox content.
+   *
+   * @param opts.peek  If true, read without draining (for interrupt snapshots).
    */
-  private _buildDeliveryContent(opts?: { drainQueue?: boolean }): string {
-    const drainQueue = opts?.drainQueue ?? true;
-    const queued = drainQueue ? this._inbox : [...this._inbox];
-    // 1. Drain inbox, group by sender
-    const byFrom: Record<string, string[]> = {};
-    for (const msg of queued) {
-      if (!byFrom[msg.from]) byFrom[msg.from] = [];
-      byFrom[msg.from].push(msg.content);
-    }
-    if (drainQueue) {
-      this._inbox = [];
-    }
+  private _drainInbox(opts?: { peek?: boolean }): string | null {
+    if (this._inbox.length === 0) return null;
 
-    // 2. Build delivery sections
+    const messages = opts?.peek ? [...this._inbox] : this._inbox;
+    if (!opts?.peek) this._inbox = [];
+
     const sections: string[] = [];
-
-    sections.push("# User");
-    sections.push(byFrom["user"]?.join("\n\n") ?? "No new message.");
-
-    sections.push("# System");
-    sections.push(byFrom["system"]?.join("\n\n") ?? "No new message.");
-
-    sections.push("# Sub-Session Brief");
-    if (this._childSessions.size > 0 || this._statusSource) {
-      sections.push(this._buildSubSessionBrief());
-    } else {
-      sections.push("No sub-sessions.");
+    for (const msg of messages) {
+      switch (msg.type) {
+        case "user_input":
+          sections.push(msg.content);
+          break;
+        case "peer_message":
+          sections.push(`[Message from ${msg.sender}]\n${msg.content}`);
+          break;
+        case "system_notice":
+          sections.push(`[System] ${msg.content}`);
+          break;
+      }
     }
-
-    sections.push("# Shell");
-    sections.push(this._buildShellReport());
-
-    return sections.join("\n");
+    return sections.join("\n\n---\n\n");
   }
 
   /**
    * Inject all pending messages at activation boundary.
-   * Drains queue + builds agent report → pushes as user message.
+   * Drains inbox → pushes as user_message log entry.
    */
   private _injectPendingMessages(): void {
-    // Build display summary before draining inbox
-    const display = this._buildDeliveryDisplaySummary();
-    const content = `[New Messages]\n\n${this._buildDeliveryContent()}`;
+    const drained = this._drainInbox();
+    if (!drained) return;
+    const content = `[New Messages]\n\n${drained}`;
     const ctxId = this._allocateContextId();
-    // v2 log (source of truth)
-    this._appendEntry(
-      createUserMessageEntry(
-        this._nextLogId("user_message"),
-        this._turnCount,
-        display,
-        content,
-        ctxId,
-      ),
-      false,
+    const entry = createUserMessageEntry(
+      this._nextLogId("user_message"),
+      this._turnCount,
+      "[New Messages]",
+      content,
+      ctxId,
     );
-  }
-
-  /**
-   * Build a one-line display summary of pending messages for TUI.
-   * Must be called before _buildDeliveryContent() which drains the inbox.
-   */
-  private _buildDeliveryDisplaySummary(): string {
-    const counts: Record<string, number> = {};
-    for (const msg of this._inbox) {
-      counts[msg.from] = (counts[msg.from] ?? 0) + 1;
-    }
-    // Count undelivered child session results
-    for (const [id, handle] of this._childSessions) {
-      if (handle.outputRevision > handle.deliveredResultRevision) {
-        counts[id] = (counts[id] ?? 0) + 1;
-      }
-    }
-    const parts = Object.entries(counts).map(
-      ([from, n]) => `${n} from ${from}`,
-    );
-    return parts.length > 0
-      ? `[New Messages: ${parts.join(", ")}]`
-      : "[New Messages]";
+    // Hide from TUI: inbox-delivered peer/system messages shouldn't render as
+    // user bubbles. API still receives them via apiRole="user".
+    entry.tuiVisible = false;
+    this._appendEntry(entry, false);
   }
 
   /**
    * Build notification content for push delivery into tool results.
-   * Drains the inbox and consumes child turn outputs once.
-   * Returns null if nothing pending.
+   * Drains the inbox. Returns null if nothing pending.
    */
   private _buildNotificationContent(): string | null {
-    const hasMsgs = this._inbox.length > 0;
-    const hasAgentResults = this._hasUndeliveredAgentResults();
-    if (!hasMsgs && !hasAgentResults) return null;
-
-    const sections: string[] = [];
-
-    // 1. Drain inbox, group by sender
-    if (this._inbox.length > 0) {
-      const byFrom: Record<string, string[]> = {};
-      for (const msg of this._inbox) {
-        (byFrom[msg.from] ??= []).push(msg.content);
-      }
-      this._inbox = [];
-      for (const [from, msgs] of Object.entries(byFrom)) {
-        sections.push(`[Message from ${from}]\n${msgs.join("\n\n")}`);
-      }
-    }
-
-    // 2. Consume child outputs (sweep + mark delivered revision)
-    if (hasAgentResults) {
-      this._sweepSettledAgents();
-      for (const { handle, text } of this._consumeUndeliveredChildResults()) {
-        sections.push(this._formatAgentOutput({
-          name: handle.id,
-          status: handle.status === "error" ? "error" : "finished",
-          text,
-          elapsed: handle.elapsed,
-        }));
-      }
-    }
-
-    sections.push("[Sub-Session Brief]");
-    sections.push(this._buildSubSessionBrief());
-
-    return `\n\n[Incoming Messages]\n${sections.join("\n\n---\n\n")}`;
+    const drained = this._drainInbox();
+    if (!drained) return null;
+    return `\n\n[Incoming Messages]\n${drained}`;
   }
 
-  private _takeQueuedMessagesAsTurnInput(): string | null {
-    if (this._inbox.length === 0) return null;
-    const content = this._buildDeliveryContent({ drainQueue: true });
-    return `[New Messages]\n\n${content}`;
+  /**
+   * Drain inbox as turn input for idle agent activation.
+   */
+  _takeQueuedMessagesAsTurnInput(): string | null {
+    return this._drainInbox();
   }
 
-  // Wait wake-up signal
-  private _waitResolver: (() => void) | null = null;
+  // Atomic wait handle — resolver is installed BEFORE state transitions.
+  // _deliverMessage checks _waitHandle (not _agentState) to wake, eliminating the race window.
+  private _waitHandle: { resolve: () => void } | null = null;
 
   private _wakeWait(): void {
-    if (this._waitResolver) {
-      this._waitResolver();
-      this._waitResolver = null;
+    const handle = this._waitHandle;
+    if (handle) {
+      this._waitHandle = null;
+      handle.resolve();
     }
   }
 
@@ -1392,33 +1367,12 @@ export class Session {
 
     this._currentTurnAbortController?.abort();
 
-    let hadActiveAgents = false;
-    for (const entry of this._childSessions.values()) {
-      if (entry.status === "working") {
-        hadActiveAgents = true;
-        break;
-      }
-    }
-    const hadActiveShells = this._hasRunningShells();
-    const hadUnconsumed = this._hasInboxMessages() || this._hasUndeliveredAgentResults();
-
-    this._interruptSnapshot = {
-      turnIndex: this._turnCount,
-      hadActiveAgents,
-      hadActiveShells,
-      hadUnconsumed,
-      deliveryContent:
-        hadActiveAgents || hadActiveShells || hadUnconsumed
-          ? this._buildDeliveryContent({ drainQueue: false })
-          : "",
-    };
-
     this._activeAsk = null;
     this._pendingTurnState = null;
     this._inbox = [];
     this._wakeWait();
     if (this._childSessions.size > 0) {
-      this._interruptAllChildTurns();
+      this._cascadeKillRunningChildren("user_mass_interrupt");
     }
     if (this._activeShells.size > 0) {
       this._forceKillAllShells();
@@ -1441,8 +1395,8 @@ export class Session {
     this._hintState = "none";
     this._agentState = "idle";
     this._inbox = [];
-    this._waitResolver = null;
-    this._interruptSnapshot = null;
+    this._agentResultSeq = 0;
+    this._waitHandle = null;
     this._activeAsk = null;
     this._askHistory = [];
     this._pendingTurnState = null;
@@ -1511,7 +1465,7 @@ export class Session {
     const children = this._prepareChildRestores(allChildMeta, warnings);
 
     // Root inbox from meta
-    const rootInbox = meta.inbox ?? [];
+    const rootInbox = (meta.inbox ?? []).map((raw) => migrateMessageEnvelope(raw as unknown as Record<string, unknown>));
 
     return { rootState: shadow, children, rootInbox, warnings };
   }
@@ -1526,7 +1480,7 @@ export class Session {
     this._currentTurnAbortController = null;
     this._turnInFlight = null;
     this._turnRelease = null;
-    this._waitResolver = null;
+    this._waitHandle = null;
     this.primaryAgent.replaceModelConfig({ ...shadow.primaryAgent.modelConfig });
     this._persistedModelSelection = { ...shadow._persistedModelSelection };
 
@@ -1560,10 +1514,8 @@ export class Session {
     this._activeAsk = shadow._activeAsk ? structuredClone(shadow._activeAsk) as AskRequest : null;
     this._askHistory = structuredClone(shadow._askHistory) as AskAuditRecord[];
     this._agentState = shadow._agentState;
-    this._inbox = structuredClone(shadow._inbox) as AgentMessage[];
-    this._interruptSnapshot = shadow._interruptSnapshot
-      ? structuredClone(shadow._interruptSnapshot) as InterruptSnapshot
-      : null;
+    this._inbox = structuredClone(shadow._inbox) as MessageEnvelope[];
+    this._agentResultSeq = 0;
     this._pendingTurnState = shadow._pendingTurnState
       ? structuredClone(shadow._pendingTurnState) as PendingTurnState
       : null;
@@ -1743,9 +1695,9 @@ export class Session {
       let agent: Agent;
       try {
         if (this.agentTemplates[record.template]) {
-          agent = this._createSubAgentFromPredefined(record.template, record.id);
+          ({ agent } = this._createSubAgentFromPredefined(record.template, record.id));
         } else {
-          agent = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id);
+          ({ agent } = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id));
         }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
@@ -1822,9 +1774,9 @@ export class Session {
               ? "idle"
               : "idle";
 
-        // Restore inbox if persisted
+        // Restore inbox if persisted (migrate old format)
         if (record.inbox && record.inbox.length > 0) {
-          (handle.session as Session)._inbox = [...record.inbox];
+          (handle.session as Session)._inbox = record.inbox.map((m) => migrateMessageEnvelope(m as unknown as Record<string, unknown>));
         }
 
         this._childSessions.set(record.id, handle);
@@ -1849,7 +1801,7 @@ export class Session {
 
     for (const entry of this._log) {
       if (entry.discarded) continue;
-      if (entry.type === "tool_call") {
+      if (entry.type === "tool_call" && entry.apiRole === "assistant") {
         this._lifetimeToolCallCount += 1;
         this._lastToolCallSummary = entry.display || this._lastToolCallSummary;
         if (entry.display) this._recordSessionEvent(entry.display);
@@ -1910,7 +1862,7 @@ export class Session {
       for (let i = turnStartIndex; i < this._log.length; i++) {
         const entry = this._log[i];
         if (entry.discarded || entry.turnIndex !== interruptedTurnIndex || entry.roundIndex !== latestRound) continue;
-        if (entry.type === "tool_call") latestRoundHasToolCall = true;
+        if (entry.type === "tool_call" && entry.apiRole === "assistant") latestRoundHasToolCall = true;
       }
       if (!latestRoundHasToolCall) {
         for (let i = turnStartIndex; i < this._log.length; i++) {
@@ -1972,9 +1924,9 @@ export class Session {
       let agent: Agent;
       try {
         if (this.agentTemplates[record.template]) {
-          agent = this._createSubAgentFromPredefined(record.template, record.id);
+          ({ agent } = this._createSubAgentFromPredefined(record.template, record.id));
         } else {
-          agent = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id);
+          ({ agent } = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id));
         }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
@@ -2019,9 +1971,9 @@ export class Session {
       handle.resultText = this._extractLatestAssistantText(handle.session.log);
       handle.status = "idle";
 
-      // Restore inbox if persisted
+      // Restore inbox if persisted (migrate old format)
       if (record.inbox && record.inbox.length > 0) {
-        (handle.session as Session)._inbox = [...record.inbox];
+        (handle.session as Session)._inbox = record.inbox.map((m) => migrateMessageEnvelope(m as unknown as Record<string, unknown>));
       }
 
       this._childSessions.set(record.id, handle);
@@ -2137,22 +2089,30 @@ export class Session {
       this._notifyPlanListeners();
     }
 
-    // 7. Re-init conversation LAST (fresh session state, storage may still be lazy)
+    // 7. /new must start from a truly fresh session tree. _resetTransientState()
+    // archives existing children so they can be saved before teardown, but those
+    // archived handles must not leak into the next root session's persisted meta.
+    this._childSessions = new Map();
+    this._archivedChildren = new Map();
+    this._teams = new Map();
+
+    // 8. Re-init conversation LAST (fresh session state, storage may still be lazy)
     // _initConversation also resets _log and _idAllocator
     this._initConversation();
   }
 
   private _buildToolExecutors(): Record<string, ToolExecutor> {
     const scopedBuiltin = (toolName: string): ToolExecutor =>
-      (args) => executeTool(toolName, args, {
+      (args, rtCtx) => executeTool(toolName, args, {
         projectRoot: this._projectRoot,
         externalPathAllowlist: [this._resolveSessionArtifacts()],
         sessionArtifactsDir: this._resolveSessionArtifacts(),
         supportsMultimodal: this.primaryAgent.modelConfig.supportsMultimodal,
+        signal: rtCtx?.signal,
       });
 
-    const writeFileWithReload: ToolExecutor = (args) => {
-      const result = scopedBuiltin("write_file")(args);
+    const writeFileWithReload: ToolExecutor = (args, rtCtx) => {
+      const result = scopedBuiltin("write_file")(args, rtCtx);
       // Auto-reload prompt when AGENTS.md is modified
       const filePath = String((args as Record<string, unknown>)["path"] ?? "");
       if (filePath && this._isAgentsMdPath(filePath)) {
@@ -2163,10 +2123,10 @@ export class Session {
 
     /** Wrap a file-mutating executor: refresh plan state when the target is plan.md. */
     const withPlanHook = (inner: ToolExecutor): ToolExecutor => {
-      return (args) => {
+      return (args, rtCtx) => {
         const filePath = String((args as Record<string, unknown>)["path"] ?? "");
         const isPlan = filePath && this._isPlanFilePath(filePath);
-        const result = inner(args);
+        const result = inner(args, rtCtx);
         if (!isPlan) return result;
 
         // Tag result and refresh plan state AFTER the file write completes.
@@ -2193,10 +2153,11 @@ export class Session {
       grep: scopedBuiltin("grep"),
       edit_file: withPlanHook(scopedBuiltin("edit_file")),
       write_file: withPlanHook(writeFileWithReload),
-      web_fetch: (args) => executeTool("web_fetch", args),
-      bash: (args) => executeTool("bash", args, {
+      web_fetch: (args, rtCtx) => executeTool("web_fetch", args, { signal: rtCtx?.signal }),
+      bash: (args, rtCtx) => executeTool("bash", args, {
         projectRoot: this._projectRoot,
         externalPathAllowlist: [this._resolveSessionArtifacts()],
+        signal: rtCtx?.signal,
       }),
       bash_background: (args) => this._execBashBackground(args),
       bash_output: (args) => this._execBashOutput(args),
@@ -2352,6 +2313,7 @@ export class Session {
         required: ["name"],
       },
       summaryTemplate: "{agent} is invoking skill {name}",
+      tuiPolicy: { partialReveal: { completeArgs: ["name"] } },
     };
   }
 
@@ -2572,6 +2534,26 @@ export class Session {
     }
   }
 
+  /**
+   * Apply settings from the new VigilSettings + ModelSelectionState system.
+   * This replaces applyGlobalPreferences for the new config architecture.
+   */
+  applySettings(settings: VigilSettings, modelState: ModelSelectionState): void {
+    const thinkingLevel = modelState.thinking_level ?? settings.thinking_level ?? "";
+    this._preferredThinkingLevel = thinkingLevel;
+    this._preferredAccentColor = settings.accent_color;
+    this._thinkingLevel = this._resolveThinkingLevelForModel(
+      this.primaryAgent.modelConfig.model,
+      thinkingLevel,
+    );
+
+    // Restore disabled skills
+    if (settings.disabled_skills && settings.disabled_skills.length > 0) {
+      this._disabledSkills = new Set(settings.disabled_skills);
+      this.reloadSkills();
+    }
+  }
+
   getGlobalPreferences(): GlobalTuiPreferences {
     return createGlobalTuiPreferences({
       modelConfigName: this._persistedModelSelection.modelConfigName ?? undefined,
@@ -2667,7 +2649,7 @@ export class Session {
     if (this._hasInboxMessages()) {
       return `Cannot run ${command} while queued messages are waiting to be delivered.`;
     }
-    if (this._hasUndeliveredAgentResults()) {
+    if (this._hasInboxMessages()) {
       return `Cannot run ${command} while sub-agent results are waiting to be delivered.`;
     }
     return null;
@@ -2937,6 +2919,7 @@ export class Session {
         reasoningAccumulator.text = "";
         this._agentState = "working";
         this._setSelfPhase("thinking");
+        const agentResultSeqAtStart = this._agentResultSeq;
 
         if (this._progress) {
           this._progress.onAgentStart(this._turnCount, this.primaryAgent.name);
@@ -3080,7 +3063,7 @@ export class Session {
         this.onSaveRequest?.();
 
         if (result.compactNeeded && result.compactScenario) {
-          if (this._hasInboxMessages() || this._hasUndeliveredAgentResults() || this._hasActiveAgents()) {
+          if (this._hasInboxMessages() || this._hasActiveAgents()) {
             this._injectPendingMessages();
           }
           const logLenBefore = this._log.length;
@@ -3124,7 +3107,11 @@ export class Session {
         }
 
         // Wait for active agents (if any and no queued messages yet)
-        if (this._hasActiveAgents() && !this._hasInboxMessages() && !this._hasUndeliveredAgentResults()) {
+        if (
+          this._hasActiveAgents()
+          && !this._hasInboxMessages()
+          && this._agentResultSeq === agentResultSeqAtStart
+        ) {
           await this._waitForAnyAgent(activeSignal);
           if (activeSignal.aborted) {
             this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
@@ -3140,7 +3127,7 @@ export class Session {
         }
 
         // ★ ACTIVATION BOUNDARY DRAIN — unified exit point ★
-        if (this._hasInboxMessages() || this._hasUndeliveredAgentResults()) {
+        if (this._hasInboxMessages() || this._agentResultSeq > agentResultSeqAtStart) {
           this._injectPendingMessages();
           continue;  // new activation to process injected messages
         }
@@ -3180,17 +3167,17 @@ export class Session {
       }
     } finally {
       this._restoreCurrentTurnSignal(turnSignalState);
+      if (turnEndStatus === "interrupted" && this._hasActiveAgents()) {
+        await this._waitForAllChildTurnsSettled();
+      }
       // Drain any messages that arrived after the last activation boundary check.
       // Without this, messages queued during the final activation would be orphaned.
-      if (!this._deferQueuedMessageInjectionOnTurnExit && (this._hasInboxMessages() || this._hasUndeliveredAgentResults())) {
+      if (!this._deferQueuedMessageInjectionOnTurnExit && this._hasInboxMessages()) {
         this._injectPendingMessages();
       }
       this._agentState = "idle";
       this._activeLogEntryId = null;
       this._setSelfPhase("idle");
-      if (!this._activeAsk && this._hasActiveAgents()) {
-        this._cleanupNonInteractiveAgents();
-      }
       if (!this._activeAsk && this._turnCount > 0 && turnEndStatus) {
         this._lastTurnEndStatus = turnEndStatus;
         const turnElapsedMs = Math.round(performance.now() - turnStartMs);
@@ -3305,12 +3292,18 @@ export class Session {
     const reasoningAccumulator = { text: "" };
     try {
       const result = await this._runTurnActivationLoop(signal, textAccumulator, reasoningAccumulator);
-      if (result && !this._activeAsk) {
-        this._turnOutputTarget?.(result);
-        this._recordSessionEvent("returned output");
+      // Always notify parent — even for empty results.
+      if (!this._activeAsk) {
+        this._turnOutputTarget?.(result?.trim() || "");
+        if (result?.trim()) this._recordSessionEvent("returned output");
       }
       return result;
     } catch (err) {
+      // Deliver error to parent so it's never silently lost
+      if (!this._activeAsk) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        this._turnOutputTarget?.(`[Error] ${errorMsg}`);
+      }
       if (!this._activeAsk && this._turnCount > 0 && this._lastTurnEndStatus === null) {
         this._lastTurnEndStatus = "error";
         this._appendEntry(
@@ -3330,7 +3323,7 @@ export class Session {
    * - Keep completed reasoning, drop incomplete reasoning of the currently interrupted round
    * - Keep partial text and append " [Interrupted here.]" when interruption happens mid-activation
    * - For each complete tool_call lacking result, append interrupted tool_result
-   * - Append synthetic interruption user message (with optional snapshot)
+   * - Append synthetic interruption user message
    */
   private _handleInterruption(
     logLenBefore: number,
@@ -3363,7 +3356,7 @@ export class Session {
       for (let i = logLenBefore; i < this._log.length; i++) {
         const e = this._log[i];
         if (e.discarded || e.roundIndex !== latestRound) continue;
-        if (e.type === "tool_call") latestRoundHasToolCall = true;
+        if (e.type === "tool_call" && e.apiRole === "assistant") latestRoundHasToolCall = true;
       }
     }
 
@@ -3426,30 +3419,7 @@ export class Session {
     markerEntry.displayKind = null;
     this._appendEntry(markerEntry, false);
 
-    const snapshot =
-      this._interruptSnapshot && this._interruptSnapshot.turnIndex === this._turnCount
-        ? this._interruptSnapshot
-        : null;
-    this._interruptSnapshot = null;
-
-    const lines: string[] = ["Last turn was interrupted by the user."];
-    if (snapshot && (snapshot.hadActiveAgents || snapshot.hadActiveShells || snapshot.hadUnconsumed)) {
-      const killedKinds: string[] = [];
-      if (snapshot.hadActiveAgents) killedKinds.push("sub-sessions");
-      if (snapshot.hadActiveShells) killedKinds.push("shells");
-      if (killedKinds.length > 0) {
-        lines.push(`Active ${killedKinds.join(" and ")} were interrupted.`);
-      }
-      if (snapshot.hadUnconsumed) {
-        lines.push("Unconsumed queued information was discarded.");
-      }
-      if (snapshot.deliveryContent.trim()) {
-        lines.push("");
-        lines.push("[Snapshot]");
-        lines.push(snapshot.deliveryContent);
-      }
-    }
-    const interruptionMessage = lines.join("\n");
+    const interruptionMessage = "Last turn was interrupted by the user.";
     this._recordSessionEvent("interrupted by user");
     const interruptionCtxId = this._allocateContextId();
     const interruptionEntry = createUserMessageEntry(
@@ -3504,6 +3474,10 @@ export class Session {
     return hints;
   }
 
+  private _toolMayHavePartialEffects(toolName: string): boolean {
+    return !SAFE_INTERRUPT_TOOLS.has(toolName);
+  }
+
   /**
    * Scan log entries from `fromIdx` onwards: for each tool_call entry,
    * check if a tool_result exists for it. Create missing tool_results.
@@ -3516,13 +3490,13 @@ export class Session {
       contextId?: string;
       execState?: string;
       streamState?: string;
-      repairedFromPartial?: boolean;
     }> = [];
     const resolvedToolCallIds = new Set<string>();
 
     for (let i = fromIdx; i < this._log.length; i++) {
       const e = this._log[i];
       if (e.type === "tool_call") {
+        if (e.apiRole !== "assistant") continue;
         const meta = e.meta as Record<string, unknown>;
         pendingToolCalls.push({
           id: (meta["toolCallId"] as string) ?? "",
@@ -3531,7 +3505,6 @@ export class Session {
           contextId: typeof meta["contextId"] === "string" ? meta["contextId"] as string : undefined,
           execState: typeof meta["toolExecState"] === "string" ? meta["toolExecState"] as string : undefined,
           streamState: typeof meta["toolStreamState"] === "string" ? meta["toolStreamState"] as string : undefined,
-          repairedFromPartial: meta["repairedFromPartial"] === true,
         });
       } else if (e.type === "tool_result") {
         resolvedToolCallIds.add((e.meta as Record<string, unknown>)["toolCallId"] as string);
@@ -3543,10 +3516,10 @@ export class Session {
       if (!tc.id) continue;
       const content =
         tc.execState === "running"
-          ? "[Interrupted] Tool execution was interrupted and may have had partial effects."
-          : tc.repairedFromPartial || tc.streamState === "partial" || tc.streamState === "partial_closed"
-            ? "[Interrupted] Incomplete arguments — tool was not executed."
-            : interruptedContent;
+          ? this._toolMayHavePartialEffects(tc.name)
+            ? "[Interrupted] Tool execution was interrupted and may have had partial effects."
+            : "[Interrupted] Tool execution was interrupted."
+          : interruptedContent;
       this._appendEntry(createToolResultEntry(
         this._nextLogId("tool_result"),
         this._turnCount,
@@ -3762,18 +3735,13 @@ export class Session {
     }
 
     // Streaming tool call callbacks — set active entry for early display
-    const onToolCallStartCb = (_callId: string, _name: string) => {
+    const onToolCallPartialCb = (_callId: string, _name: string, _rawArguments: string) => {
       // Active entry tracking happens in tool-loop via appendEntry → _appendEntry;
       // we find the just-appended pending tool_call entry and mark it active
       const lastEntry = this._log[this._log.length - 1];
       if (lastEntry && lastEntry.type === "tool_call") {
         this._setActiveLogEntry(lastEntry.id);
       }
-    };
-
-    const onToolCallArgDeltaCb = (_callId: string, _argDelta: string) => {
-      // No tracker change — active stays on the same pending entry
-      // Display updates are handled by updateEntryFn which calls _touchLog
     };
 
     // Token update callback: update _lastInputTokens after each provider call
@@ -3879,13 +3847,13 @@ export class Session {
       this._appendEntry(entry, false);
       if (
         entry.type === "tool_call"
+        && entry.tuiVisible
         && !this._compactInProgress
         && entry.meta["toolExecState"] !== "completed"
         && entry.meta["toolExecState"] !== "failed"
         && (entry.meta["toolExecState"] === "running"
           || entry.meta["toolExecState"] === "not_started"
           || entry.meta["toolStreamState"] === "partial"
-          || entry.meta["toolStreamState"] === "partial_closed"
           || entry.meta["toolStreamState"] === "closed")
       ) {
         this._setActiveLogEntry(entry.id);
@@ -3897,12 +3865,30 @@ export class Session {
     };
 
     /** Update an existing log entry in-place (for finalizing pending tool call entries). */
-    const updateEntryFn = (entryId: string, patch: { content?: unknown; display?: string; meta?: Record<string, unknown> }): void => {
+    const updateEntryFn = (entryId: string, patch: {
+      apiRole?: LogEntry["apiRole"];
+      content?: unknown;
+      display?: string;
+      tuiVisible?: boolean;
+      displayKind?: LogEntry["displayKind"];
+      meta?: Record<string, unknown>;
+    }): void => {
       const entry = this._log.find((e) => e.id === entryId);
       if (!entry) return;
+      if (patch.apiRole !== undefined) entry.apiRole = patch.apiRole;
       if (patch.content !== undefined) entry.content = patch.content;
       if (patch.display !== undefined) entry.display = patch.display;
+      if (patch.tuiVisible !== undefined) entry.tuiVisible = patch.tuiVisible;
+      if (patch.displayKind !== undefined) entry.displayKind = patch.displayKind;
       if (patch.meta !== undefined) entry.meta = patch.meta;
+      if (entry.type === "tool_call" && !entry.tuiVisible) {
+        if (this._activeLogEntryId === entry.id) {
+          this._setActiveLogEntry(null);
+        } else {
+          this._touchLog();
+        }
+        return;
+      }
       if (entry.type === "tool_call" && patch.meta) {
         const execState = patch.meta["toolExecState"];
         const streamState = patch.meta["toolStreamState"];
@@ -3919,7 +3905,6 @@ export class Session {
           execState === "running"
           || execState === "not_started"
           || streamState === "partial"
-          || streamState === "partial_closed"
           || streamState === "closed"
         ) {
           if (this._activeLogEntryId !== entry.id) {
@@ -3967,8 +3952,8 @@ export class Session {
       emitRetryAttempt,
       emitRetrySuccess,
       emitRetryExhausted,
-      onToolCallStartCb,
-      onToolCallArgDeltaCb,
+      onToolCallPartialCb,
+      this._resolveToolCallVisibility,
       updateEntryFn,
       discardEntryFn,
     );
@@ -4426,6 +4411,23 @@ export class Session {
     return resolve(filePath) === resolve(planPath);
   }
 
+  private _resolveToolCallVisibility: ResolveToolCallVisibilityCallback = ({
+    toolName,
+    toolArgs,
+  }) => {
+    if (toolName !== "edit_file" && toolName !== "write_file") {
+      return undefined;
+    }
+    if (toolArgs.intent === "spawn") {
+      return "hide";
+    }
+    const filePath = typeof toolArgs.path === "string" ? toolArgs.path : "";
+    if (filePath && this._isPlanFilePath(filePath)) {
+      return "hide";
+    }
+    return undefined;
+  };
+
   private _readAgentsMd(): string {
     const parts: string[] = [];
 
@@ -4655,6 +4657,12 @@ export class Session {
         agentsMd;
     }
 
+    // Append agent model pins section (if any configured)
+    const agentModelsSection = this._buildAgentModelsPromptSection();
+    if (agentModelsSection) {
+      prompt = prompt.trimEnd() + "\n\n" + agentModelsSection;
+    }
+
     return this._renderSystemPrompt(prompt);
   }
 
@@ -4667,6 +4675,34 @@ export class Session {
       this._cachedSystemPrompt = this._assembleSystemPrompt();
     }
     return this._cachedSystemPrompt;
+  }
+
+  /**
+   * Build a prompt section listing agent model pins, if any are configured.
+   * Tells the main agent which templates have pinned models so it avoids
+   * specifying model_level for those.
+   */
+  private _buildAgentModelsPromptSection(): string | null {
+    const models = this.config.agentModels ?? {};
+    const entries = Object.entries(models);
+    if (entries.length === 0) return null;
+
+    const lines = entries.map(([name, entry]) => {
+      const label = `${entry.provider}/${entry.model_id}`;
+      const suffix = entry.thinking_level ? ` (thinking: ${entry.thinking_level})` : "";
+      return `- **${name}**: pinned to \`${label}\`` + suffix;
+    });
+
+    return [
+      "---",
+      "",
+      "# Agent Model Pins",
+      "",
+      "The following sub-agent templates have user-pinned models.",
+      "When spawning these agents, do NOT specify `model_level` — the pinned model will be used automatically:",
+      "",
+      ...lines,
+    ].join("\n");
   }
 
   /**
@@ -4901,8 +4937,8 @@ export class Session {
     if (!this._capabilities.includeSpawnTool) {
       if (ratio >= 0.90 && this._hintState === "none") {
         this._deliverMessage({
-          from: "system",
-          to: "main",
+          type: "system_notice",
+          sender: "system",
           content: `[SYSTEM: Context usage has reached ${pct}. You are approaching the context limit and do NOT have context management tools. Finish your current work as quickly as possible — avoid reading large files, reduce tool calls, and focus only on producing your final output. If work progress is not promising, stop now and output what you have so far.]`,
           timestamp: Date.now(),
         });
@@ -4915,10 +4951,10 @@ export class Session {
     const level1Ratio = this._thresholds.summarize_hint_level1 / 100;
 
     if (ratio >= level2Ratio && this._hintState !== "level2_sent") {
-      this._deliverMessage({ from: "system", to: "main", content: HINT_LEVEL2_PROMPT(pct), timestamp: Date.now() });
+      this._deliverMessage({ type: "system_notice", sender: "system", content: HINT_LEVEL2_PROMPT(pct), timestamp: Date.now() });
       this._hintState = "level2_sent";
     } else if (ratio >= level1Ratio && this._hintState === "none") {
-      this._deliverMessage({ from: "system", to: "main", content: HINT_LEVEL1_PROMPT(pct), timestamp: Date.now() });
+      this._deliverMessage({ type: "system_notice", sender: "system", content: HINT_LEVEL1_PROMPT(pct), timestamp: Date.now() });
       this._hintState = "level1_sent";
     }
   }
@@ -5051,7 +5087,7 @@ export class Session {
       entry.exitCode = 1;
       entry.signal = null;
       this._deliverMessage({
-        from: "system", to: "main", timestamp: Date.now(),
+        type: "system_notice", sender: "system", timestamp: Date.now(),
         content: `Background shell '${shellId}' failed to start: ${error}. Use \`bash_output(id="${shellId}")\` to inspect ${logPath}.`,
       });
     });
@@ -5072,7 +5108,7 @@ export class Session {
         ? "completed successfully"
         : `failed (exit ${code ?? 1})`;
       this._deliverMessage({
-        from: "system", to: "main", timestamp: Date.now(),
+        type: "system_notice", sender: "system", timestamp: Date.now(),
         content: `Background shell '${shellId}' ${statusText}. Use \`bash_output(id="${shellId}")\` to inspect logs at ${logPath}.`,
       });
     });
@@ -5223,12 +5259,11 @@ export class Session {
       }
       const team = handle.teamId ? this._teams.get(handle.teamId) : null;
 
-      // send to "main" — deliver to parent session's inbox
+      // send to "main" — no longer allowed; turn output is the channel
       if (sendTo === "main") {
-        this._deliverMessage({ from: handle.id, to: "main", content: sendContent, timestamp: Date.now() });
-        handle.lastActivityAt = Date.now();
-        handle.session._recordSessionEvent("sent message to main");
-        return new ToolResult({ content: "Message sent to 'main'." });
+        return new ToolResult({
+          content: "Error: Cannot send to 'main'. Your turn output is automatically delivered to the parent session. Include what you want to say in your output text.",
+        });
       }
 
       // send to "all" — broadcast to all teammates
@@ -5240,8 +5275,8 @@ export class Session {
         for (const memberId of team.members) {
           if (memberId === handle.id) continue;
           this._sendMessageToChild(memberId, {
-            from: handle.id,
-            to: memberId,
+            type: "peer_message",
+            sender: handle.id,
             content: sendContent,
             timestamp: Date.now(),
           });
@@ -5254,11 +5289,11 @@ export class Session {
 
       // send to specific teammate
       if (!team || !team.members.has(sendTo)) {
-        return new ToolResult({ content: `Agent '${sendTo}' is not in your team. You can send to teammates or "main".` });
+        return new ToolResult({ content: `Agent '${sendTo}' is not in your team. You can only send to teammates.` });
       }
       this._sendMessageToChild(sendTo, {
-        from: handle.id,
-        to: sendTo,
+        type: "peer_message",
+        sender: handle.id,
         content: sendContent,
         timestamp: Date.now(),
       });
@@ -5307,8 +5342,6 @@ export class Session {
       resultText: "",
       elapsed: 0,
       startTime: 0,
-      deliveredResultRevision: 0,
-      outputRevision: 0,
       turnPromise: null,
       abortController: null,
       recentEvents: [],
@@ -5357,11 +5390,7 @@ export class Session {
     const handle = this._childSessions.get(childId);
     if (!handle) return;
     handle.resultText = text;
-    handle.outputRevision += 1;
     handle.lastActivityAt = Date.now();
-    if (text.trim()) {
-      this._deliverMessage({ from: childId, to: "main", content: text, timestamp: Date.now() });
-    }
   }
 
   private _startChildTurn(handle: ChildSessionHandle, input: string): void {
@@ -5371,6 +5400,7 @@ export class Session {
     handle.phase = "thinking";
     handle.lastActivityAt = Date.now();
     handle.suspended = false;
+    handle.terminationCause = undefined;
     const abortController = new AbortController();
     handle.abortController = abortController;
     // Create settle promise so close() can wait for this turn to finish
@@ -5411,28 +5441,34 @@ export class Session {
       handle.status = handle.mode === "oneshot" ? "completed" : "idle";
     }
 
-    // Emit a TUI-visible status entry for sub-agent completion
-    {
-      const label = `#${handle.numericId} ${handle.id}`;
-      const elapsedStr = handle.elapsed > 0 ? ` (${handle.elapsed.toFixed(1)}s)` : "";
-      const outcomeLabel = handle.lastOutcome === "error" ? "error"
-        : handle.lastOutcome === "interrupted" ? "interrupted"
-        : "done";
-      let display = `[${label}] [${outcomeLabel}]${elapsedStr}`;
-      // Append a brief output preview for completed agents
-      if (handle.lastOutcome === "completed" && handle.resultText) {
-        const previewLines = handle.resultText.trim().split("\n").slice(0, 3);
-        const preview = previewLines.join("\n");
-        const truncated = handle.resultText.trim().split("\n").length > 3 ? "\n..." : "";
-        display += `\n${preview}${truncated}`;
-      }
-      this._appendEntry(createStatus(
-        this._nextLogId("status"),
-        this._turnCount,
-        display,
-        "sub_agent_end",
-      ), false);
-    }
+    const outcome: "completed" | "failed" | "interrupted" =
+      handle.lastOutcome === "error"
+        ? "failed"
+        : handle.lastOutcome === "interrupted"
+          ? "interrupted"
+          : "completed";
+    const cause = handle.terminationCause ?? "natural";
+    const trimmedResult = (handle.resultText ?? "").trim();
+    const resultLines = trimmedResult ? trimmedResult.split("\n") : [];
+    const previewBody = resultLines.slice(0, 3).join("\n");
+    const preview = previewBody + (resultLines.length > 3 ? "\n..." : "");
+    const agentResult = this._buildAgentResultApiContent(handle, outcome, cause);
+    this._appendEntry(createAgentResult(
+      this._nextLogId("agent_result"),
+      this._turnCount,
+      handle.id,
+      handle.numericId,
+      handle.template,
+      outcome,
+      cause,
+      Math.round((handle.elapsed ?? 0) * 1000),
+      agentResult.content,
+      preview,
+      this._allocateContextId(),
+      agentResult.fullOutputPath,
+    ), false);
+    this._agentResultSeq += 1;
+    handle.terminationCause = undefined;
 
     // Lifecycle transition: oneshot → archived, persistent → idle
     // NOTE: archived children stay in _childSessions during runtime (Session instance alive,
@@ -5443,15 +5479,18 @@ export class Session {
     } else {
       handle.lifecycle = "idle";
       this._saveChildSession(handle);
-      // Persistent: check for queued messages and start a new turn
-      const queued = handle.session._takeQueuedMessagesAsTurnInput();
-      if (queued) {
-        // Resolve settle before starting next turn (current turn is done)
-        const resolve = handle.settleResolve;
-        handle.settleResolve = null;
-        resolve?.();
-        this._startChildTurn(handle, queued);
-        return;
+      // Persistent: only auto-resume queued work after a natural completion.
+      // User/parent-triggered kills must leave the agent idle.
+      if (cause === "natural") {
+        const queued = handle.session._takeQueuedMessagesAsTurnInput();
+        if (queued) {
+          // Resolve settle before starting next turn (current turn is done)
+          const resolve = handle.settleResolve;
+          handle.settleResolve = null;
+          resolve?.();
+          this._startChildTurn(handle, queued);
+          return;
+        }
       }
     }
 
@@ -5459,6 +5498,44 @@ export class Session {
     const resolve = handle.settleResolve;
     handle.settleResolve = null;
     resolve?.();
+  }
+
+  private _buildAgentResultApiContent(
+    handle: ChildSessionHandle,
+    outcome: "completed" | "failed" | "interrupted",
+    cause: "natural" | "parent_kill" | "user_targeted_kill" | "user_mass_interrupt",
+  ): { content: string; fullOutputPath?: string } {
+    const causeNote = (cause === "user_mass_interrupt" || cause === "user_targeted_kill")
+      ? " by the user"
+      : "";
+    const header = `[Agent "${handle.id}" ${outcome}${causeNote}]`;
+    const text = (handle.resultText ?? "").trim();
+
+    if (!text) {
+      return { content: `${header}\n(no output)` };
+    }
+
+    if (text.length > SUB_AGENT_OUTPUT_LIMIT) {
+      const outputDir = join(this._getArtifactsDir(), "agent-outputs");
+      mkdirSync(outputDir, { recursive: true });
+      const relativePath = `artifacts/agent-outputs/${handle.id}.md`;
+      const outputPath = join(outputDir, `${handle.id}.md`);
+      writeFileSync(outputPath, text);
+      const truncated = text.slice(0, SUB_AGENT_OUTPUT_LIMIT);
+      const truncatedAtLine = truncated.split("\n").length;
+      return {
+        content:
+          `${header}\n` +
+          `(Output truncated at ${SUB_AGENT_OUTPUT_LIMIT.toLocaleString()} chars ` +
+          `(line ${truncatedAtLine}). Full output: ${relativePath}. ` +
+          `Continue reading from line ${truncatedAtLine} with \`read_file(start_line=${truncatedAtLine})\`; ` +
+          `do not reread the portion already received.)\n\n` +
+          truncated,
+        fullOutputPath: relativePath,
+      };
+    }
+
+    return { content: `${header}\n${text}` };
   }
 
   /** Move a handle from _childSessions to _archivedChildren, releasing the Session instance. */
@@ -5485,7 +5562,7 @@ export class Session {
     }
   }
 
-  private _sendMessageToChild(childId: string, msg: AgentMessage): ToolResult {
+  private _sendMessageToChild(childId: string, msg: MessageEnvelope): ToolResult {
     const handle = this._childSessions.get(childId);
     if (!handle) {
       return new ToolResult({ content: `Agent '${childId}' not found.` });
@@ -5526,6 +5603,7 @@ export class Session {
     const handle = this._childSessions.get(childId);
     if (!handle) return { accepted: false, reason: "not_found" };
     if (handle.lifecycle !== "running") return { accepted: false, reason: "not_live" };
+    handle.terminationCause = "user_targeted_kill";
     handle.abortController?.abort();
     return { accepted: true };
   }
@@ -5556,6 +5634,7 @@ export class Session {
     if (template) spec["template"] = template;
     if (templatePath) spec["template_path"] = templatePath;
     if (args["idle"] === true) spec["idle"] = true;
+    if (typeof args["model_level"] === "string") spec["model_level"] = args["model_level"];
 
     return this._execSpawnFromSpecs([spec], null);
   }
@@ -5653,6 +5732,7 @@ export class Session {
       const taskDesc = ((spec["task"] as string) ?? "").trim();
       const modeRaw = ((spec["mode"] as string) ?? "").trim();
       const startIdle = spec["idle"] === true;
+      const modelLevel = typeof spec["model_level"] === "string" ? spec["model_level"].trim() : undefined;
 
       if (!taskId || !taskDesc) {
         errors.push("Skipped entry: missing 'id' or 'task'.");
@@ -5690,14 +5770,15 @@ export class Session {
       }
 
       let agent: Agent;
+      let tierThinkingLevel: string | undefined;
       let templateLabel: string;
       try {
         if (templateName) {
-          agent = this._createSubAgentFromPredefined(templateName, taskId);
+          ({ agent, thinkingLevel: tierThinkingLevel } = this._createSubAgentFromPredefined(templateName, taskId, modelLevel));
           templateLabel = templateName;
         } else {
           const resolvedPath = this._resolveTemplatePath(templatePath);
-          agent = this._createSubAgentFromPath(resolvedPath, taskId);
+          ({ agent, thinkingLevel: tierThinkingLevel } = this._createSubAgentFromPath(resolvedPath, taskId, modelLevel));
           templateLabel = templatePath;
         }
       } catch (e) {
@@ -5712,20 +5793,14 @@ export class Session {
       if (teamName) {
         const team = this._teams.get(teamName)!;
         team.members.add(taskId);
-        for (const memberId of team.members) {
-          if (memberId === taskId) continue;
-          const memberEntry = this._childSessions.get(memberId);
-          if (!memberEntry) continue;
-          memberEntry.session._inbox.push({
-            from: "system",
-            to: memberId,
-            timestamp: Date.now(),
-            content: `[Team Update] New member joined: ${taskId} (${templateLabel}) — "${taskDesc.slice(0, 120)}"`,
-          });
-        }
+        // NOTE: No per-member broadcast here — batch broadcast happens after the loop.
       }
 
       const handle = this._createChildSession(taskId, templateLabel, mode, teamName, agent);
+      // Apply tier-specific thinking level to the child session
+      if (tierThinkingLevel) {
+        handle.session.thinkingLevel = tierThinkingLevel;
+      }
       this._childSessions.set(taskId, handle);
       spawned.push(taskId);
       spawnedInfo.push({ numericId: handle.numericId, taskId, template: templateLabel, task: taskDesc });
@@ -5742,13 +5817,30 @@ export class Session {
         this._startChildTurn(handle, taskDesc);
       }
 
-      if (teamName) {
-        const team = this._teams.get(teamName)!;
-        for (const memberId of team.members) {
-          if (memberId === taskId) continue;
-          const memberEntry = this._childSessions.get(memberId);
-          if (memberEntry) {
-            memberEntry.session._recordSessionEvent(`team update: new member ${taskId}`);
+    }
+
+    // Batch team broadcast: notify existing members about ALL new members at once
+    if (teamName && spawned.length > 0) {
+      const team = this._teams.get(teamName);
+      if (team) {
+        const existingMembers = [...team.members].filter((id) => !spawned.includes(id));
+        if (existingMembers.length > 0) {
+          const newList = spawnedInfo
+            .filter((info) => team.members.has(info.taskId))
+            .map((info) => `- ${info.taskId} (${info.template}): "${info.task.replace(/\s+/g, " ").slice(0, 120)}"`)
+            .join("\n");
+          const notice = `Team "${teamName}" — ${spawned.length} new member(s) joined:\n${newList}`;
+          for (const memberId of existingMembers) {
+            const mh = this._childSessions.get(memberId);
+            if (!mh) continue;
+            // Deliver but do NOT activate — broadcast is informational, not a task
+            mh.session._deliverMessage({
+              type: "system_notice",
+              sender: "system",
+              content: notice,
+              timestamp: Date.now(),
+            });
+            mh.session._recordSessionEvent(`team update: ${spawned.length} new member(s)`);
           }
         }
       }
@@ -5878,7 +5970,7 @@ export class Session {
       for (const [childId, handle] of this._childSessions) {
         if (handle.mode !== "persistent") continue;
         if (handle.lifecycle !== "running" && handle.lifecycle !== "idle") continue;
-        this._sendMessageToChild(childId, { from: "main", to: childId, content, timestamp: Date.now() });
+        this._sendMessageToChild(childId, { type: "user_input", sender: "main", content, timestamp: Date.now() });
         count++;
       }
       if (count === 0) {
@@ -5904,16 +5996,16 @@ export class Session {
       }
     }
 
-    return this._sendMessageToChild(to, { from: "main", to, content, timestamp: Date.now() });
+    return this._sendMessageToChild(to, { type: "user_input", sender: "main", content, timestamp: Date.now() });
   }
 
   /** Revive an archived persistent child: rebuild Session, restore log, start turn. */
   private async _reviveArchivedChild(record: ArchivedChildRecord, messageContent: string): Promise<void> {
     let agent: Agent;
     if (this.agentTemplates[record.template]) {
-      agent = this._createSubAgentFromPredefined(record.template, record.id);
+      ({ agent } = this._createSubAgentFromPredefined(record.template, record.id));
     } else {
-      agent = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id);
+      ({ agent } = this._createSubAgentFromPath(this._resolveTemplatePath(record.template), record.id));
     }
 
     const handle = this._instantiateChildSession(
@@ -5949,7 +6041,7 @@ export class Session {
     }
 
     // Deliver message and start turn
-    handle.session._inbox.push({ from: "main", to: record.id, content: messageContent, timestamp: Date.now() });
+    handle.session._inbox.push({ type: "user_input", sender: "main", content: messageContent, timestamp: Date.now() });
     const queuedInput = handle.session._takeQueuedMessagesAsTurnInput();
     if (queuedInput) {
       this._startChildTurn(handle, queuedInput);
@@ -5992,7 +6084,7 @@ export class Session {
     const abortPromise = this._makeAbortPromise(this._currentTurnSignal);
 
     const throwIfTurnAborted = (): never => {
-      this._waitResolver = null;
+      this._waitHandle = null;
       this._agentState = "working";
       this._setSelfPhase("idle");
       throw new DOMException("The operation was aborted.", "AbortError");
@@ -6002,23 +6094,32 @@ export class Session {
       throwIfTurnAborted();
     }
 
-    if (this._childSessions.size === 0 && !this._hasTrackedShells() && !this._hasInboxMessages()) {
+    // Pre-check: if inbox already has messages, return immediately
+    if (this._hasInboxMessages()) {
       this._agentState = "working";
       this._setSelfPhase("idle");
-      return new ToolResult({ content: "No tracked workers and no messages queued." });
+      const drained = this._drainInbox() ?? "";
+      const brief = this._buildDetailedChildStatusReport();
+      const parts = [drained, brief].filter(Boolean);
+      return new ToolResult({ content: `Messages pending.\n\n${parts.join("\n\n")}` });
     }
 
     const working = this._getWorkingChildHandles();
     const hasRunningShells = this._hasRunningShells();
-    if (!working.length && !hasRunningShells) {
+    // No tracked workers, no pending messages — but still allow wait for incoming peer messages
+    // (sub-agents in teams legitimately wait for teammate responses)
+    if (!working.length && !hasRunningShells && this._childSessions.size === 0 && !this._statusSource) {
+      // Pure message wait — skip child/shell status, just wait for timeout or message
+    } else if (!working.length && !hasRunningShells) {
       this._agentState = "working";
       this._setSelfPhase("idle");
-      const content = this._buildDeliveryContent();
-      return new ToolResult({ content });
+      const brief = this._buildDetailedChildStatusReport();
+      return new ToolResult({ content: brief || "No tracked workers." });
     }
 
+    // Atomic: install resolver BEFORE state transition → no race window
     const messageWake = new Promise<"message">((resolve) => {
-      this._waitResolver = () => resolve("message");
+      this._waitHandle = { resolve: () => resolve("message") };
     });
     this._setSelfPhase("waiting");
 
@@ -6044,11 +6145,11 @@ export class Session {
       wakeReason = "event";
     }
 
-    this._waitResolver = null;
+    this._waitHandle = null;
     this._agentState = "working";
     this._setSelfPhase("idle");
 
-    const hasNewContent = this._hasInboxMessages() || this._hasUndeliveredAgentResults();
+    const hasNewContent = this._hasInboxMessages();
     let header: string;
     if (wakeReason === "message") {
       header = `Waited — new message arrived.`;
@@ -6060,8 +6161,11 @@ export class Session {
       header = `Waited ${seconds}s. No new event arrived during this period.`;
     }
 
-    const deliveryContent = this._buildDeliveryContent();
-    return new ToolResult({ content: `${header}\n\n${deliveryContent}` });
+    const drained = this._drainInbox() ?? "";
+    const brief = this._buildDetailedChildStatusReport();
+    const shell = this._buildShellReport();
+    const parts = [header, drained, brief, shell].filter(Boolean);
+    return new ToolResult({ content: parts.join("\n\n") });
   }
 
   // ------------------------------------------------------------------
@@ -6076,10 +6180,10 @@ export class Session {
     if (this._inbox.length === 0) return "No pending root messages.";
     const counts = new Map<string, number>();
     for (const msg of this._inbox) {
-      counts.set(msg.from, (counts.get(msg.from) ?? 0) + 1);
+      counts.set(msg.sender, (counts.get(msg.sender) ?? 0) + 1);
     }
     return [...counts.entries()]
-      .map(([from, count]) => `- ${from}: ${count} queued`)
+      .map(([sender, count]) => `- ${sender}: ${count} queued`)
       .join("\n");
   }
 
@@ -6107,21 +6211,14 @@ export class Session {
       );
   }
 
-  private _interruptAllChildTurns(): void {
-    const interrupted: string[] = [];
+  private _cascadeKillRunningChildren(
+    cause: "user_mass_interrupt" | "parent_kill",
+  ): void {
     for (const handle of this._childSessions.values()) {
       if (handle.lifecycle !== "running") continue;
+      handle.terminationCause = cause;
       handle.abortController?.abort();
-      handle.session._recordSessionEvent("interrupted by parent");
-      interrupted.push(`#${handle.numericId} ${handle.id}`);
-    }
-    if (interrupted.length > 0) {
-      this._appendEntry(createStatus(
-        this._nextLogId("status"),
-        this._turnCount,
-        `[Sub-agent${interrupted.length > 1 ? "s" : ""} interrupted: ${interrupted.join(", ")}]`,
-        "sub_agent_interrupted",
-      ), false);
+      handle.session._recordSessionEvent(cause === "user_mass_interrupt" ? "interrupted by user" : "interrupted by parent");
     }
   }
 
@@ -6224,10 +6321,6 @@ export class Session {
     ]);
   }
 
-  private _cleanupNonInteractiveAgents(): void {
-    // One-shot and persistent child sessions remain in the session tree.
-  }
-
   private _forceKillAllShells(): void {
     for (const entry of this._activeShells.values()) {
       if (entry.status === "running") {
@@ -6242,7 +6335,7 @@ export class Session {
     this._activeShells.clear();
   }
 
-  private _createSubAgentFromPredefined(templateName: string, taskId: string): Agent {
+  private _createSubAgentFromPredefined(templateName: string, taskId: string, modelLevel?: string): { agent: Agent; thinkingLevel?: string } {
     // Try exact match first, then case-insensitive fallback
     let templateAgent = this.agentTemplates[templateName];
     if (!templateAgent) {
@@ -6261,7 +6354,7 @@ export class Session {
       );
     }
 
-    const modelConfig = this._getSubAgentModelConfig();
+    const { modelConfig, thinkingLevel } = this._resolveSubAgentModel(templateName, modelLevel);
     const tools = [...templateAgent.tools]; // Use template's tools, not primary agent's
 
     const agent = new Agent({
@@ -6273,12 +6366,12 @@ export class Session {
       description: `Sub-agent '${taskId}' (${templateName})`,
     });
     this._applySubAgentConstraints(agent);
-    return agent;
+    return { agent, thinkingLevel };
   }
 
-  private _createSubAgentFromPath(templateDir: string, taskId: string): Agent {
+  private _createSubAgentFromPath(templateDir: string, taskId: string, modelLevel?: string): { agent: Agent; thinkingLevel?: string } {
     const templateAgent = loadTemplate(templateDir, this.config, taskId, this._mcpManager, this._promptsDirs);
-    const modelConfig = this._getSubAgentModelConfig();
+    const { modelConfig, thinkingLevel } = this._getSubAgentModelConfig(modelLevel);
 
     const agent = new Agent({
       name: taskId,
@@ -6289,7 +6382,7 @@ export class Session {
       description: `Sub-agent '${taskId}' (custom)`,
     });
     this._applySubAgentConstraints(agent);
-    return agent;
+    return { agent, thinkingLevel };
   }
 
   private _resolveTemplatePath(relPath: string): string {
@@ -6332,8 +6425,38 @@ export class Session {
     // not here — to avoid one-shot language leaking into interactive agents.
   }
 
-  private _getSubAgentModelConfig(): ModelConfig {
-    return this.primaryAgent.modelConfig;
+  /**
+   * Resolve model for a predefined sub-agent template.
+   * Priority: agent_models pin > model_level tier > parent model.
+   */
+  private _resolveSubAgentModel(templateName: string, modelLevel?: string): { modelConfig: ModelConfig; thinkingLevel?: string } {
+    // Priority 1: agent_models[templateName] — silently ignores model_level
+    try {
+      const pinned = this.config.resolveAgentModel(templateName);
+      if (pinned) return pinned;
+    } catch (err) {
+      // Pinned model configured but unavailable — fallback to parent model
+      const msg = `Pinned model for '${templateName}' unavailable: ${err instanceof Error ? err.message : String(err)}. Using parent model.`;
+      this._appendEntry(createStatus(this._nextLogId("status"), this._turnCount, msg, "agent_model_fallback"));
+      return { modelConfig: this.primaryAgent.modelConfig };
+    }
+
+    // Priority 2+3: tier or parent model
+    return this._getSubAgentModelConfig(modelLevel);
+  }
+
+  private _getSubAgentModelConfig(modelLevel?: string): { modelConfig: ModelConfig; thinkingLevel?: string } {
+    if (modelLevel && (modelLevel === "high" || modelLevel === "medium" || modelLevel === "low")) {
+      try {
+        const { modelConfig, thinkingLevel } = this.config.resolveModelTier(modelLevel);
+        return { modelConfig, thinkingLevel };
+      } catch (err) {
+        const msg = `Sub-agent requested model tier '${modelLevel}' but it failed: ${err instanceof Error ? err.message : String(err)}. Falling back to current model.`;
+        this._appendEntry(createStatus(this._nextLogId("status"), this._turnCount, msg, "tier_fallback"));
+        return { modelConfig: this.primaryAgent.modelConfig };
+      }
+    }
+    return { modelConfig: this.primaryAgent.modelConfig };
   }
 
   /**
@@ -6395,45 +6518,18 @@ export class Session {
     const racers = this._getWorkingChildRacers();
     if (racers.length === 0) return;
     const abortPromise = this._makeAbortPromise(signal);
+    // Install inbox watcher so messages can also wake this wait
+    const inboxWake = new Promise<"message">((resolve) => {
+      this._waitHandle = { resolve: () => resolve("message") };
+    });
     const winner = await Promise.race([
       ...racers,
+      inboxWake,
       ...(abortPromise ? [abortPromise] : []),
     ]);
+    this._waitHandle = null;  // cleanup
     if (winner === "aborted") return;
     await Promise.resolve();
-  }
-
-  private _formatAgentOutput(result: Record<string, unknown>): string {
-    const name = result["name"] as string;
-    const status = result["status"] as string;
-    const text = (result["text"] as string) ?? "";
-    const elapsed = (result["elapsed"] as number) ?? 0;
-
-    const header = `**${name}** [${status}, ${elapsed.toFixed(1)}s]`;
-
-    if (status !== "finished") {
-      return `${header}\n${text}`;
-    }
-
-    if (text.length > SUB_AGENT_OUTPUT_LIMIT) {
-      const outputDir = join(this._getArtifactsDir(), "agent-outputs");
-      mkdirSync(outputDir, { recursive: true });
-      const outputPath = join(outputDir, `${name}.md`);
-      writeFileSync(outputPath, text);
-
-      const truncated = text.slice(0, SUB_AGENT_OUTPUT_LIMIT);
-      const truncatedAtLine = truncated.split("\n").length;
-      return (
-        `${header}\n` +
-        `(Output truncated at ${SUB_AGENT_OUTPUT_LIMIT.toLocaleString()} chars ` +
-        `(line ${truncatedAtLine}). Full output: artifacts/agent-outputs/${name}.md. ` +
-        `Continue reading from line ${truncatedAtLine} with \`read_file(start_line=${truncatedAtLine})\`; ` +
-        `do not reread the portion already received.)\n\n` +
-        truncated
-      );
-    }
-
-    return `${header}\n${text}`;
   }
 
   // ==================================================================
@@ -6691,7 +6787,7 @@ export class Session {
   async close(): Promise<void> {
     // 1. Freeze inboxes before interrupt (interrupt clears _inbox)
     const frozenRootInbox = [...this._inbox];
-    const frozenChildInboxes = new Map<string, AgentMessage[]>();
+    const frozenChildInboxes = new Map<string, MessageEnvelope[]>();
     for (const [id, handle] of this._childSessions) {
       frozenChildInboxes.set(id, [...(handle.session as Session)._inbox]);
     }
@@ -6701,7 +6797,7 @@ export class Session {
     await this.waitForTurnComplete();
 
     // 4-5. Abort running child turns and wait for them to settle
-    this._interruptAllChildTurns();
+    this._cascadeKillRunningChildren("parent_kill");
     await this._waitForAllChildTurnsSettled();
 
     // 6. Suspend all child sessions (preserves lifecycle)

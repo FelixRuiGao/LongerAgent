@@ -10,10 +10,10 @@ import { getExtendedCacheSupport, type ModelConfig } from "../config.js";
 import {
   BaseProvider,
   Citation,
+  finalizeToolCall,
   ProviderResponse,
   ToolCall,
   Usage,
-  recoverPartialArgs,
   type Message,
   type SendMessageOptions,
   type ToolDef,
@@ -340,13 +340,17 @@ export class OpenAIResponsesProvider extends BaseProvider {
         const callId = (item["call_id"] as string) || "";
         const name = (item["name"] as string) || "";
         const argsStr = (item["arguments"] as string) || "{}";
-        let args: Record<string, unknown>;
-        try {
-          args = typeof argsStr === "string" ? JSON.parse(argsStr) : argsStr;
-        } catch {
-          args = recoverPartialArgs(argsStr);
+        if (typeof item["arguments"] === "string") {
+          toolCalls.push(finalizeToolCall(callId, name, argsStr, `${name} response`));
+        } else {
+          toolCalls.push({
+            id: callId,
+            name,
+            rawArguments: JSON.stringify((item["arguments"] as Record<string, unknown>) ?? {}),
+            arguments: (item["arguments"] as Record<string, unknown>) ?? {},
+            parseError: null,
+          });
         }
-        toolCalls.push({ id: callId, name, arguments: args });
       }
     }
 
@@ -508,14 +512,13 @@ export class OpenAIResponsesProvider extends BaseProvider {
     }
 
     // Codex backend requires stream=true for all requests.
-    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallStart || this._config.provider === "openai-codex") {
+    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallPartial || this._config.provider === "openai-codex") {
       return this._callStream(
         kwargs,
         requestOptions,
         options?.onTextChunk,
         options?.onReasoningChunk,
-        options?.onToolCallStart,
-        options?.onToolCallArgDelta,
+        options?.onToolCallPartial,
         options?.onToolCallClosed,
       );
     }
@@ -533,30 +536,36 @@ export class OpenAIResponsesProvider extends BaseProvider {
     requestOptions?: Record<string, unknown>,
     onTextChunk?: (chunk: string) => void,
     onReasoningChunk?: (chunk: string) => void,
-    onToolCallStart?: (callId: string, name: string) => void,
-    onToolCallArgDelta?: (callId: string, argDelta: string) => void,
-    onToolCallClosed?: (callId: string, argsBuffer: string) => void,
+    onToolCallPartial?: (callId: string, name: string, rawArguments: string) => void,
+    onToolCallClosed?: (call: ToolCall) => void,
   ): Promise<ProviderResponse> {
     kwargs["stream"] = true;
 
     const textParts: string[] = [];
     const reasoningParts: string[] = [];
-    const toolAcc: Map<
-      string,
-      { name: string; argChunks: string[]; closed: boolean }
-    > = new Map();
+    type StreamToolAcc = { name: string; rawArguments: string; closed: boolean };
+    const toolAcc: Map<string, StreamToolAcc> = new Map();
     let activeFunctionCallId: string | null = null;
     let finalResponse: Record<string, unknown> | null = null;
+
+    const emitToolPartial = (callId: string): void => {
+      const acc = toolAcc.get(callId);
+      if (!acc || !acc.name || !onToolCallPartial) return;
+      onToolCallPartial(callId, acc.name, acc.rawArguments);
+    };
 
     const closeToolCall = (callId: string | null, argsOverride?: string): void => {
       if (!callId) return;
       const acc = toolAcc.get(callId);
       if (!acc || acc.closed || !acc.name) return;
+      if (typeof argsOverride === "string") {
+        acc.rawArguments = argsOverride;
+      }
       acc.closed = true;
       if (activeFunctionCallId === callId) {
         activeFunctionCallId = null;
       }
-      onToolCallClosed?.(callId, argsOverride ?? acc.argChunks.join(""));
+      onToolCallClosed?.(finalizeToolCall(callId, acc.name, acc.rawArguments, `${acc.name} stream`));
     };
 
     const responseStream = await (this._client as unknown as { responses: { create: (params: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<AsyncIterable<Record<string, unknown>>> } }).responses.create(kwargs, requestOptions);
@@ -583,16 +592,13 @@ export class OpenAIResponsesProvider extends BaseProvider {
           (event["call_id"] as string) || (event["item_id"] as string) || "";
         const delta = (event["delta"] as string) || "";
         if (!toolAcc.has(callId)) {
-          toolAcc.set(callId, { name: "", argChunks: [], closed: false });
+          toolAcc.set(callId, { name: "", rawArguments: "", closed: false });
         }
         if (delta) {
           const acc = toolAcc.get(callId)!;
           acc.closed = false;
-          toolAcc.get(callId)!.argChunks.push(delta);
-          // Emit arg delta for known tool calls (has name → not a ghost reasoning item)
-          if (onToolCallArgDelta && toolAcc.get(callId)!.name) {
-            onToolCallArgDelta(callId, toolAcc.get(callId)!.argChunks.join(""));
-          }
+          acc.rawArguments += delta;
+          emitToolPartial(callId);
         }
         activeFunctionCallId = callId || activeFunctionCallId;
       } else if (eventType === "response.output_item.added") {
@@ -608,16 +614,13 @@ export class OpenAIResponsesProvider extends BaseProvider {
               closeToolCall(activeFunctionCallId);
             }
             if (!toolAcc.has(callId)) {
-              toolAcc.set(callId, { name, argChunks: [], closed: false });
+              toolAcc.set(callId, { name, rawArguments: "", closed: false });
             } else {
               const acc = toolAcc.get(callId)!;
               acc.name = name;
               acc.closed = false;
             }
-            // Emit tool call start for real function calls (non-empty name)
-            if (name && onToolCallStart) {
-              onToolCallStart(callId, name);
-            }
+            emitToolPartial(callId);
             activeFunctionCallId = callId;
           }
         }
@@ -630,7 +633,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
           const callId = (item["call_id"] as string) || (item["id"] as string) || "";
           const argsStr = typeof item["arguments"] === "string"
             ? item["arguments"] as string
-            : (callId ? (toolAcc.get(callId)?.argChunks.join("") ?? "") : "");
+            : (callId ? (toolAcc.get(callId)?.rawArguments ?? "") : "");
           closeToolCall(callId || activeFunctionCallId, argsStr);
         }
       } else if (
@@ -641,7 +644,7 @@ export class OpenAIResponsesProvider extends BaseProvider {
           (event["call_id"] as string) || (event["item_id"] as string) || "";
         const argsStr = typeof event["arguments"] === "string"
           ? event["arguments"] as string
-          : (callId ? (toolAcc.get(callId)?.argChunks.join("") ?? "") : "");
+          : (callId ? (toolAcc.get(callId)?.rawArguments ?? "") : "");
         closeToolCall(callId || activeFunctionCallId, argsStr);
       } else if (
         eventType === "response.completed"
@@ -659,33 +662,24 @@ export class OpenAIResponsesProvider extends BaseProvider {
         closeToolCall(callId);
       }
       const result = this._parseResponse(finalResponse);
+      if (textParts.length > 0 && !result.text) {
+        result.text = textParts.join("");
+      }
       if (reasoningParts.length > 0 && !result.reasoningContent) {
         result.reasoningContent = reasoningParts.join("");
+        if (!result.reasoningState) {
+          result.reasoningState = result.reasoningContent || null;
+        }
       }
+      result.toolCalls = [];
       return result;
-    }
-
-    // Fallback: build from accumulated stream data
-    const toolCalls: ToolCall[] = [];
-    for (const [callId, acc] of toolAcc) {
-      // Skip reasoning function_calls (no name — output_item.added was skipped due to empty call_id)
-      if (!acc.name) continue;
-      const argsStr = acc.argChunks.join("");
-      closeToolCall(callId, argsStr);
-      let args: Record<string, unknown>;
-      try {
-        args = argsStr ? JSON.parse(argsStr) : {};
-      } catch {
-        args = recoverPartialArgs(argsStr);
-      }
-      toolCalls.push({ id: callId, name: acc.name, arguments: args });
     }
 
     const reasoningText = reasoningParts.join("");
 
     return new ProviderResponse({
       text: textParts.join(""),
-      toolCalls,
+      toolCalls: [],
       usage: new Usage(),
       raw: null,
       reasoningContent: reasoningText,

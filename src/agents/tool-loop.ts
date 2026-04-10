@@ -20,7 +20,7 @@ import type {
   ToolDef,
   ToolResult,
 } from "../providers/base.js";
-import { ToolResult as ToolResultClass, recoverPartialArgs } from "../providers/base.js";
+import { ToolResult as ToolResultClass } from "../providers/base.js";
 import {
   isRetryableNetworkError,
   computeRetryDelay,
@@ -52,13 +52,8 @@ import {
 // Tool executor type
 // ------------------------------------------------------------------
 
-/**
- * A tool executor receives the arguments dict and returns either
- * a plain string or a ToolResult. May be sync or async.
- */
-export type ToolExecutor = (
-  args: Record<string, unknown>,
-) => ToolResult | string | Promise<ToolResult | string>;
+import type { ToolExecutor, ToolExecutorContext } from "../tools/executor-types.js";
+export type { ToolExecutor, ToolExecutorContext };
 
 // ------------------------------------------------------------------
 // generateToolSummary
@@ -205,16 +200,16 @@ type PendingToolExecPhase = "not_started" | "running" | "completed" | "failed";
 
 interface PendingToolCallState {
   name: string;
-  rawArgsBuffer: string;
+  rawArguments: string;
   entryId: string | null;
+  completeTopLevelArgs: Record<string, unknown>;
   canonicalArgs: Record<string, unknown> | null;
-  closedArgs: Record<string, unknown> | null;
+  closedCall: ToolCall | null;
   sections: ToolStreamSection[];
   executionPromise: Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null> | null;
-  parseError: string | null;
-  repairedFromPartial: boolean;
   streamPhase: PendingToolStreamPhase;
   execPhase: PendingToolExecPhase;
+  tuiVisibility: ToolCallTuiVisibility;
   // Context probing (edit_file replace/append mode)
   cachedFileContent?: string;
   cachedTotalLineCount?: number;
@@ -373,6 +368,17 @@ function parsePartialFlatObject(input: string): Record<string, ParsedPartialFiel
   }
 
   return fields;
+}
+
+function extractCompleteFlatArgs(
+  fields: Record<string, ParsedPartialField>,
+): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field.complete) continue;
+    args[key] = field.value;
+  }
+  return args;
 }
 
 function extractCompleteOptionalArgs(
@@ -555,20 +561,6 @@ function buildStreamableToolCall(
   return null;
 }
 
-function parseArgsBuffer(argsBuffer: string): { args: Record<string, unknown>; parseError?: string } {
-  try {
-    return {
-      args: argsBuffer ? JSON.parse(argsBuffer) as Record<string, unknown> : {},
-    };
-  } catch {
-    const repaired = recoverPartialArgs(argsBuffer);
-    return {
-      args: repaired,
-      parseError: `Failed to parse streamed tool arguments as JSON (${argsBuffer.length} chars).`,
-    };
-  }
-}
-
 function buildToolCallMeta(
   base: { toolCallId: string; toolName: string; agentName: string; contextId?: string },
   extra?: Record<string, unknown>,
@@ -581,6 +573,18 @@ function buildToolCallMeta(
   if (base.contextId !== undefined) meta.contextId = base.contextId;
   if (extra) Object.assign(meta, extra);
   return meta;
+}
+
+function resolveDefaultToolCallTuiVisibility(
+  toolDef: ToolDef | undefined,
+  toolArgs: Record<string, unknown>,
+  isClosed: boolean,
+): ToolCallTuiVisibility {
+  const policy = toolDef?.tuiPolicy?.partialReveal ?? "immediate";
+  if (policy === "immediate") return "show";
+  if (policy === "closed") return isClosed ? "show" : "defer";
+  const ready = policy.completeArgs.every((key) => Object.prototype.hasOwnProperty.call(toolArgs, key));
+  return ready || isClosed ? "show" : "defer";
 }
 
 // ------------------------------------------------------------------
@@ -650,6 +654,22 @@ export type BeforeToolExecuteCallback = (
   ctx: ToolPreflightContext,
 ) => ToolPreflightDecision | void | Promise<ToolPreflightDecision | void>;
 
+export type ToolCallTuiVisibility = "defer" | "show" | "hide";
+
+export interface ToolCallVisibilityContext {
+  agentName: string;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  rawArguments: string;
+  isClosed: boolean;
+  toolDef?: ToolDef;
+  defaultDecision: ToolCallTuiVisibility;
+}
+
+export type ResolveToolCallVisibilityCallback = (
+  ctx: ToolCallVisibilityContext,
+) => ToolCallTuiVisibility | void;
+
 // ------------------------------------------------------------------
 // asyncRunToolLoop
 // ------------------------------------------------------------------
@@ -685,7 +705,11 @@ export interface ToolLoopOptions {
   /** Called after all reasoning content for a round has been received. */
   onReasoningDone?: (roundIndex: number) => void;
   /** Fallback executor for tools not found in toolExecutors. */
-  builtinExecutor?: (name: string, args: Record<string, unknown>) => Promise<ToolResult | string>;
+  builtinExecutor?: (
+    name: string,
+    args: Record<string, unknown>,
+    ctx?: ToolExecutorContext,
+  ) => Promise<ToolResult | string>;
   /** Abort signal for cancellation. */
   signal?: AbortSignal;
   /** Allocator that returns the round's context_id. Provided by Session for context ID tracking. */
@@ -720,12 +744,19 @@ export interface ToolLoopOptions {
   onRetrySuccess?: (attempt: number) => void;
   /** Called when all network retries have been exhausted. */
   onRetryExhausted?: (maxRetries: number, errMsg: string) => void;
-  /** Called when a tool call is first identified during streaming. */
-  onToolCallStart?: (callId: string, name: string) => void;
-  /** Called as tool-call arguments evolve; providers pass the latest merged argument buffer. */
-  onToolCallArgDelta?: (callId: string, argBuffer: string) => void;
+  /** Called as tool-call arguments evolve; providers pass the latest raw argument buffer. */
+  onToolCallPartial?: (callId: string, name: string, rawArguments: string) => void;
+  /** Resolve whether a tool call should stay deferred, render, or stay hidden in the TUI. */
+  resolveToolCallVisibility?: ResolveToolCallVisibilityCallback;
   /** Update an existing log entry in-place (for finalizing pending tool call entries). */
-  updateEntry?: (entryId: string, patch: { content?: unknown; display?: string; meta?: Record<string, unknown> }) => void;
+  updateEntry?: (entryId: string, patch: {
+    apiRole?: LogEntry["apiRole"];
+    content?: unknown;
+    display?: string;
+    tuiVisible?: boolean;
+    displayKind?: LogEntry["displayKind"];
+    meta?: Record<string, unknown>;
+  }) => void;
   /** Mark a log entry as discarded (for cleanup on retry). */
   discardEntry?: (entryId: string) => void;
 }
@@ -770,8 +801,8 @@ export async function asyncRunToolLoop(
     onRetryAttempt,
     onRetrySuccess,
     onRetryExhausted,
-    onToolCallStart: onToolCallStartOpt,
-    onToolCallArgDelta: onToolCallArgDeltaOpt,
+    onToolCallPartial: onToolCallPartialOpt,
+    resolveToolCallVisibility,
     updateEntry,
     discardEntry,
   } = opts;
@@ -838,16 +869,16 @@ export async function asyncRunToolLoop(
       if (!pending) {
         pending = {
           name,
-          rawArgsBuffer: "",
+          rawArguments: "",
           entryId: null,
+          completeTopLevelArgs: {},
           canonicalArgs: null,
-          closedArgs: null,
+          closedCall: null,
           sections: [],
           executionPromise: null,
-          parseError: null,
-          repairedFromPartial: false,
           streamPhase: "hidden_partial",
           execPhase: "not_started",
+          tuiVisibility: "defer",
         };
         pendingToolCalls.set(callId, pending);
       } else if (name && pending.name !== name) {
@@ -857,7 +888,29 @@ export async function asyncRunToolLoop(
     };
 
     const getToolArgsForEntry = (pending: PendingToolCallState): Record<string, unknown> | null => {
-      return pending.closedArgs ?? pending.canonicalArgs;
+      return pending.closedCall?.arguments ?? pending.canonicalArgs ?? pending.completeTopLevelArgs ?? {};
+    };
+
+    const resolvePendingToolVisibility = (
+      pending: PendingToolCallState,
+      isClosed: boolean,
+    ): ToolCallTuiVisibility => {
+      if (pending.tuiVisibility === "show" || pending.tuiVisibility === "hide") {
+        return pending.tuiVisibility;
+      }
+      const toolArgs = getToolArgsForEntry(pending) ?? {};
+      const toolDef = toolsMap?.[pending.name];
+      const defaultDecision = resolveDefaultToolCallTuiVisibility(toolDef, toolArgs, isClosed);
+      const override = resolveToolCallVisibility?.({
+        agentName,
+        toolName: pending.name,
+        toolArgs,
+        rawArguments: pending.rawArguments,
+        isClosed,
+        toolDef,
+        defaultDecision,
+      });
+      return override ?? defaultDecision;
     };
 
     const deriveSectionsForState = (
@@ -865,9 +918,12 @@ export async function asyncRunToolLoop(
       pending: PendingToolCallState,
     ): ToolStreamSection[] => {
       if (pending.sections.length > 0) return pending.sections;
-      const args = pending.closedArgs;
-      if (!args) return [];
-      const streamable = buildStreamableToolCall(toolName, JSON.stringify(args));
+      const args = getToolArgsForEntry(pending);
+      if (!args && !pending.rawArguments) return [];
+      const streamable = buildStreamableToolCall(
+        toolName,
+        pending.rawArguments || JSON.stringify(args ?? {}),
+      );
       if (!streamable) return [];
       // Backfill language/mode when recordPartialToolCall was never called
       // (provider sent full args at once without streaming deltas)
@@ -881,14 +937,25 @@ export async function asyncRunToolLoop(
     const deriveToolStreamState = (pending: PendingToolCallState): string | undefined => {
       if (pending.streamPhase === "hidden_partial") return undefined;
       if (pending.streamPhase === "visible_partial") return "partial";
-      return pending.repairedFromPartial ? "partial_closed" : "closed";
+      return "closed";
     };
+
+    const buildToolCallContent = (
+      callId: string,
+      pending: PendingToolCallState,
+    ): { id: string; name: string; rawArguments: string; arguments: Record<string, unknown>; parseError: string | null } => ({
+      id: callId,
+      name: pending.name,
+      rawArguments: pending.closedCall?.rawArguments ?? pending.rawArguments,
+      arguments: getToolArgsForEntry(pending) ?? {},
+      parseError: pending.closedCall?.parseError ?? null,
+    });
 
     const syncToolCallEntry = (callId: string): void => {
       const pending = pendingToolCalls.get(callId);
       if (!pending) return;
-      const args = getToolArgsForEntry(pending);
-      if (!args) return;
+      if (pending.tuiVisibility === "defer") return;
+      const args = getToolArgsForEntry(pending) ?? {};
 
       const sections = deriveSectionsForState(pending.name, pending);
       const contextId = ensureRoundContextId();
@@ -899,15 +966,13 @@ export async function asyncRunToolLoop(
         {
           toolStreamState: deriveToolStreamState(pending),
           toolExecState: pending.execPhase,
-          repairedFromPartial: pending.repairedFromPartial,
-          rawArgsBuffer: pending.rawArgsBuffer || undefined,
           toolStreamSections: sections.length > 0 ? sections : undefined,
-          toolParseError: pending.parseError ?? undefined,
           toolStreamLanguage: pending.streamLanguage,
           toolStreamMode: pending.streamMode,
           fileModifyData: fmd,
         },
       );
+      const entryTuiVisible = pending.tuiVisibility === "show";
 
       if (!pending.entryId) {
         const entryId = allocId("tool_call");
@@ -916,18 +981,24 @@ export async function asyncRunToolLoop(
           turnIndex,
           roundIndex,
           display,
-          { id: callId, name: pending.name, arguments: args },
+          buildToolCallContent(callId, pending),
           { toolCallId: callId, toolName: pending.name, agentName, contextId },
+          pending.closedCall ? "assistant" : null,
         );
         entry.meta = meta;
+        entry.tuiVisible = entryTuiVisible;
+        entry.displayKind = entryTuiVisible ? "tool_call" : null;
         appendEntry(entry);
         pending.entryId = entryId;
         return;
       }
 
       updateEntry?.(pending.entryId, {
-        content: { id: callId, name: pending.name, arguments: args },
+        apiRole: pending.closedCall ? "assistant" : null,
+        content: buildToolCallContent(callId, pending),
         display,
+        tuiVisible: entryTuiVisible,
+        displayKind: entryTuiVisible ? "tool_call" : null,
         meta,
       });
     };
@@ -1061,22 +1132,27 @@ export async function asyncRunToolLoop(
     const recordPartialToolCall = (
       callId: string,
       toolName: string,
-      rawArgsBuffer: string,
+      rawArguments: string,
     ): void => {
       const pending = ensurePendingToolCall(callId, toolName);
-      pending.rawArgsBuffer = rawArgsBuffer;
-      const streamable = buildStreamableToolCall(toolName, rawArgsBuffer);
-      if (!streamable) return;
-      pending.canonicalArgs = streamable.canonicalArgs;
-      pending.sections = streamable.sections;
-      if (streamable.language) pending.streamLanguage = streamable.language;
-      if (streamable.streamMode) pending.streamMode = streamable.streamMode;
-      // Probe context for edit_file replace mode
-      probeEditContext(pending, streamable);
-      if (pending.streamPhase !== "closed") {
-        pending.streamPhase = "visible_partial";
+      pending.rawArguments = rawArguments;
+      pending.completeTopLevelArgs = extractCompleteFlatArgs(parsePartialFlatObject(rawArguments));
+      const streamable = buildStreamableToolCall(toolName, rawArguments);
+      if (streamable) {
+        pending.canonicalArgs = streamable.canonicalArgs;
+        pending.sections = streamable.sections;
+        if (streamable.language) pending.streamLanguage = streamable.language;
+        if (streamable.streamMode) pending.streamMode = streamable.streamMode;
+        // Probe context for edit_file replace mode
+        probeEditContext(pending, streamable);
       }
-      syncToolCallEntry(callId);
+      if (pending.streamPhase !== "closed") {
+        pending.tuiVisibility = resolvePendingToolVisibility(pending, false);
+        pending.streamPhase = pending.tuiVisibility === "show" ? "visible_partial" : "hidden_partial";
+      }
+      if (pending.entryId || pending.tuiVisibility === "show") {
+        syncToolCallEntry(callId);
+      }
     };
 
     const executeResolvedToolCall = (
@@ -1105,24 +1181,24 @@ export async function asyncRunToolLoop(
 
         onToolCall?.(agentName, toolName, args, summary);
 
-        let preflight: ToolPreflightDecision | void = undefined;
-        if (beforeToolExecute) {
-          preflight = await beforeToolExecute({
-            agentName,
-            toolName,
-            toolArgs: args,
-            toolCallId: callId,
-            summary,
-          });
-        }
-
-        pending.execPhase = "running";
-        pending.streamPhase = "closed";
-        syncToolCallEntry(callId);
-
         let toolOutput: ToolResult | string;
         const execStartMs = Date.now();
         try {
+          let preflight: ToolPreflightDecision | void = undefined;
+          if (beforeToolExecute) {
+            preflight = await beforeToolExecute({
+              agentName,
+              toolName,
+              toolArgs: args,
+              toolCallId: callId,
+              summary,
+            });
+          }
+
+          pending.execPhase = "running";
+          pending.streamPhase = "closed";
+          syncToolCallEntry(callId);
+
           if (fatalParseError) {
             toolOutput = new ToolResultClass({
               content: `ERROR: ${fatalParseError}`,
@@ -1132,9 +1208,9 @@ export async function asyncRunToolLoop(
               content: `ERROR: ${preflight.message}`,
             });
           } else if (toolName in toolExecutors) {
-            toolOutput = await toolExecutors[toolName](args);
+            toolOutput = await toolExecutors[toolName](args, { signal });
           } else if (builtinExecutor) {
-            toolOutput = await builtinExecutor(toolName, args);
+            toolOutput = await builtinExecutor(toolName, args, { signal });
           } else {
             toolOutput = new ToolResultClass({
               content: `ERROR: No executor found for tool '${toolName}'`,
@@ -1146,8 +1222,9 @@ export async function asyncRunToolLoop(
             if (ask) {
               ask.payload.toolCallId = callId;
               ask.roundIndex = roundIndex;
+              return { suspendedAsk: { ask, toolCallId: callId, roundIndex } };
             }
-            return ask ? { suspendedAsk: { ask, toolCallId: callId, roundIndex } } : null;
+            throw e;
           }
           if ((e as any)?.name === "AbortError" || signal?.aborted) {
             throw e;
@@ -1156,6 +1233,14 @@ export async function asyncRunToolLoop(
           toolOutput = new ToolResultClass({
             content: `ERROR: Tool execution failed — ${e}`,
           });
+        }
+
+        // Re-check abort after executor returns: most tools don't listen
+        // to the signal and will run to their natural exit. If the turn
+        // was aborted while they were running, we must not synthesize a
+        // tool_result — the interrupt cascade owns log normalization.
+        if (signal?.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
         }
 
         const resolved: ToolResultClass =
@@ -1188,6 +1273,10 @@ export async function asyncRunToolLoop(
           mergedMetadata._contentBlocks = resolved.contentBlocks;
         }
         const isError = resolved.content.startsWith("ERROR:");
+        if (pending.tuiVisibility === "hide" && isError) {
+          pending.tuiVisibility = "show";
+          syncToolCallEntry(callId);
+        }
         const preview = extractToolPreview(resolved.metadata);
         // Auto-preview: when tool didn't set explicit tui_preview, use result
         // text directly (capped to avoid bloating log entries). The TUI layer
@@ -1202,7 +1291,7 @@ export async function asyncRunToolLoop(
             : resultStr;
           previewDim = true;
         }
-        appendEntry(createToolResultEntry(
+        const toolResultEntry = createToolResultEntry(
           allocId("tool_result"),
           turnIndex,
           roundIndex,
@@ -1220,7 +1309,12 @@ export async function asyncRunToolLoop(
             previewText,
             previewDim,
           },
-        ));
+        );
+        if (pending.tuiVisibility === "hide" && !isError) {
+          toolResultEntry.tuiVisible = false;
+          toolResultEntry.displayKind = null;
+        }
+        appendEntry(toolResultEntry);
         if (onSaveCheckpoint) onSaveCheckpoint();
         onToolResult?.(agentName, toolName, callId, resolved.content.startsWith("ERROR:"), summary);
 
@@ -1239,9 +1333,6 @@ export async function asyncRunToolLoop(
     ): void => {
       startedExecutionPromises.add(promise);
       void promise.catch(() => {});
-      void promise.finally(() => {
-        startedExecutionPromises.delete(promise);
-      }).catch(() => {});
     };
 
     const startExecutionIfNeeded = (
@@ -1249,88 +1340,36 @@ export async function asyncRunToolLoop(
       fatalParseError?: string,
     ): Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null> | null => {
       const pending = pendingToolCalls.get(callId);
-      if (!pending || !pending.closedArgs) return null;
-      const promise = executeResolvedToolCall(callId, pending.name, pending.closedArgs, fatalParseError);
+      if (!pending || !pending.closedCall) return null;
+      const promise = executeResolvedToolCall(callId, pending.name, pending.closedCall.arguments, fatalParseError);
       trackExecutionPromise(promise);
       return promise;
     };
 
-    const sanitizeToolArgs = (args: Record<string, unknown>): Record<string, unknown> => {
-      const clean = { ...args };
-      delete clean["_parseError"];
-      return clean;
-    };
-
-    const closeToolCallFromBuffer = (callId: string, argsBuffer: string): void => {
-      const pending = pendingToolCalls.get(callId);
-      if (!pending) return;
-      pending.rawArgsBuffer = argsBuffer;
-      const parsed = parseArgsBuffer(argsBuffer);
-      const repairedFromPartial = Boolean(parsed.parseError && pending.canonicalArgs);
-      pending.repairedFromPartial = repairedFromPartial;
-      pending.parseError = parsed.parseError ?? null;
-      pending.closedArgs = repairedFromPartial
-        ? pending.canonicalArgs
-        : sanitizeToolArgs(parsed.args);
-      pending.streamPhase = "closed";
-
-      const closedStreamable = buildStreamableToolCall(
-        pending.name,
-        JSON.stringify(pending.closedArgs ?? {}),
-      );
-      if (closedStreamable) {
-        pending.sections = closedStreamable.sections;
-        pending.canonicalArgs = closedStreamable.canonicalArgs;
-        probeEditContext(pending, closedStreamable);
-      }
-      syncToolCallEntry(callId);
-
-      const shouldDeferExecution = Boolean(parsed.parseError && !repairedFromPartial);
-      if (!shouldDeferExecution) {
-        const promise = startExecutionIfNeeded(callId);
-        if (promise) {
-          void promise.then((result) => {
-            if (result?.suspendedAsk) {
-              suspendedAskResult = result.suspendedAsk;
-            }
-          }, () => {});
-        }
-      }
-    };
-
-    const reconcileClosedToolCallFromResponse = (tc: ToolCall): void => {
+    const closeCommittedToolCall = (tc: ToolCall): void => {
       const pending = ensurePendingToolCall(tc.id, tc.name);
-      const providerParseError = typeof tc.arguments["_parseError"] === "string"
-        ? tc.arguments["_parseError"] as string
-        : null;
-      const cleanArgs = sanitizeToolArgs(tc.arguments);
-      const repairedFromPartial = Boolean(providerParseError && pending.canonicalArgs);
-      pending.parseError = providerParseError ?? pending.parseError;
-      pending.repairedFromPartial = pending.repairedFromPartial || repairedFromPartial;
-      pending.closedArgs = repairedFromPartial
-        ? pending.canonicalArgs
-        : cleanArgs;
-      pending.streamPhase = "closed";
-      if (!pending.rawArgsBuffer) {
-        pending.rawArgsBuffer = JSON.stringify(cleanArgs);
-      }
+      pending.rawArguments = tc.rawArguments;
+      pending.completeTopLevelArgs = {
+        ...pending.completeTopLevelArgs,
+        ...tc.arguments,
+      };
+      pending.closedCall = tc;
 
       const closedStreamable = buildStreamableToolCall(
         pending.name,
-        JSON.stringify(pending.closedArgs ?? {}),
+        tc.rawArguments || JSON.stringify(tc.arguments ?? {}),
       );
       if (closedStreamable) {
         pending.sections = closedStreamable.sections;
         pending.canonicalArgs = closedStreamable.canonicalArgs;
         probeEditContext(pending, closedStreamable);
       }
+      pending.tuiVisibility = resolvePendingToolVisibility(pending, true);
+      pending.streamPhase = "closed";
       syncToolCallEntry(tc.id);
 
       if (!pending.executionPromise) {
-        const fatalParseError = providerParseError && !repairedFromPartial
-          ? providerParseError
-          : undefined;
-        const promise = startExecutionIfNeeded(tc.id, fatalParseError);
+        const promise = startExecutionIfNeeded(tc.id, tc.parseError ?? undefined);
         if (promise) {
           void promise.then((result) => {
             if (result?.suspendedAsk) {
@@ -1341,31 +1380,17 @@ export async function asyncRunToolLoop(
       }
     };
 
-    let wrappedToolCallStart: ((callId: string, name: string) => void) | undefined;
-    let wrappedToolCallArgDelta: ((callId: string, argDelta: string) => void) | undefined;
-    let wrappedToolCallClosed: ((callId: string, argsBuffer: string) => void) | undefined;
+    let wrappedToolCallPartial: ((callId: string, name: string, rawArguments: string) => void) | undefined;
+    let wrappedToolCallClosed: ((call: ToolCall) => void) | undefined;
     let suspendedAskResult: { ask: AskRequest; toolCallId: string; roundIndex: number } | undefined;
-    if (onToolCallStartOpt) {
-      wrappedToolCallStart = (callId: string, name: string) => {
-        const existing = pendingToolCalls.get(callId);
-        if (existing) {
-          if (name && !existing.name) existing.name = name;
-          return;
-        }
-        onToolCallStartOpt!(callId, name);
-        ensurePendingToolCall(callId, name);
+    if (onToolCallPartialOpt) {
+      wrappedToolCallPartial = (callId: string, name: string, rawArguments: string) => {
+        onToolCallPartialOpt!(callId, name, rawArguments);
+        recordPartialToolCall(callId, name, rawArguments);
       };
     }
-    if (onToolCallArgDeltaOpt) {
-      wrappedToolCallArgDelta = (callId: string, argDelta: string) => {
-        onToolCallArgDeltaOpt!(callId, argDelta);
-        const pending = pendingToolCalls.get(callId);
-        if (!pending) return;
-        recordPartialToolCall(callId, pending.name, argDelta);
-      };
-    }
-    wrappedToolCallClosed = (callId: string, argsBuffer: string) => {
-      closeToolCallFromBuffer(callId, argsBuffer);
+    wrappedToolCallClosed = (call: ToolCall) => {
+      closeCommittedToolCall(call);
     };
 
     let resp: ProviderResponse;
@@ -1381,8 +1406,7 @@ export async function asyncRunToolLoop(
           {
             onTextChunk: wrappedChunk,
             onReasoningChunk: wrappedReasoningChunk,
-            onToolCallStart: wrappedToolCallStart,
-            onToolCallArgDelta: wrappedToolCallArgDelta,
+            onToolCallPartial: wrappedToolCallPartial,
             onToolCallClosed: wrappedToolCallClosed,
             signal,
             thinkingLevel,
@@ -1428,12 +1452,24 @@ export async function asyncRunToolLoop(
       onTokenUpdate(lastInput, resp.usage);
     }
 
+    if (resp.toolCalls.length > 0) {
+      throw new Error("Provider returned final-response toolCalls; tool-loop expects canonical streamed tool_call_closed events only.");
+    }
+
+    const hasCommittedToolCalls = Array.from(pendingToolCalls.values()).some((pending) =>
+      Boolean(pending.closedCall),
+    );
+
     // Compact check after each provider call
     let compactTriggered = false;
     let compactScenario: "output" | "toolcall" | undefined;
 
     if (compactCheck) {
-      const check = compactCheck(resp.usage.inputTokens, resp.usage.outputTokens, resp.hasToolCalls);
+      const check = compactCheck(
+        resp.usage.inputTokens,
+        resp.usage.outputTokens,
+        hasCommittedToolCalls,
+      );
       if (check?.compactNeeded) {
         compactTriggered = true;
         compactScenario = check.scenario;
@@ -1459,7 +1495,7 @@ export async function asyncRunToolLoop(
       hadStreamedText = true;
     }
 
-    if (!resp.hasToolCalls) {
+    if (!hasCommittedToolCalls) {
       // No tool calls — return final result.
       // The caller (Session) is responsible for creating the final
       // assistant_text / reasoning / no_reply entries.
@@ -1517,10 +1553,18 @@ export async function asyncRunToolLoop(
       ));
     }
 
-    // Tool calls — reconcile final provider view with per-call runtime state.
-    for (const tc of resp.toolCalls) {
-      if (!tc.name) continue;
-      reconcileClosedToolCallFromResponse(tc);
+    // Ensure every committed tool call is executing before we decide
+    // whether to continue to the next provider round.
+    for (const [callId, pending] of pendingToolCalls) {
+      if (!pending.name || !pending.closedCall || pending.executionPromise) continue;
+      const promise = startExecutionIfNeeded(callId, pending.closedCall.parseError ?? undefined);
+      if (promise) {
+        void promise.then((result) => {
+          if (result?.suspendedAsk) {
+            suspendedAskResult = result.suspendedAsk;
+          }
+        }, () => {});
+      }
     }
 
     // Strict barrier: wait for all started tool executions to settle before next provider call.

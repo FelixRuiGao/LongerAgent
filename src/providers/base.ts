@@ -19,7 +19,9 @@ export interface ImageBlock {
 export interface ToolCall {
   id: string;
   name: string;
+  rawArguments: string;
   arguments: Record<string, unknown>;
+  parseError: string | null;
 }
 
 /** Normalized web search citation. */
@@ -30,6 +32,19 @@ export interface Citation {
 }
 
 /** Provider-agnostic tool definition. */
+export type ToolTuiPartialRevealPolicy =
+  | "immediate"
+  | "closed"
+  | { completeArgs: string[] };
+
+export interface ToolTuiPolicy {
+  /**
+   * When a partial tool call becomes eligible to render in the TUI.
+   * Hidden/override decisions can still be applied at runtime by Session.
+   */
+  partialReveal?: ToolTuiPartialRevealPolicy;
+}
+
 export interface ToolDef {
   name: string;
   description: string;
@@ -40,6 +55,8 @@ export interface ToolDef {
    * `{agent}` is always available; other placeholders map to argument keys.
    */
   summaryTemplate?: string;
+  /** Local-only TUI behavior hints; never forwarded to providers. */
+  tuiPolicy?: ToolTuiPolicy;
 }
 
 // ------------------------------------------------------------------
@@ -63,12 +80,10 @@ export interface SendMessageOptions {
   maxTokens?: number;
   onTextChunk?: (chunk: string) => void;
   onReasoningChunk?: (chunk: string) => void;
-  /** Fired when a tool call is first identified during streaming (name known, args not yet complete). */
-  onToolCallStart?: (callId: string, name: string) => void;
-  /** Fired for each incremental JSON argument chunk during tool call streaming. */
-  onToolCallArgDelta?: (callId: string, argDelta: string) => void;
-  /** Fired when a tool call's argument buffer is considered closed for this response. */
-  onToolCallClosed?: (callId: string, argsBuffer: string) => void;
+  /** Fired as a tool call becomes visible and its raw JSON argument buffer evolves. */
+  onToolCallPartial?: (callId: string, name: string, rawArguments: string) => void;
+  /** Fired when a tool call is closed and canonicalized by the provider. */
+  onToolCallClosed?: (call: ToolCall) => void;
   signal?: AbortSignal;
   /** Unified thinking level string ("off", "low", "medium", "high", "adaptive", etc.) */
   thinkingLevel?: string;
@@ -132,6 +147,33 @@ export class ProviderResponse {
 
   get hasToolCalls(): boolean {
     return this.toolCalls.length > 0;
+  }
+}
+
+export function finalizeToolCall(
+  id: string,
+  name: string,
+  rawArguments: string,
+  sourceLabel?: string,
+): ToolCall {
+  const normalizedRaw = rawArguments || "";
+  try {
+    return {
+      id,
+      name,
+      rawArguments: normalizedRaw,
+      arguments: normalizedRaw ? JSON.parse(normalizedRaw) as Record<string, unknown> : {},
+      parseError: null,
+    };
+  } catch {
+    const label = sourceLabel ?? (name || "tool");
+    return {
+      id,
+      name,
+      rawArguments: normalizedRaw,
+      arguments: {},
+      parseError: `Failed to parse ${label} tool arguments as JSON (${normalizedRaw.length} chars).`,
+    };
   }
 }
 

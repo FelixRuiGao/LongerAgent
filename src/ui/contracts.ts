@@ -58,12 +58,13 @@ export interface Session {
   hasPendingTurnToResume?(): boolean;
   runManualSummarize?(instruction?: string, options?: { signal?: AbortSignal }): Promise<string>;
   runManualCompact?(instruction?: string, options?: { signal?: AbortSignal }): Promise<void>;
+  thinkingLevel?: string;
   currentModelConfigName?: string;
   switchModel?(modelConfigName: string): void;
   config?: { modelNames: string[]; getModel(name: string): { provider: string; model: string; contextLength: number; supportsThinking: boolean; supportsMultimodal: boolean } };
   _resetTransientState(): void;
   _initConversation(): void;
-  deliverMessage?(source: "user" | "system" | "sub-agent", content: string): void;
+  deliverMessage?(source: "user" | "system", content: string): void;
   log?: readonly LogEntry[];
   subscribeLog?(listener: () => void): () => void;
   getLogRevision?(): number;
@@ -87,6 +88,7 @@ export interface Session {
 
 export type ConversationEntryKind =
   | "user"
+  | "agent_result"
   | "assistant"
   | "interrupted_marker"
   | "progress"

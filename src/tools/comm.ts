@@ -42,10 +42,16 @@ export const SPAWN_TOOL: ToolDef = {
         type: "boolean",
         description: "If true, agent starts idle and won't work until it receives its first 'send' message.",
       },
+      model_level: {
+        type: "string",
+        enum: ["high", "medium", "low"],
+        description: "Model tier for this sub-agent. If omitted, the sub-agent inherits the parent model. Tiers must be configured by the user.",
+      },
     },
     required: ["id", "task", "mode"],
   },
   summaryTemplate: "{agent} is spawning sub-agent {id}",
+  tuiPolicy: { partialReveal: { completeArgs: ["id"] } },
 };
 
 export const SPAWN_FILE_TOOL: ToolDef = {
@@ -66,6 +72,7 @@ export const SPAWN_FILE_TOOL: ToolDef = {
     required: ["file"],
   },
   summaryTemplate: "{agent} is spawning sub-agents from {file}",
+  tuiPolicy: { partialReveal: { completeArgs: ["file"] } },
 };
 
 export const KILL_AGENT_TOOL: ToolDef = {
@@ -83,6 +90,7 @@ export const KILL_AGENT_TOOL: ToolDef = {
     required: ["ids"],
   },
   summaryTemplate: "{agent} is killing sub-agents",
+  tuiPolicy: { partialReveal: "closed" },
 };
 
 export const ASK_TOOL: ToolDef = {
@@ -117,6 +125,7 @@ export const ASK_TOOL: ToolDef = {
     required: ["questions"],
   },
   summaryTemplate: "{agent} is asking the user a question",
+  tuiPolicy: { partialReveal: "closed" },
 };
 
 export const SHOW_CONTEXT_TOOL: ToolDef = {
@@ -138,6 +147,7 @@ export const SHOW_CONTEXT_TOOL: ToolDef = {
     required: [],
   },
   summaryTemplate: "{agent} is inspecting context",
+  tuiPolicy: { partialReveal: "immediate" },
 };
 
 export const DISTILL_CONTEXT_TOOL: ToolDef = {
@@ -175,6 +185,7 @@ export const DISTILL_CONTEXT_TOOL: ToolDef = {
     required: ["operations"],
   },
   summaryTemplate: "{agent} is distilling context",
+  tuiPolicy: { partialReveal: "closed" },
 };
 
 export const CHECK_STATUS_TOOL: ToolDef = {
@@ -187,6 +198,7 @@ export const CHECK_STATUS_TOOL: ToolDef = {
     properties: {},
   },
   summaryTemplate: "{agent} is checking status",
+  tuiPolicy: { partialReveal: "immediate" },
 };
 
 export const WAIT_TOOL: ToolDef = {
@@ -206,21 +218,23 @@ export const WAIT_TOOL: ToolDef = {
     required: ["seconds"],
   },
   summaryTemplate: "{agent} is waiting",
+  tuiPolicy: { partialReveal: { completeArgs: ["seconds"] } },
 };
 
 export const SEND_TOOL: ToolDef = {
   name: "send",
   description:
-    "Send a message to an agent. " +
+    "Send a message to a teammate. " +
     "The message is delivered asynchronously — you get a confirmation, not a reply. " +
-    "The target agent auto-activates if idle.",
+    "The target auto-activates if idle. " +
+    "To communicate with the parent session, use your turn output instead.",
   parameters: {
     type: "object",
     properties: {
       to: {
         type: "string",
         description:
-          "Target: agent ID, \"main\" (parent session), or \"all\" (broadcast to all teammates).",
+          "Target: teammate agent ID, or \"all\" (broadcast to all teammates).",
       },
       content: {
         type: "string",
@@ -230,5 +244,5 @@ export const SEND_TOOL: ToolDef = {
     required: ["to", "content"],
   },
   summaryTemplate: "{agent} sent message to {to}",
+  tuiPolicy: { partialReveal: { completeArgs: ["to"] } },
 };
-

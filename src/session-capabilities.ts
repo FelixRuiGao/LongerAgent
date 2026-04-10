@@ -24,7 +24,7 @@ export const CHILD_SESSION_CAPABILITIES: SessionCapabilities = {
   includeSpawnTool: false,
   includeKillTool: false,
   includeCheckStatusTool: false,
-  includeWaitTool: false,
+  includeWaitTool: true,
   includeShowContextTool: false,
   includeDistillContextTool: false,
   includeAskTool: false,

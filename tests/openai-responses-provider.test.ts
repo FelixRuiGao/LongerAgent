@@ -232,6 +232,7 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
   it("emits tool-call close on output_item.done before final response parsing", async () => {
     const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
     const events: string[] = [];
+    const closedCalls: Array<{ id: string; arguments: Record<string, unknown> }> = [];
 
     const finalResponse = {
       output: [
@@ -285,23 +286,153 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
       [{ role: "user", content: "hi" } as any],
       undefined,
       {
-        onToolCallStart: (id) => events.push(`start:${id}`),
-        onToolCallArgDelta: (id, args) => events.push(`delta:${id}:${args}`),
-        onToolCallClosed: (id) => events.push(`close:${id}`),
+        onToolCallPartial: (id, name, rawArguments) => {
+          events.push(`partial:${id}:${name}:${rawArguments}`);
+        },
+        onToolCallClosed: (call) => {
+          events.push(`close:${call.id}`);
+          closedCalls.push({ id: call.id, arguments: call.arguments });
+        },
       },
     );
 
     expect(events).toContain("close:call_1");
-    expect(events.indexOf("close:call_1")).toBeGreaterThan(events.indexOf("delta:call_1:{\"path\":\"a.txt\",\"content\":\"hello\"}"));
-    expect(resp.toolCalls).toEqual([
+    expect(events.indexOf("close:call_1")).toBeGreaterThan(events.indexOf("partial:call_1:write_file:{\"path\":\"a.txt\",\"content\":\"hello\"}"));
+    expect(closedCalls).toEqual([
       {
         id: "call_1",
-        name: "write_file",
         arguments: {
           path: "a.txt",
           content: "hello",
         },
       },
     ]);
+    expect(resp.toolCalls).toEqual([]);
+  });
+
+  it("emits closed streamed tool calls even when the final response omits them", async () => {
+    const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
+    const closedCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+
+    const finalResponse = {
+      output: [
+        {
+          type: "function_call",
+          call_id: "call_1",
+          name: "read_file",
+          arguments: "{\"path\":\"a.txt\"}",
+        },
+      ],
+      usage: {
+        input_tokens: 4,
+        output_tokens: 3,
+        input_tokens_details: { cached_tokens: 0 },
+      },
+    };
+
+    (provider as any)._client = {
+      responses: {
+        create: vi.fn(async () =>
+          streamOf([
+            {
+              type: "response.output_item.added",
+              item: { type: "function_call", call_id: "call_1", name: "read_file" },
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              call_id: "call_1",
+              delta: "{\"path\":\"a.txt\"}",
+            },
+            {
+              type: "response.output_item.done",
+              item: {
+                type: "function_call",
+                call_id: "call_1",
+                name: "read_file",
+                arguments: "{\"path\":\"a.txt\"}",
+              },
+            },
+            {
+              type: "response.output_item.added",
+              item: { type: "function_call", call_id: "call_2", name: "bash" },
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              call_id: "call_2",
+              delta: "{\"command\":\"pwd\"}",
+            },
+            {
+              type: "response.output_item.done",
+              item: {
+                type: "function_call",
+                call_id: "call_2",
+                name: "bash",
+                arguments: "{\"command\":\"pwd\"}",
+              },
+            },
+            { type: "response.completed", response: finalResponse },
+          ]),
+        ),
+      },
+    };
+
+    const resp = await provider.sendMessage(
+      [{ role: "user", content: "hi" } as any],
+      undefined,
+      {
+        onToolCallPartial: () => {},
+        onToolCallClosed: (call) => {
+          closedCalls.push({ id: call.id, name: call.name, arguments: call.arguments });
+        },
+      },
+    );
+
+    expect(closedCalls).toEqual([
+      {
+        id: "call_1",
+        name: "read_file",
+        arguments: { path: "a.txt" },
+      },
+      {
+        id: "call_2",
+        name: "bash",
+        arguments: { command: "pwd" },
+      },
+    ]);
+    expect(resp.toolCalls).toEqual([]);
+  });
+
+  it("falls back to streamed text when the final response omits message content", async () => {
+    const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
+
+    (provider as any)._client = {
+      responses: {
+        create: vi.fn(async () =>
+          streamOf([
+            { type: "response.output_text.delta", delta: "review" },
+            { type: "response.output_text.delta", delta: " complete" },
+            {
+              type: "response.completed",
+              response: {
+                output: [],
+                usage: {
+                  input_tokens: 2,
+                  output_tokens: 2,
+                  input_tokens_details: { cached_tokens: 0 },
+                },
+              },
+            },
+          ]),
+        ),
+      },
+    };
+
+    const resp = await provider.sendMessage(
+      [{ role: "user", content: "hi" } as any],
+      undefined,
+      { onTextChunk: () => {} },
+    );
+
+    expect(resp.text).toBe("review complete");
   });
 });

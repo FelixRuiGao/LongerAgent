@@ -8,6 +8,7 @@ import {
   createSystemPrompt,
   createTurnStart,
   createUserMessage,
+  createAgentResult,
   createAssistantText,
   createReasoning,
   createToolCall,
@@ -101,6 +102,36 @@ describe("Factory functions", () => {
     expect(e.apiRole).toBe("user");
     expect(e.content).toBe("<ctx>Hello</ctx>");
     expect(e.meta.contextId).toBe("c1");
+  });
+
+  it("createAgentResult", () => {
+    const e = createAgentResult(
+      "ar-001",
+      1,
+      "reviewer-1",
+      3,
+      "reviewer",
+      "interrupted",
+      "user_mass_interrupt",
+      4200,
+      "[Agent \"reviewer-1\" interrupted by the user]\n(no output)",
+      "",
+      "c-ar-1",
+      "artifacts/agent-outputs/reviewer-1.md",
+    );
+    expect(e.type).toBe("agent_result");
+    expect(e.tuiVisible).toBe(true);
+    expect(e.displayKind).toBe("agent_result");
+    expect(e.display).toBe("");
+    expect(e.apiRole).toBe("user");
+    expect(e.meta.contextId).toBe("c-ar-1");
+    expect(e.meta.agentId).toBe("reviewer-1");
+    expect(e.meta.agentNumericId).toBe(3);
+    expect(e.meta.agentTemplate).toBe("reviewer");
+    expect(e.meta.outcome).toBe("interrupted");
+    expect(e.meta.cause).toBe("user_mass_interrupt");
+    expect(e.meta.elapsedMs).toBe(4200);
+    expect(e.meta.fullOutputPath).toBe("artifacts/agent-outputs/reviewer-1.md");
   });
 
   it("createAssistantText", () => {
@@ -296,13 +327,13 @@ describe("Factory functions", () => {
 });
 
 // ------------------------------------------------------------------
-// All 20 types produce valid entries
+// All 21 types produce valid entries
 // ------------------------------------------------------------------
 
-describe("All 20 entry types", () => {
+describe("All 21 entry types", () => {
   it("every type has a factory that produces correct type field", () => {
     const allTypes: LogEntryType[] = [
-      "system_prompt", "turn_start", "user_message", "assistant_text",
+      "system_prompt", "turn_start", "user_message", "agent_result", "assistant_text",
       "reasoning", "tool_call", "tool_result", "ask_request",
       "ask_resolution", "no_reply", "compact_marker", "compact_context",
       "summary", "interruption_marker", "sub_agent_start", "sub_agent_tool_call",
@@ -313,6 +344,7 @@ describe("All 20 entry types", () => {
       createSystemPrompt("sys-001", "prompt"),
       createTurnStart("ts-001", 1),
       createUserMessage("user-001", 1, "hi", "hi", "c1"),
+      createAgentResult("ar-001", 1, "agent-1", 1, "reviewer", "completed", "natural", 1200, "[Agent \"agent-1\" completed]\nok", "ok", "c-ar"),
       createAssistantText("asst-001", 1, 0, "reply", "reply"),
       createReasoning("rsn-001", 1, 0, "thinking", "thinking"),
       createToolCall("tc-001", 1, 0, "summary", { id: "1", name: "t", arguments: {} }, { toolCallId: "1", toolName: "t", agentName: "a" }),
@@ -332,7 +364,7 @@ describe("All 20 entry types", () => {
       createTokenUpdate("tok-001", 1, 1000),
     ];
 
-    // Verify we have all 20 types
+    // Verify we have all 21 types
     const typesProduced = entries.map((e) => e.type);
     for (const t of allTypes) {
       expect(typesProduced).toContain(t);

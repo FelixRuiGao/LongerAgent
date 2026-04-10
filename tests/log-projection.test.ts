@@ -7,6 +7,7 @@ import {
   createSystemPrompt,
   createTurnStart,
   createUserMessage,
+  createAgentResult,
   createAssistantText,
   createReasoning,
   createToolCall,
@@ -94,6 +95,44 @@ describe("projectToTuiEntries", () => {
     const tui = projectToTuiEntries(entries);
     expect(tui[2]).toMatchObject({ kind: "tool_call", text: "edit_file src/a.ts", id: "tc-001" });
     expect(tui[3]).toMatchObject({ kind: "tool_result", text: "@@ -1 +1 @@\n-old\n+new", id: "tr-001" });
+  });
+
+  it("projects agent_result entries with structured meta for TUI consumers", () => {
+    const entries = [
+      createSystemPrompt("sys-001", "prompt"),
+      createAgentResult(
+        "ar-001",
+        1,
+        "reviewer-1",
+        3,
+        "reviewer",
+        "failed",
+        "natural",
+        12300,
+        "[Agent \"reviewer-1\" failed]\nBoom",
+        "Boom",
+        "c-ar-1",
+      ),
+    ];
+
+    const tui = projectToTuiEntries(entries);
+    expect(tui).toEqual([
+      {
+        kind: "agent_result",
+        text: "",
+        id: "ar-001",
+        meta: {
+          contextId: "c-ar-1",
+          agentId: "reviewer-1",
+          agentNumericId: 3,
+          agentTemplate: "reviewer",
+          outcome: "failed",
+          cause: "natural",
+          elapsedMs: 12300,
+          preview: "Boom",
+        },
+      },
+    ]);
   });
 
   it("keeps summarized entries visible in TUI and hides summary entries", () => {
@@ -389,6 +428,34 @@ describe("projectToApiMessages", () => {
     expect(msgs[0]).toEqual({ role: "system", content: "You are helpful" });
     expect(msgs[1]).toMatchObject({ role: "user", content: "Hello" });
     expect(msgs[2]).toMatchObject({ role: "assistant", content: "Hi there!" });
+  });
+
+  it("projects agent_result entries through the normal user-role path", () => {
+    const msgs = projectToApiMessages([
+      createSystemPrompt("sys-001", "prompt"),
+      createAgentResult(
+        "ar-001",
+        1,
+        "reviewer-1",
+        3,
+        "reviewer",
+        "interrupted",
+        "user_targeted_kill",
+        4200,
+        "[Agent \"reviewer-1\" interrupted by the user]\n(no output)",
+        "",
+        "c-ar-1",
+      ),
+    ]);
+
+    expect(msgs).toEqual([
+      { role: "system", content: "prompt" },
+      {
+        role: "user",
+        content: "[Agent \"reviewer-1\" interrupted by the user]\n(no output)",
+        _context_id: "c-ar-1",
+      },
+    ]);
   });
 
   it("uses provided systemPrompt override", () => {

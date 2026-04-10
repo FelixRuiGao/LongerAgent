@@ -149,6 +149,8 @@ export function createEphemeralLogState(
               id: toolCallId,
               name: toolName,
               arguments: asRecord(tc["arguments"]),
+              rawArguments: JSON.stringify(asRecord(tc["arguments"])),
+              parseError: null,
             },
             {
               toolCallId,

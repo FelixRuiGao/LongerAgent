@@ -10,6 +10,7 @@ import type { ModelConfig } from "../config.js";
 import {
   BaseProvider,
   Citation,
+  finalizeToolCall,
   ProviderResponse,
   ToolCall,
   Usage,
@@ -204,15 +205,12 @@ export class OpenAIChatProvider extends BaseProvider {
 
     if (message.tool_calls) {
       for (const tc of message.tool_calls) {
-        let args: Record<string, unknown>;
-        try {
-          args = JSON.parse(tc.function.arguments);
-        } catch {
-          args = {
-            _parseError: `Failed to parse tool arguments as JSON (${tc.function.arguments?.length ?? 0} chars). The model should retry the tool call with valid JSON arguments.`,
-          };
-        }
-        toolCalls.push({ id: tc.id, name: tc.function.name, arguments: args });
+        toolCalls.push(finalizeToolCall(
+          tc.id,
+          tc.function.name,
+          tc.function.arguments ?? "",
+          `${tc.function.name} response`,
+        ));
       }
     }
 
@@ -354,8 +352,15 @@ export class OpenAIChatProvider extends BaseProvider {
       delete kwargs["extra_body"];
     }
 
-    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallStart) {
-      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal, options?.onToolCallStart, options?.onToolCallArgDelta, options?.onToolCallClosed);
+    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallPartial) {
+      return this._callStream(
+        kwargs,
+        options.onTextChunk,
+        options.onReasoningChunk,
+        options?.signal,
+        options?.onToolCallPartial,
+        options?.onToolCallClosed,
+      );
     }
 
     const resp = await this._client.chat.completions.create(
@@ -374,9 +379,8 @@ export class OpenAIChatProvider extends BaseProvider {
     onTextChunk?: (chunk: string) => void,
     onReasoningChunk?: (chunk: string) => void,
     signal?: AbortSignal,
-    onToolCallStart?: (callId: string, name: string) => void,
-    onToolCallArgDelta?: (callId: string, argDelta: string) => void,
-    onToolCallClosed?: (callId: string, argsBuffer: string) => void,
+    onToolCallPartial?: (callId: string, name: string, rawArguments: string) => void,
+    onToolCallClosed?: (call: ToolCall) => void,
   ): Promise<ProviderResponse> {
     kwargs["stream"] = true;
     kwargs["stream_options"] = { include_usage: true };
@@ -391,6 +395,7 @@ export class OpenAIChatProvider extends BaseProvider {
     const reasoningParts: string[] = [];
     const citations: Citation[] = [];
     let latestReasoningState: unknown = null;
+    const toolArgsMode = this._toolArgsMode;
     let textSoFar = "";
     let reasoningSoFar = "";
     let rawTextSoFar = "";
@@ -487,8 +492,24 @@ export class OpenAIChatProvider extends BaseProvider {
       if (!acc || acc.closed) return;
       acc.closed = true;
       activeToolIndex = null;
-      if (onToolCallClosed && acc.id) {
-        onToolCallClosed(acc.id, acc.argsSoFar);
+      if (onToolCallClosed && acc.id && acc.name) {
+        let rawArguments = acc.argsSoFar;
+        if (
+          rawArguments
+          && toolArgsMode === "auto"
+          && acc.lastChunk
+          && acc.lastChunk !== rawArguments
+        ) {
+          try {
+            JSON.parse(rawArguments);
+          } catch {
+            try {
+              JSON.parse(acc.lastChunk);
+              rawArguments = acc.lastChunk;
+            } catch {}
+          }
+        }
+        onToolCallClosed(finalizeToolCall(acc.id, acc.name, rawArguments, `${acc.name} stream`));
       }
     }
 
@@ -641,9 +662,8 @@ export class OpenAIChatProvider extends BaseProvider {
               lastChunk: "",
               closed: false,
             });
-            // Emit tool call start when name is known on first delta
-            if (name && id && onToolCallStart) {
-              onToolCallStart(id, name);
+            if (name && id && onToolCallPartial) {
+              onToolCallPartial(id, name, "");
             }
           } else {
             const acc = toolAcc.get(idx)!;
@@ -651,9 +671,8 @@ export class OpenAIChatProvider extends BaseProvider {
             if (tcDelta.id) acc.id = tcDelta.id;
             if (tcDelta.function?.name) acc.name = tcDelta.function.name;
             acc.closed = false;
-            // Emit start if name arrived on a subsequent delta
-            if (!hadName && acc.name && acc.id && onToolCallStart) {
-              onToolCallStart(acc.id, acc.name);
+            if (!hadName && acc.name && acc.id && onToolCallPartial) {
+              onToolCallPartial(acc.id, acc.name, acc.argsSoFar);
             }
           }
           if (tcDelta.function?.arguments) {
@@ -663,8 +682,8 @@ export class OpenAIChatProvider extends BaseProvider {
               acc.argsSoFar,
               tcDelta.function.arguments,
             );
-            if (onToolCallArgDelta && acc.id) {
-              onToolCallArgDelta(acc.id, acc.argsSoFar);
+            if (onToolCallPartial && acc.id && acc.name) {
+              onToolCallPartial(acc.id, acc.name, acc.argsSoFar);
             }
           }
           activeToolIndex = idx;
@@ -685,54 +704,13 @@ export class OpenAIChatProvider extends BaseProvider {
       }
     }
 
-    // Build tool calls from accumulated deltas
     closeToolIndex(activeToolIndex);
-    const toolCalls: ToolCall[] = [];
-    const sortedIndices = [...toolAcc.keys()].sort((a, b) => a - b);
-    for (const idx of sortedIndices) {
-      const acc = toolAcc.get(idx)!;
-      let argsStr = acc.argsSoFar;
-      let args: Record<string, unknown>;
-      let parsedOk = false;
-      try {
-        args = argsStr ? JSON.parse(argsStr) : {};
-        parsedOk = true;
-      } catch {
-        if (
-          this._toolArgsMode === "auto"
-          && acc.lastChunk
-          && acc.lastChunk !== argsStr
-        ) {
-          try {
-            args = JSON.parse(acc.lastChunk);
-            argsStr = acc.lastChunk;
-            parsedOk = true;
-          } catch {
-            args = {};
-          }
-        } else {
-          args = {};
-        }
-        if (!parsedOk) {
-          args = {
-            _parseError: `Failed to parse streamed tool arguments as JSON (tool='${acc.name}', length=${argsStr?.length ?? 0}). The model should retry the tool call with valid JSON arguments.`,
-          };
-          if (argsStr) {
-            console.warn(
-              `OpenAIChatProvider: failed to parse streamed tool arguments ` +
-                `(tool='${acc.name}', index=${idx}, length=${argsStr.length}, mode=${this._toolArgsMode})`,
-            );
-          }
-        }
-      }
-      toolCalls.push({ id: acc.id, name: acc.name, arguments: args });
-    }
 
     const reasoningText = reasoningParts.join("");
 
     return new ProviderResponse({
       text: textParts.join(""),
-      toolCalls,
+      toolCalls: [],
       usage,
       raw: null,
       reasoningContent: reasoningText,

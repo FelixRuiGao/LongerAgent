@@ -18,6 +18,7 @@ import {
   type BeforeToolExecuteCallback,
   type OnToolCallCallback,
   type OnToolResultCallback,
+  type ResolveToolCallVisibilityCallback,
   type ToolExecutor,
   type ToolLoopResult,
 } from "./tool-loop.js";
@@ -227,9 +228,16 @@ export class Agent {
     onRetryAttempt?: (attempt: number, maxRetries: number, delaySec: number, errMsg: string) => void,
     onRetrySuccess?: (attempt: number) => void,
     onRetryExhausted?: (maxRetries: number, errMsg: string) => void,
-    onToolCallStart?: (callId: string, name: string) => void,
-    onToolCallArgDelta?: (callId: string, argDelta: string) => void,
-    updateEntry?: (entryId: string, patch: { content?: unknown; display?: string; meta?: Record<string, unknown> }) => void,
+    onToolCallPartial?: (callId: string, name: string, rawArguments: string) => void,
+    resolveToolCallVisibility?: ResolveToolCallVisibilityCallback,
+    updateEntry?: (entryId: string, patch: {
+      apiRole?: LogEntry["apiRole"];
+      content?: unknown;
+      display?: string;
+      tuiVisible?: boolean;
+      displayKind?: LogEntry["displayKind"];
+      meta?: Record<string, unknown>;
+    }) => void,
     discardEntry?: (entryId: string) => void,
   ): Promise<ToolLoopResult> {
     return asyncRunToolLoop({
@@ -262,8 +270,8 @@ export class Agent {
       onRetryAttempt,
       onRetrySuccess,
       onRetryExhausted,
-      onToolCallStart,
-      onToolCallArgDelta,
+      onToolCallPartial,
+      resolveToolCallVisibility,
       updateEntry,
       discardEntry,
     });

@@ -287,6 +287,7 @@ export class MCPClientManager {
         description: `[MCP:${cfg.name}] ${tool.description || tool.name}`,
         parameters: tool.inputSchema ?? { type: "object", properties: {} },
         summaryTemplate: `{agent} is calling ${tool.name} via MCP:${cfg.name}`,
+        tuiPolicy: { partialReveal: "closed" },
       };
       this._toolDefs.set(nsName, td);
       this._toolServer.set(nsName, cfg.name);

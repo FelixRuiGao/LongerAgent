@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelConfig } from "../src/config.js";
+import type { ToolCall } from "../src/providers/base.js";
 import { OpenAIChatProvider } from "../src/providers/openai-chat.js";
 
 function modelConfig(overrides?: Partial<ModelConfig>): ModelConfig {
@@ -64,7 +65,7 @@ function buildToolCallChunks(argChunks: string[]): Array<Record<string, unknown>
 async function runStreamToolCall(
   argChunks: string[],
   mode?: "legacy" | "auto",
-): Promise<Record<string, unknown>> {
+): Promise<ToolCall | null> {
   const prev = process.env["VIGIL_TOOL_ARGS_MODE"];
   if (mode) {
     process.env["VIGIL_TOOL_ARGS_MODE"] = mode;
@@ -87,13 +88,20 @@ async function runStreamToolCall(
       chat: { completions: { create } },
     };
 
+    let closedCall: ToolCall | null = null;
     const response = await provider.sendMessage(
       [{ role: "user", content: "hello" }],
       undefined,
-      { onTextChunk: () => {} },
+      {
+        onTextChunk: () => {},
+        onToolCallClosed: (call) => {
+          closedCall = call;
+        },
+      },
     );
 
-    return response.toolCalls[0]?.arguments ?? {};
+    expect(response.toolCalls).toEqual([]);
+    return closedCall;
   } finally {
     if (prev === undefined) {
       delete process.env["VIGIL_TOOL_ARGS_MODE"];
@@ -113,53 +121,53 @@ describe("OpenAIChatProvider streamed tool arguments", () => {
   });
 
   it("parses incremental tool argument chunks", async () => {
-    const args = await runStreamToolCall([
+    const call = await runStreamToolCall([
       "{\"path\":\"report.md\",",
       "\"content\":\"hello\"}",
     ]);
 
-    expect(args).toEqual({
+    expect(call?.arguments).toEqual({
       path: "report.md",
       content: "hello",
     });
   });
 
   it("parses cumulative tool argument chunks in auto mode", async () => {
-    const args = await runStreamToolCall([
+    const call = await runStreamToolCall([
       "{\"path\":\"report.md\"",
       "{\"path\":\"report.md\",\"content\":\"hello\"}",
     ]);
 
-    expect(args).toEqual({
+    expect(call?.arguments).toEqual({
       path: "report.md",
       content: "hello",
     });
   });
 
   it("parses mixed incremental + cumulative chunks in auto mode", async () => {
-    const args = await runStreamToolCall([
+    const call = await runStreamToolCall([
       "{\"path\":\"report.md\",",
       "\"content\":\"he\"",
       "{\"path\":\"report.md\",\"content\":\"hello\"}",
     ]);
 
-    expect(args).toEqual({
+    expect(call?.arguments).toEqual({
       path: "report.md",
       content: "hello",
     });
   });
 
   it("returns _parseError for invalid JSON instead of silent empty object", async () => {
-    const args = await runStreamToolCall([
+    const call = await runStreamToolCall([
       "{\"path\":\"report.md\"",
     ]);
 
-    expect(args["_parseError"]).toBeDefined();
-    expect(args["_parseError"]).toContain("Failed to parse");
+    expect(call?.parseError).toContain("Failed to parse");
+    expect(call?.arguments).toEqual({});
   });
 
   it("returns _parseError in legacy mode when cumulative chunks are unparsable", async () => {
-    const args = await runStreamToolCall(
+    const call = await runStreamToolCall(
       [
         "{\"path\":\"report.md\"",
         "{\"path\":\"report.md\",\"content\":\"hello\"}",
@@ -167,12 +175,12 @@ describe("OpenAIChatProvider streamed tool arguments", () => {
       "legacy",
     );
 
-    expect(args["_parseError"]).toBeDefined();
-    expect(args["_parseError"]).toContain("Failed to parse");
+    expect(call?.parseError).toContain("Failed to parse");
+    expect(call?.arguments).toEqual({});
   });
 
   it("supports explicit auto mode for cumulative chunks", async () => {
-    const args = await runStreamToolCall(
+    const call = await runStreamToolCall(
       [
         "{\"path\":\"report.md\"",
         "{\"path\":\"report.md\",\"content\":\"hello\"}",
@@ -180,7 +188,7 @@ describe("OpenAIChatProvider streamed tool arguments", () => {
       "auto",
     );
 
-    expect(args).toEqual({
+    expect(call?.arguments).toEqual({
       path: "report.md",
       content: "hello",
     });
@@ -236,13 +244,13 @@ describe("OpenAIChatProvider streamed tool arguments", () => {
       [{ role: "user", content: "hello" }],
       undefined,
       {
-        onToolCallStart: (id) => events.push(`start:${id}`),
-        onToolCallClosed: (id) => events.push(`close:${id}`),
+        onToolCallPartial: (id, name) => events.push(`partial:${id}:${name}`),
+        onToolCallClosed: (call) => events.push(`close:${call.id}`),
       },
     );
 
     expect(events).toContain("close:call_1");
-    expect(events.indexOf("close:call_1")).toBeLessThan(events.indexOf("start:call_2"));
+    expect(events.indexOf("close:call_1")).toBeLessThan(events.indexOf("partial:call_2:write_file"));
   });
 
   it("closes a streamed tool call before switching back to text output", async () => {
@@ -288,8 +296,8 @@ describe("OpenAIChatProvider streamed tool arguments", () => {
       [{ role: "user", content: "hello" }],
       undefined,
       {
-        onToolCallStart: (id) => events.push(`start:${id}`),
-        onToolCallClosed: (id) => events.push(`close:${id}`),
+        onToolCallPartial: (id, name) => events.push(`partial:${id}:${name}`),
+        onToolCallClosed: (call) => events.push(`close:${call.id}`),
         onTextChunk: (chunk) => events.push(`text:${chunk}`),
       },
     );

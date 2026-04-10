@@ -15,6 +15,7 @@ export type LogEntryType =
   | "turn_start"
   | "turn_end"
   | "user_message"
+  | "agent_result"
   | "assistant_text"
   | "reasoning"
   | "tool_call"
@@ -35,6 +36,7 @@ export type LogEntryType =
 
 export type TuiDisplayKind =
   | "user"
+  | "agent_result"
   | "assistant"
   | "reasoning"
   | "progress"
@@ -108,6 +110,14 @@ export interface LogEntry {
   meta: Record<string, unknown>;
 }
 
+export interface ToolCallLogContent {
+  id: string;
+  name: string;
+  rawArguments?: string;
+  arguments: Record<string, unknown>;
+  parseError?: string | null;
+}
+
 // ------------------------------------------------------------------
 // ID Allocator
 // ------------------------------------------------------------------
@@ -118,6 +128,7 @@ const TYPE_PREFIX_MAP: Record<LogEntryType, string> = {
   turn_start: "ts",
   turn_end: "te",
   user_message: "user",
+  agent_result: "ar",
   assistant_text: "asst",
   reasoning: "rsn",
   tool_call: "tc",
@@ -260,6 +271,41 @@ export function createUserMessage(
   });
 }
 
+export function createAgentResult(
+  id: string,
+  turnIndex: number,
+  agentId: string,
+  agentNumericId: number,
+  agentTemplate: string,
+  outcome: "completed" | "failed" | "interrupted",
+  cause: "natural" | "parent_kill" | "user_targeted_kill" | "user_mass_interrupt",
+  elapsedMs: number,
+  content: string,
+  preview: string,
+  contextId: string,
+  fullOutputPath?: string,
+): LogEntry {
+  const meta: Record<string, unknown> = {
+    contextId,
+    agentId,
+    agentNumericId,
+    agentTemplate,
+    outcome,
+    cause,
+    elapsedMs,
+    preview,
+  };
+  if (fullOutputPath) meta.fullOutputPath = fullOutputPath;
+  return baseEntry(id, "agent_result", turnIndex, {
+    tuiVisible: true,
+    displayKind: "agent_result",
+    display: "",
+    apiRole: "user",
+    content,
+    meta,
+  });
+}
+
 export function createAssistantText(
   id: string,
   turnIndex: number,
@@ -307,8 +353,9 @@ export function createToolCall(
   turnIndex: number,
   roundIndex: number,
   display: string,
-  toolCallContent: { id: string; name: string; arguments: Record<string, unknown> },
+  toolCallContent: ToolCallLogContent,
   opts: { toolCallId: string; toolName: string; agentName: string; contextId?: string },
+  apiRole: LogEntry["apiRole"] = "assistant",
 ): LogEntry {
   const meta: Record<string, unknown> = {
     toolCallId: opts.toolCallId,
@@ -321,8 +368,12 @@ export function createToolCall(
     tuiVisible: true,
     displayKind: "tool_call",
     display,
-    apiRole: "assistant",
-    content: toolCallContent,
+    apiRole,
+    content: {
+      ...toolCallContent,
+      rawArguments: toolCallContent.rawArguments ?? JSON.stringify(toolCallContent.arguments ?? {}),
+      parseError: toolCallContent.parseError ?? null,
+    },
     meta,
   });
 }

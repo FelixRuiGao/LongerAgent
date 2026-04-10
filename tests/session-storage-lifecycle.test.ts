@@ -264,6 +264,62 @@ describe("session storage lifecycle", () => {
     }
   });
 
+  it("does not carry archived child session metadata into a /new session", async () => {
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store) as any;
+
+      session._saveChildSession = vi.fn();
+      session._childSessions.set("reviewer-crm-dashboard", {
+        id: "reviewer-crm-dashboard",
+        numericId: 1,
+        template: "reviewer",
+        mode: "oneshot",
+        teamId: null,
+        lifecycle: "idle",
+        status: "idle",
+        phase: "idle",
+        session: { _inbox: [] },
+        sessionDir: join(projectRoot, "old-child-session"),
+        artifactsDir: join(projectRoot, "old-child-session", "artifacts"),
+        resultText: "",
+        elapsed: 0,
+        startTime: 0,
+        turnPromise: null,
+        abortController: null,
+        recentEvents: [],
+        lifetimeToolCallCount: 0,
+        lastToolCallSummary: "",
+        lastTotalTokens: 0,
+        lastOutcome: "none",
+        lastActivityAt: Date.now(),
+        order: 1,
+        suspended: false,
+        settlePromise: null,
+        settleResolve: null,
+      });
+
+      store.clearSession();
+      await session.resetForNewSession(store);
+
+      expect(session._childSessions.size).toBe(0);
+      expect(session._archivedChildren.size).toBe(0);
+      expect(session.getLogForPersistence().meta.childSessions).toEqual([]);
+
+      const newSessionDir = store.createSession();
+      const persisted = session.getLogForPersistence();
+      saveLog(newSessionDir, persisted.meta, [...persisted.entries]);
+
+      const restored = loadLog(newSessionDir);
+      expect(restored.meta.childSessions ?? []).toEqual([]);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("restores cache-read token counters from log", () => {
     const baseDir = makeTempDir("vigil-lifecycle-base-");
     const projectRoot = makeTempDir("vigil-lifecycle-project-");
@@ -648,7 +704,7 @@ describe("session storage lifecycle", () => {
     }
   });
 
-  it("requestTurnInterrupt captures snapshot, kills active workers, and drops unconsumed state", () => {
+  it("requestTurnInterrupt cascades to running children and drops pending state", () => {
     const baseDir = makeTempDir("vigil-lifecycle-base-");
     const projectRoot = makeTempDir("vigil-lifecycle-project-");
     try {
@@ -660,11 +716,9 @@ describe("session storage lifecycle", () => {
       let woke = false;
 
       (session as any)._inbox = [
-        { from: "sub-agent", to: "main", content: "queued result", timestamp: Date.now() },
+        { type: "system_notice", sender: "system", content: "queued result", timestamp: Date.now() },
       ];
-      (session as any)._waitResolver = () => {
-        woke = true;
-      };
+      (session as any)._waitHandle = { resolve: () => { woke = true; } };
       (session as any)._childSessions.set("working-agent", {
         id: "working-agent",
         numericId: 1,
@@ -680,8 +734,6 @@ describe("session storage lifecycle", () => {
         resultText: "",
         elapsed: 0,
         startTime: performance.now(),
-        deliveredResultRevision: 0,
-        outputRevision: 0,
         turnPromise: new Promise(() => {}),
         abortController: workingAbort,
         recentEvents: [],
@@ -710,8 +762,6 @@ describe("session storage lifecycle", () => {
         resultText: "ready but undelivered",
         elapsed: 1,
         startTime: performance.now(),
-        deliveredResultRevision: 0,
-        outputRevision: 1,
         turnPromise: Promise.resolve(""),
         abortController: finishedAbort,
         recentEvents: [],
@@ -752,17 +802,11 @@ describe("session storage lifecycle", () => {
       expect((session as any)._activeShells.size).toBe(0);
       expect((session as any)._inbox).toEqual([]);
       expect(woke).toBe(true);
-      expect((session as any)._waitResolver).toBeNull();
+      expect((session as any)._waitHandle).toBeNull();
       expect((session as any)._activeAsk).toBeNull();
       expect((session as any)._pendingTurnState).toBeNull();
-      expect((session as any)._interruptSnapshot).toMatchObject({
-        turnIndex: 0,
-        hadActiveAgents: true,
-        hadActiveShells: true,
-        hadUnconsumed: true,
-      });
-      expect(String((session as any)._interruptSnapshot.deliveryContent)).toContain("# Sub-Session Brief");
-      expect(String((session as any)._interruptSnapshot.deliveryContent)).toContain("# Shell");
+      expect((session as any)._interruptSnapshot).toBeUndefined();
+      expect((session as any)._childSessions.get("working-agent")?.terminationCause).toBe("user_mass_interrupt");
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
@@ -778,13 +822,12 @@ describe("session storage lifecycle", () => {
 
       (session as any)._compactInProgress = true;
       (session as any)._inbox = [
-        { from: "system", to: "main", content: "queued", timestamp: Date.now() },
+        { type: "system_notice" as const, sender: "system", content: "queued", timestamp: Date.now() },
       ];
 
       const decision = session.requestTurnInterrupt();
       expect(decision).toEqual({ accepted: false, reason: "compact_in_progress" });
       expect((session as any)._inbox.length).toBe(1);
-      expect((session as any)._interruptSnapshot).toBeNull();
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
@@ -798,13 +841,6 @@ describe("session storage lifecycle", () => {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
       (session as any)._turnCount = 1;
-      (session as any)._interruptSnapshot = {
-        turnIndex: 1,
-        hadActiveAgents: true,
-        hadActiveShells: false,
-        hadUnconsumed: true,
-        deliveryContent: "# Snapshot\nqueued",
-      };
       (session as any)._log = [
         createSystemPrompt("sys-001", "prompt"),
         createToolCall(
@@ -844,16 +880,25 @@ describe("session storage lifecycle", () => {
 
       const interruptionUser = log[log.length - 1];
       expect(interruptionUser.type).toBe("user_message");
-      expect(String(interruptionUser.display)).toContain("Last turn was interrupted by the user.");
-      expect(String(interruptionUser.display)).toContain("Active sub-sessions were interrupted.");
-      expect(String(interruptionUser.display)).toContain("[Snapshot]");
+      expect(String(interruptionUser.display)).toBe("Last turn was interrupted by the user.");
       expect(interruptionUser.tuiVisible).toBe(false);
       expect(interruptionUser.displayKind).toBeNull();
 
       const tuiEntries = projectToTuiEntries(log);
       expect(tuiEntries.some((entry) => entry.text.includes("Last turn was interrupted by the user."))).toBe(false);
       expect(tuiEntries).toEqual([
-        { kind: "tool_call", text: "edit_file src/a.ts", id: "tc-001", startedAt: expect.any(Number), elapsedMs: expect.any(Number), meta: { toolName: "edit_file", toolArgs: { path: "src/a.ts" } } },
+        {
+          kind: "tool_call",
+          text: "edit_file src/a.ts",
+          id: "tc-001",
+          startedAt: expect.any(Number),
+          elapsedMs: expect.any(Number),
+          meta: {
+            toolName: "edit_file",
+            toolArgs: { path: "src/a.ts" },
+            rawArguments: "{\"path\":\"src/a.ts\"}",
+          },
+        },
         { kind: "assistant", text: "partial", id: "as-001" },
         { kind: "tool_result", text: "[Interrupted] Tool was not executed.", fullText: "[Interrupted] Tool was not executed.", id: expect.any(String), dim: true, meta: { toolName: "edit_file", isError: false } },
       ]);
@@ -861,9 +906,8 @@ describe("session storage lifecycle", () => {
       const apiMessages = projectToApiMessages(log);
       expect(apiMessages.at(-1)).toMatchObject({
         role: "user",
-        content: expect.stringContaining("Last turn was interrupted by the user."),
+        content: "Last turn was interrupted by the user.",
       });
-      expect((session as any)._interruptSnapshot).toBeNull();
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
@@ -880,20 +924,56 @@ describe("session storage lifecycle", () => {
       await session.turn("bootstrap");
 
       const longText = Array.from({ length: 2500 }, (_, i) => `line-${i + 1}`).join("\n");
-      const rendered = (session as any)._formatAgentOutput({
-        name: "investigator",
-        status: "finished",
-        text: longText,
-        elapsed: 1.2,
-      }) as string;
+      const rendered = (session as any)._buildAgentResultApiContent(
+        {
+          id: "investigator",
+          resultText: longText,
+        },
+        "completed",
+        "natural",
+      ) as { content: string; fullOutputPath?: string };
 
-      expect(rendered).toContain("Output truncated at 12,000 chars");
-      const m = rendered.match(/line (\d+)\)/);
+      expect(rendered.content).toContain("Output truncated at 12,000 chars");
+      const m = rendered.content.match(/line (\d+)\)/);
       expect(m).toBeTruthy();
       const line = Number(m?.[1] ?? "0");
       expect(line).toBeGreaterThan(1);
-      expect(rendered).toContain(`read_file(start_line=${line})`);
-      expect(rendered).toContain("do not reread the portion already received");
+      expect(rendered.content).toContain(`read_file(start_line=${line})`);
+      expect(rendered.content).toContain("do not reread the portion already received");
+      expect(rendered.fullOutputPath).toBe("artifacts/agent-outputs/investigator.md");
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mark safe interrupted tools as having partial effects", () => {
+    const baseDir = makeTempDir("vigil-lifecycle-base-");
+    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store);
+      (session as any)._turnCount = 1;
+      (session as any)._log = [
+        createSystemPrompt("sys-001", "prompt"),
+        createToolCall(
+          "tc-001",
+          1,
+          0,
+          "wait 60s",
+          { id: "wait-1", name: "wait", arguments: { seconds: 60 } },
+          { toolCallId: "wait-1", toolName: "wait", agentName: "Primary", contextId: "ctx-w" },
+        ),
+      ];
+      ((session as any)._log[1].meta as Record<string, unknown>).toolExecState = "running";
+
+      (session as any)._completeMissingToolResultsFromLog(1, "[Interrupted] Tool was not executed.");
+
+      const toolResult = ((session as any)._log as any[]).find((entry) => entry.type === "tool_result");
+      expect(toolResult).toBeTruthy();
+      expect(toolResult.display).toBe("[Interrupted] Tool execution was interrupted.");
+      const hints = (session as any)._collectInterruptHints();
+      expect(hints).not.toContain("Some tools may have had partial effects.");
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });

@@ -10,7 +10,7 @@ import { Session } from "../src/session.js";
 import { LogIdAllocator, createToolCall } from "../src/log-entry.js";
 import { SessionStore, saveLog, createLogSessionMeta } from "../src/persistence.js";
 import { asyncRunToolLoop } from "../src/agents/tool-loop.js";
-import { BaseProvider, ProviderResponse, Usage } from "../src/providers/base.js";
+import { BaseProvider, ProviderResponse, Usage, type ToolCall } from "../src/providers/base.js";
 
 function makeTempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -230,9 +230,21 @@ describe("P3 pending turn helpers", () => {
 describe("P3 tool-loop ask propagation", () => {
   it("propagates AskPendingError from beforeToolExecute instead of converting it to tool error", async () => {
     class FakeProvider extends BaseProvider {
-      async sendMessage(): Promise<ProviderResponse> {
+      async sendMessage(
+        _messages: any[],
+        _tools?: any[],
+        options?: {
+          onToolCallClosed?: (call: ToolCall) => void;
+        },
+      ): Promise<ProviderResponse> {
+        options?.onToolCallClosed?.({
+          id: "t1",
+          name: "bash",
+          rawArguments: "{\"command\":\"echo hi\",\"timeout\":30}",
+          arguments: { command: "echo hi", timeout: 30 },
+          parseError: null,
+        });
         return new ProviderResponse({
-          toolCalls: [{ id: "t1", name: "bash", arguments: { command: "echo hi" } }],
           usage: new Usage(1, 1),
         });
       }
@@ -251,6 +263,82 @@ describe("P3 tool-loop ask propagation", () => {
         throw new AskPendingError("ask-1");
       },
     })).rejects.toBeInstanceOf(AskPendingError);
+  });
+
+  it("returns suspendedAsk when beforeToolExecute throws AskPendingError with ask payload", async () => {
+    class FakeProvider extends BaseProvider {
+      async sendMessage(
+        _messages: any[],
+        _tools?: any[],
+        options?: {
+          onToolCallClosed?: (call: ToolCall) => void;
+        },
+      ): Promise<ProviderResponse> {
+        options?.onToolCallClosed?.({
+          id: "t1",
+          name: "ask",
+          rawArguments: "{\"questions\":[{\"question\":\"Proceed?\",\"options\":[{\"label\":\"Yes\"}]}]}",
+          arguments: {
+            questions: [
+              {
+                question: "Proceed?",
+                options: [{ label: "Yes" }],
+              },
+            ],
+          },
+          parseError: null,
+        });
+        return new ProviderResponse({
+          usage: new Usage(1, 1),
+        });
+      }
+    }
+
+    const runtime = createEphemeralLogState([]);
+    const ask = {
+      id: "ask-1",
+      kind: "agent_question" as const,
+      createdAt: new Date().toISOString(),
+      source: { agentId: "Primary", toolName: "ask" },
+      summary: "Agent asking: Proceed?",
+      payload: {
+        questions: [
+          {
+            question: "Proceed?",
+            options: [{ label: "Yes" }],
+          },
+        ],
+        toolCallId: "",
+      },
+      options: [],
+    };
+
+    const result = await asyncRunToolLoop({
+      provider: new FakeProvider(),
+      getMessages: runtime.getMessages,
+      appendEntry: runtime.appendEntry,
+      allocId: runtime.allocId,
+      turnIndex: 0,
+      toolExecutors: { ask: () => "OK" },
+      maxRounds: 1,
+      beforeToolExecute: () => {
+        throw new AskPendingError(ask);
+      },
+    });
+
+    expect(result.suspendedAsk).toEqual({
+      ask: {
+        ...ask,
+        payload: {
+          ...ask.payload,
+          toolCallId: "t1",
+        },
+        roundIndex: 0,
+      },
+      toolCallId: "t1",
+      roundIndex: 0,
+    });
+    expect(result.text).toBe("");
   });
 
   it("stops retry flow immediately when aborted before a retryable error is handled", async () => {

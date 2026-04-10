@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 
 import type { ToolDef } from "../providers/base.js";
 import { ToolResult } from "../providers/base.js";
+import type { ToolExecutor, ToolExecutorContext } from "./executor-types.js";
 import {
   safePath,
   SafePathError,
@@ -47,7 +48,6 @@ import {
 // ------------------------------------------------------------------
 
 const BASH_MAX_TIMEOUT = 600; // 10 minutes hard cap (seconds)
-const BASH_DEFAULT_TIMEOUT = 60;
 const BASH_MAX_OUTPUT_CHARS = 200_000; // ~200 KB text cap per stream
 const BASH_TIMEOUT_KILL_SIGNAL: NodeJS.Signals = "SIGKILL";
 const BASH_ENV_ALLOWLIST = new Set([
@@ -138,6 +138,7 @@ const READ: ToolDef = {
     required: ["path"],
   },
   summaryTemplate: "{agent} is reading {path}",
+  tuiPolicy: { partialReveal: { completeArgs: ["path"] } },
 };
 
 const LIST: ToolDef = {
@@ -155,6 +156,7 @@ const LIST: ToolDef = {
     required: [],
   },
   summaryTemplate: "{agent} is listing {path}",
+  tuiPolicy: { partialReveal: { completeArgs: ["path"] } },
 };
 
 
@@ -203,6 +205,7 @@ const EDIT: ToolDef = {
     required: ["path"],
   },
   summaryTemplate: "{agent} is editing {path}",
+  tuiPolicy: { partialReveal: { completeArgs: ["path"] } },
 };
 
 const WRITE: ToolDef = {
@@ -229,19 +232,41 @@ const WRITE: ToolDef = {
     required: ["path", "content"],
   },
   summaryTemplate: "{agent} is writing to {path}",
+  tuiPolicy: { partialReveal: { completeArgs: ["path"] } },
 };
 
 const BASH: ToolDef = {
   name: "bash",
-  description: "Execute a shell command and return stdout, stderr, and exit code.",
+  description:
+    "Execute a synchronous shell command and return stdout, stderr, and exit code. " +
+    "On timeout the entire process tree is killed with SIGKILL and the tool returns " +
+    "a timeout error that includes partial output captured so far.\n\n" +
+    "WHEN NOT TO USE bash — prefer bash_background for:\n" +
+    "  (1) Large / long-running jobs you don't want to block the turn on.\n" +
+    "  (2) Persistent tasks that never exit on their own: dev servers, file watchers, " +
+    "daemons, `npm run dev`, `vite`, `next dev`, `cargo watch`, `tail -f`, etc. " +
+    "Under bash these will always hit the timeout and be killed — always use bash_background instead.\n\n" +
+    "TIMEOUT is REQUIRED. Choose it based on the command's actual expected duration, " +
+    "not a padded \"just in case\" value.\n\n" +
+    "For commands with side effects (file writes, installs, migrations, git commits, " +
+    "database operations, build artifacts, etc.), be MORE conservative and pick a TIGHT " +
+    "timeout matching real expected duration. A mutating command killed mid-execution " +
+    "can leave partial state (half-written files, aborted transactions, torn installs). " +
+    "A larger timeout does NOT reduce that risk — it just delays the problem. A tight " +
+    "timeout gives you predictable failure points and limits the uncertainty window.\n\n" +
+    "A timeout is NOT automatically a failure: for commands that perform observable side " +
+    "effects, the effects up to the kill point may have completed successfully. Always " +
+    "inspect the partial output and resulting filesystem / state before deciding to retry.",
   parameters: {
     type: "object",
     properties: {
       command: { type: "string", description: "Shell command to execute" },
       timeout: {
         type: "integer",
-        description: `Timeout in seconds (default: ${BASH_DEFAULT_TIMEOUT}, max: ${BASH_MAX_TIMEOUT})`,
-        default: BASH_DEFAULT_TIMEOUT,
+        description:
+          `Required. Timeout in seconds (1-${BASH_MAX_TIMEOUT}). Match actual expected ` +
+          "duration; do not over-pad. On timeout the entire process tree is SIGKILLed " +
+          "and any in-flight side effects become partial.",
       },
       cwd: {
         type: "string",
@@ -249,9 +274,10 @@ const BASH: ToolDef = {
           "Working directory for the command (default: current directory)",
       },
     },
-    required: ["command"],
+    required: ["command", "timeout"],
   },
   summaryTemplate: "{agent} is running a shell command",
+  tuiPolicy: { partialReveal: { completeArgs: ["command"] } },
 };
 
 const TIME: ToolDef = {
@@ -264,6 +290,7 @@ const TIME: ToolDef = {
     required: [],
   },
   summaryTemplate: "{agent} is checking current time",
+  tuiPolicy: { partialReveal: "immediate" },
 };
 
 // ------------------------------------------------------------------
@@ -295,6 +322,7 @@ const GLOB: ToolDef = {
     required: ["pattern"],
   },
   summaryTemplate: "{agent} is finding files matching '{pattern}'",
+  tuiPolicy: { partialReveal: { completeArgs: ["pattern"] } },
 };
 
 // ------------------------------------------------------------------
@@ -361,6 +389,7 @@ const GREP: ToolDef = {
     required: ["pattern"],
   },
   summaryTemplate: "{agent} is searching for '{pattern}'",
+  tuiPolicy: { partialReveal: { completeArgs: ["pattern"] } },
 };
 
 // ------------------------------------------------------------------
@@ -385,6 +414,7 @@ export const BASH_BACKGROUND_TOOL: ToolDef = {
     required: ["command"],
   },
   summaryTemplate: "{agent} is starting a background shell",
+  tuiPolicy: { partialReveal: { completeArgs: ["command"] } },
 };
 
 export const BASH_OUTPUT_TOOL: ToolDef = {
@@ -409,6 +439,7 @@ export const BASH_OUTPUT_TOOL: ToolDef = {
     required: ["id"],
   },
   summaryTemplate: "{agent} is reading background shell output",
+  tuiPolicy: { partialReveal: { completeArgs: ["id"] } },
 };
 
 export const KILL_SHELL_TOOL: ToolDef = {
@@ -432,6 +463,7 @@ export const KILL_SHELL_TOOL: ToolDef = {
     required: ["ids"],
   },
   summaryTemplate: "{agent} is terminating background shells",
+  tuiPolicy: { partialReveal: "closed" },
 };
 
 // ------------------------------------------------------------------
@@ -1097,14 +1129,12 @@ export function buildBashEnv(): NodeJS.ProcessEnv {
 
 async function toolBash(
   command: string,
-  timeout = BASH_DEFAULT_TIMEOUT,
+  timeout: number,
   cwd = "",
+  opts: { signal?: AbortSignal } = {},
 ): Promise<string> {
-  // Enforce timeout bounds
-  if (typeof timeout !== "number" || timeout < 1) {
-    timeout = BASH_DEFAULT_TIMEOUT;
-  }
-  timeout = Math.min(timeout, BASH_MAX_TIMEOUT);
+  // Clamp timeout defensively (the dispatcher already validated presence/integer).
+  timeout = Math.min(Math.max(1, timeout), BASH_MAX_TIMEOUT);
 
   // Resolve working directory
   let runCwd: string | undefined;
@@ -1116,10 +1146,15 @@ async function toolBash(
   }
 
   return new Promise<string>((resolve) => {
+    // `detached: true` makes the child a process-group leader (pgid == pid),
+    // so we can kill its entire descendant tree with `process.kill(-pid, ...)`.
+    // Without this, grandchildren (e.g. `vite` under `npm run dev`) inherit
+    // stdio pipes from the dead shell, and the `close` event never fires.
     const child = spawn("sh", ["-c", command], {
       cwd: runCwd,
       env: buildBashEnv(),
       stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
     });
 
     const stdoutChunks: Buffer[] = [];
@@ -1127,7 +1162,63 @@ async function toolBash(
     let stdoutLen = 0;
     let stderrLen = 0;
     const maxBuffer = 10 * 1024 * 1024; // 10 MB
-    let killed = false;
+
+    let resolved = false;
+    let cause: "close" | "timeout" | "abort" | "error" = "close";
+
+    const killGroup = () => {
+      const pid = child.pid;
+      if (pid == null) return;
+      try {
+        process.kill(-pid, BASH_TIMEOUT_KILL_SIGNAL);
+      } catch {
+        // Fall back to killing just the leader if group kill is unavailable
+        // (e.g. process already died, platform edge case, permission issue).
+        try { child.kill(BASH_TIMEOUT_KILL_SIGNAL); } catch {}
+      }
+    };
+
+    const collectPartial = (): string => {
+      const out = Buffer.concat(stdoutChunks).toString("utf-8");
+      const err = Buffer.concat(stderrChunks).toString("utf-8");
+      const half = Math.floor(BASH_MAX_OUTPUT_CHARS / 2);
+      const parts: string[] = [];
+      if (out) parts.push(`PARTIAL STDOUT:\n${truncateOutput(out, half)}`);
+      if (err) parts.push(`PARTIAL STDERR:\n${truncateOutput(err, half)}`);
+      return parts.join("\n");
+    };
+
+    const finish = (text: string) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+      // Release Node's references to the pipe file descriptors so the
+      // parent process doesn't hold them open waiting for a late `close`.
+      try { child.stdout?.destroy(); } catch {}
+      try { child.stderr?.destroy(); } catch {}
+      try { child.stdin?.destroy(); } catch {}
+      resolve(text);
+    };
+
+    const finishEarly = () => {
+      const partial = collectPartial();
+      const header =
+        cause === "timeout"
+          ? `ERROR: Command timed out after ${timeout}s and was killed (SIGKILL on process group). ` +
+            `NOTE: a timeout is NOT automatically a failure — for mutating commands, side effects up to ` +
+            `the kill point may have completed. Inspect the partial output and resulting filesystem / state ` +
+            `before deciding to retry. For persistent or long-running tasks (dev servers, watchers, daemons), ` +
+            `use bash_background instead.`
+          : `ERROR: Command was interrupted and killed (SIGKILL on process group) before completing.`;
+      finish(partial ? `${header}\n\n${partial}` : header);
+    };
+
+    const onAbort = () => {
+      cause = "abort";
+      killGroup();
+      finishEarly();
+    };
 
     child.stdout?.on("data", (chunk: Buffer) => {
       if (stdoutLen < maxBuffer) {
@@ -1143,19 +1234,24 @@ async function toolBash(
     });
 
     const timer = setTimeout(() => {
-      killed = true;
-      try { child.kill(BASH_TIMEOUT_KILL_SIGNAL as NodeJS.Signals); } catch {}
+      cause = "timeout";
+      killGroup();
+      finishEarly();
     }, timeout * 1000);
 
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      if (killed || signal === "SIGTERM" || signal === BASH_TIMEOUT_KILL_SIGNAL) {
-        resolve(
-          `ERROR: Command timed out after ${timeout}s (max allowed: ${BASH_MAX_TIMEOUT}s). ` +
-          `Shell process was terminated (${BASH_TIMEOUT_KILL_SIGNAL}); child-process tree termination is best-effort.`
-        );
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        cause = "abort";
+        killGroup();
+        finishEarly();
         return;
       }
+      opts.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    child.on("close", (code) => {
+      // If timeout/abort already settled, ignore the delayed close.
+      if (resolved) return;
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
       const stderr = Buffer.concat(stderrChunks).toString("utf-8");
       const parts: string[] = [];
@@ -1166,12 +1262,12 @@ async function toolBash(
         parts.push(`STDERR:\n${truncateOutput(stderr, BASH_MAX_OUTPUT_CHARS)}`);
       }
       parts.push(`EXIT CODE: ${code ?? 1}`);
-      resolve(parts.join("\n"));
+      finish(parts.join("\n"));
     });
 
     child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve(`ERROR: ${err.message}`);
+      cause = "error";
+      finish(`ERROR: ${err.message}`);
     });
   });
 }
@@ -1414,13 +1510,19 @@ function toolTime(): string {
 // Dispatcher
 // ======================================================================
 
-type ToolExecutor = (args: Record<string, unknown>) => Promise<string | ToolResult> | string | ToolResult;
-
+/**
+ * Per-session static context captured by the dispatch closures.
+ *
+ * `signal` is optional here because `executeTool` accepts it in the same
+ * ctx object for caller convenience, but it's a per-call runtime value
+ * that is extracted and passed to each executor as a separate argument.
+ */
 export interface ExecuteToolContext {
   projectRoot?: string;
   externalPathAllowlist?: string[];
   sessionArtifactsDir?: string;
   supportsMultimodal?: boolean;
+  signal?: AbortSignal;
 }
 
 class ToolArgValidationError extends Error {
@@ -1519,6 +1621,21 @@ function optionalIntegerArg(
 ): number | undefined {
   const v = args[key];
   if (v == null) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v) || !Number.isInteger(v)) {
+    throw new ToolArgValidationError(toolName, key, `'${key}' must be an integer.`);
+  }
+  return v;
+}
+
+function requiredIntegerArg(
+  toolName: string,
+  args: Record<string, unknown>,
+  key: string,
+): number {
+  const v = args[key];
+  if (v == null) {
+    throw new ToolArgValidationError(toolName, key, `'${key}' is required.`);
+  }
   if (typeof v !== "number" || !Number.isFinite(v) || !Number.isInteger(v)) {
     throw new ToolArgValidationError(toolName, key, `'${key}' must be an integer.`);
   }
@@ -2076,11 +2193,11 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         return formatToolError("write_file", e);
       }
     },
-    bash: async (args) => {
+    bash: async (args, rtCtx) => {
       try {
         const a = expectArgsObject("bash", args);
         const command = requiredStringArg("bash", a, "command", { nonEmpty: true, maxLen: 20_000 });
-        const timeout = optionalIntegerArg("bash", a, "timeout");
+        const timeout = requiredIntegerArg("bash", a, "timeout");
         const cwdArg = optionalStringArg("bash", a, "cwd", "");
         let cwd = "";
         if (cwdArg.trim()) {
@@ -2091,7 +2208,7 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
             { mustExist: true, expectDirectory: true },
           );
         }
-        return await toolBash(command, timeout ?? BASH_DEFAULT_TIMEOUT, cwd);
+        return await toolBash(command, timeout, cwd, { signal: rtCtx?.signal });
       } catch (e) {
         return formatToolError("bash", e);
       }
@@ -2154,12 +2271,12 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         return formatToolError("grep", e);
       }
     },
-    web_fetch: async (args) => {
+    web_fetch: async (args, rtCtx) => {
       try {
         const a = expectArgsObject("web_fetch", args);
         const url = requiredStringArg("web_fetch", a, "url", { nonEmpty: true });
         const prompt = optionalStringArg("web_fetch", a, "prompt", "");
-        return toolWebFetch(url, prompt || undefined);
+        return toolWebFetch(url, prompt || undefined, { signal: rtCtx?.signal });
       } catch (e) {
         return formatToolError("web_fetch", e);
       }
@@ -2173,6 +2290,10 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
  *
  * Tool functions may return either a plain `string` (wrapped automatically)
  * or a `ToolResult` with optional action hints, tags, and metadata.
+ *
+ * `ctx.signal` (optional) is pulled out and passed to the executor as a
+ * per-call runtime context; the remaining fields are captured by the
+ * dispatch closures as static configuration.
  */
 export async function executeTool(
   name: string,
@@ -2184,7 +2305,7 @@ export async function executeTool(
     return new ToolResult({ content: `ERROR: Unknown tool '${name}'` });
   }
   try {
-    const raw = await fn(args);
+    const raw = await fn(args, { signal: ctx?.signal });
     if (raw instanceof ToolResult) {
       return raw;
     }

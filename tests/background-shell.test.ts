@@ -50,8 +50,11 @@ describe("background shell tools", () => {
       expect(started.content).toContain("Started background shell 'demo'");
 
       const waited = await (session as any)._execWait({ seconds: 15 }) as ToolResult;
-      expect(waited.content).toContain("# Shell");
+      // wait wakes on system_notice (shell exit) and/or shell-state racers; shell lines use
+      // _buildShellReport() which does not prefix "# Shell" (that header is show_context only).
+      expect(waited.content).toMatch(/Waited —/);
       expect(waited.content).toContain("[demo]");
+      expect(waited.content).toContain("exited");
 
       const output = (session as any)._execBashOutput({ id: "demo" }) as ToolResult;
       expect(output.content).toContain("hello");

@@ -210,20 +210,31 @@ describe("validateAndRepairLog", () => {
     expect(entries[3].meta.toolCallId).toBe("call_1");
   });
 
-  it("recovers partial streamed tool_call as not executed", () => {
+  it("ignores display-only partial tool_call drafts during repair", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "do it", "do it", "c1"),
-      createToolCall("tc-001", 1, 0, "write_file hello.py", { id: "call_1", name: "write_file", arguments: { path: "hello.py", content: "print('hel" } }, { toolCallId: "call_1", toolName: "write_file", agentName: "a" }),
+      createToolCall(
+        "tc-001",
+        1,
+        0,
+        "write_file hello.py",
+        {
+          id: "call_1",
+          name: "write_file",
+          rawArguments: "{\"path\":\"hello.py\",\"content\":\"print('hel",
+          arguments: { path: "hello.py", content: "print('hel" },
+          parseError: null,
+        },
+        { toolCallId: "call_1", toolName: "write_file", agentName: "a" },
+        null,
+      ),
     ];
     entries[2].meta.toolStreamState = "partial";
-    entries[2].meta.repairedFromPartial = true;
 
     const result = validateAndRepairLog(entries);
-    expect(result.repaired).toBe(true);
-    expect(entries[3].type).toBe("tool_result");
-    expect(String((entries[3].content as any).content)).toContain("repaired from a partial stream");
-    expect(String((entries[3].content as any).content)).toContain("not executed");
+    expect(result.repaired).toBe(false);
+    expect(entries).toHaveLength(3);
   });
 
   it("recovers running orphaned tool_call as effect unknown", () => {

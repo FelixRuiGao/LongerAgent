@@ -16,6 +16,7 @@ import { truncateDistillContent } from "./summarize-context.js";
 
 const DISPLAY_KIND_TO_ENTRY_KIND: Record<TuiDisplayKind, ConversationEntryKind> = {
   user: "user",
+  agent_result: "agent_result",
   assistant: "assistant",
   reasoning: "reasoning",
   progress: "progress",
@@ -93,6 +94,15 @@ function toConversationEntry(
     };
   }
 
+  if (entry.type === "agent_result") {
+    return {
+      kind: "agent_result",
+      text: "",
+      id: entry.id,
+      meta: { ...(entry.meta as Record<string, unknown>) },
+    };
+  }
+
   const kind = entry.displayKind
     ? DISPLAY_KIND_TO_ENTRY_KIND[entry.displayKind]
     : "status";
@@ -115,9 +125,12 @@ function toConversationEntry(
     if (typeof toolCallId === "string" && toolElapsedMap?.has(toolCallId)) {
       ce.elapsedMs = toolElapsedMap.get(toolCallId);
     }
-    // Expose tool metadata for richer GUI rendering
     const toolName = entry.meta["toolName"];
-    const content = entry.content as { arguments?: Record<string, unknown> } | undefined;
+    const content = entry.content as {
+      arguments?: Record<string, unknown>;
+      parseError?: string | null;
+      rawArguments?: string;
+    } | undefined;
     const toolArgs = content?.arguments;
     if (toolName || toolArgs) {
       ce.meta = {};
@@ -129,10 +142,10 @@ function toConversationEntry(
       if (typeof streamState === "string") ce.meta.toolStreamState = streamState;
       const execState = entry.meta["toolExecState"];
       if (typeof execState === "string") ce.meta.toolExecState = execState;
-      const repaired = entry.meta["repairedFromPartial"];
-      if (typeof repaired === "boolean") ce.meta.repairedFromPartial = repaired;
-      const parseError = entry.meta["toolParseError"];
+      const parseError = content?.parseError;
       if (typeof parseError === "string") ce.meta.toolParseError = parseError;
+      const rawArguments = content?.rawArguments;
+      if (typeof rawArguments === "string") ce.meta.rawArguments = rawArguments;
       const streamLanguage = entry.meta["toolStreamLanguage"];
       if (typeof streamLanguage === "string") ce.meta.toolStreamLanguage = streamLanguage;
       const streamMode = entry.meta["toolStreamMode"];
@@ -594,9 +607,40 @@ export function projectToApiMessages(
     return true;
   });
 
-  // Group assistant-related entries (assistant_text, reasoning, tool_call, no_reply)
-  // by (turnIndex, roundIndex), then emit them as single assistant messages.
-  // Non-assistant entries are emitted directly.
+  // Group entries by (turnIndex, roundIndex) into well-formed rounds:
+  //   1. One assistant message (reasoning + assistant_text + tool_call entries)
+  //   2. All corresponding tool_result messages (ordered by tool_call order)
+  //
+  // In the log, tool_call and tool_result entries may be interleaved within
+  // the same round because tool execution starts immediately during streaming.
+  // This loop collects ALL entries of the same round before emitting them.
+
+  const emitToolResult = (entry: LogEntry): void => {
+    const resultContent = entry.content as {
+      toolCallId: string;
+      toolName: string;
+      content: string;
+      toolSummary: string;
+    };
+    let trContent = resultContent.content;
+    const trCtxId = (entry.meta as Record<string, unknown>)["contextId"];
+    if (trCtxId !== undefined && annotations?.has(String(trCtxId))) {
+      trContent = `${annotations.get(String(trCtxId))!}\n\n${trContent}`;
+      annotations.delete(String(trCtxId));
+    }
+    const toolMeta = (entry.meta as Record<string, unknown>)["toolMetadata"] as Record<string, unknown> | undefined;
+    const contentBlocks = toolMeta?.["_contentBlocks"] as Array<Record<string, unknown>> | undefined;
+
+    const trMsg: InternalMessage = {
+      role: "tool_result",
+      tool_call_id: entry.meta.toolCallId,
+      tool_name: entry.meta.toolName,
+      content: contentBlocks ?? trContent,
+      tool_summary: resultContent.toolSummary,
+    };
+    if (trCtxId !== undefined) trMsg["_context_id"] = trCtxId;
+    messages.push(trMsg);
+  };
 
   let i = 0;
   while (i < windowEntries.length) {
@@ -606,34 +650,55 @@ export function projectToApiMessages(
       (entry.apiRole === "assistant" || entry.type === "reasoning") &&
       entry.roundIndex !== undefined
     ) {
-      // Collect all entries in this round
+      // Collect ALL entries in this round, regardless of role interleaving.
       const roundIdx = entry.roundIndex;
       const turnIdx = entry.turnIndex;
-      const roundEntries: LogEntry[] = [];
+      const assistantEntries: LogEntry[] = [];
+      const toolResultEntries: LogEntry[] = [];
 
-      while (
-        i < windowEntries.length &&
-        windowEntries[i].turnIndex === turnIdx &&
-        windowEntries[i].roundIndex === roundIdx &&
-        (windowEntries[i].apiRole === "assistant" ||
-          windowEntries[i].type === "reasoning")
-      ) {
-        roundEntries.push(windowEntries[i]);
+      while (i < windowEntries.length) {
+        const candidate = windowEntries[i];
+        if (candidate.turnIndex !== turnIdx || candidate.roundIndex !== roundIdx) break;
+        if (candidate.apiRole === "assistant" || candidate.type === "reasoning") {
+          assistantEntries.push(candidate);
+        } else if (candidate.apiRole === "tool_result") {
+          toolResultEntries.push(candidate);
+        }
+        // Skip any other entry types within this round (e.g. token_update
+        // entries are already filtered out, but be defensive)
         i++;
       }
 
-      messages.push(buildAssistantMessage(roundEntries, entries));
+      messages.push(buildAssistantMessage(assistantEntries, entries));
+
+      // Reorder tool_results to match tool_call declaration order.
+      const toolCallOrder = new Map<string, number>();
+      let orderIdx = 0;
+      for (const ae of assistantEntries) {
+        if (ae.type === "tool_call") {
+          const tcId = ae.meta["toolCallId"];
+          if (typeof tcId === "string") toolCallOrder.set(tcId, orderIdx++);
+        }
+      }
+      if (toolCallOrder.size > 0 && toolResultEntries.length > 1) {
+        toolResultEntries.sort((a, b) => {
+          const aOrder = toolCallOrder.get(a.meta["toolCallId"] as string) ?? Infinity;
+          const bOrder = toolCallOrder.get(b.meta["toolCallId"] as string) ?? Infinity;
+          return aOrder - bOrder;
+        });
+      }
+
+      for (const trEntry of toolResultEntries) {
+        emitToolResult(trEntry);
+      }
     } else if (entry.apiRole === "user") {
       let content = resolveImageRefs(entry.content, options?.resolveImageRef);
-      // Preserve _context_id for spatial index (distill_context)
       const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
-      // Inject show_context annotation if active
       if (ctxId !== undefined && annotations?.has(String(ctxId))) {
         content = prependAnnotation(content, annotations.get(String(ctxId))!);
       }
       const userMsg: InternalMessage = { role: "user", content };
       if (ctxId !== undefined) userMsg["_context_id"] = ctxId;
-      // Preserve summary metadata
       if (entry.type === "summary") {
         userMsg["_is_summary"] = true;
         userMsg["_summary_depth"] = (entry.meta as Record<string, unknown>)["summaryDepth"] ?? 1;
@@ -642,37 +707,11 @@ export function projectToApiMessages(
       messages.push(userMsg);
       i++;
     } else if (entry.apiRole === "tool_result") {
-      const resultContent = entry.content as {
-        toolCallId: string;
-        toolName: string;
-        content: string;
-        toolSummary: string;
-      };
-      let trContent = resultContent.content;
-      // Preserve _context_id for spatial index
-      const trCtxId = (entry.meta as Record<string, unknown>)["contextId"];
-      // Inject show_context annotation into first tool_result per context group
-      if (trCtxId !== undefined && annotations?.has(String(trCtxId))) {
-        trContent = `${annotations.get(String(trCtxId))!}\n\n${trContent}`;
-        // Remove from annotations so only the first tool_result per group gets it
-        annotations.delete(String(trCtxId));
-      }
-      // Check for multimodal content blocks in metadata
-      const toolMeta = (entry.meta as Record<string, unknown>)["toolMetadata"] as Record<string, unknown> | undefined;
-      const contentBlocks = toolMeta?.["_contentBlocks"] as Array<Record<string, unknown>> | undefined;
-
-      const trMsg: InternalMessage = {
-        role: "tool_result",
-        tool_call_id: entry.meta.toolCallId,
-        tool_name: entry.meta.toolName,
-        content: contentBlocks ?? trContent,
-        tool_summary: resultContent.toolSummary,
-      };
-      if (trCtxId !== undefined) trMsg["_context_id"] = trCtxId;
-      messages.push(trMsg);
+      // Standalone tool_result not part of a round group (e.g. orphaned
+      // after interrupt). Emit as-is.
+      emitToolResult(entry);
       i++;
     } else {
-      // Fallback
       messages.push({ role: entry.apiRole, content: entry.content });
       i++;
     }
@@ -785,7 +824,18 @@ function buildAssistantMessage(
   // Extract tool_calls
   const toolCalls = roundEntries
     .filter((e) => e.type === "tool_call")
-    .map((e) => e.content);
+    .map((e) => {
+      const tc = e.content as {
+        id?: string;
+        name?: string;
+        arguments?: Record<string, unknown>;
+      } | null;
+      return {
+        id: String(tc?.id ?? ""),
+        name: String(tc?.name ?? ""),
+        arguments: tc?.arguments ?? {},
+      };
+    });
 
   // Extract no_reply
   const noReply = roundEntries.find((e) => e.type === "no_reply");

@@ -38,6 +38,7 @@ export const WEB_SEARCH: ToolDef = {
     required: ["query"],
   },
   summaryTemplate: "{agent} is searching the web for '{query}'",
+  tuiPolicy: { partialReveal: { completeArgs: ["query"] } },
 };
 
 // ------------------------------------------------------------------

@@ -44,6 +44,7 @@ export const WEB_FETCH: ToolDef = {
     required: ["url"],
   },
   summaryTemplate: "{agent} is fetching {url}",
+  tuiPolicy: { partialReveal: { completeArgs: ["url"] } },
 };
 
 // ------------------------------------------------------------------
@@ -126,6 +127,7 @@ function htmlToText(html: string): string {
 export async function toolWebFetch(
   url: string,
   prompt?: string,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<string> {
   let parsed: URL;
   try {
@@ -145,29 +147,78 @@ export async function toolWebFetch(
 
   const normalizedUrl = parsed.toString();
 
+  if (opts.signal?.aborted) {
+    return "ERROR: web_fetch was interrupted.";
+  }
+
   try {
-    const jinaOutput = await fetchViaJina(normalizedUrl, prompt);
+    const jinaOutput = await fetchViaJina(normalizedUrl, prompt, opts.signal);
     if (jinaOutput) return jinaOutput;
   } catch {
     // Fall through to local extraction.
   }
 
-  return fetchLocally(normalizedUrl, prompt);
+  if (opts.signal?.aborted) {
+    return "ERROR: web_fetch was interrupted.";
+  }
+
+  return fetchLocally(normalizedUrl, prompt, opts.signal);
+}
+
+/**
+ * Tristate result for timeout/interrupt disambiguation in callers.
+ */
+interface FetchFailure {
+  kind: "timeout" | "interrupted" | "error";
+  message: string;
+}
+
+function isFetchFailure(e: unknown): e is FetchFailure {
+  return typeof e === "object" && e !== null && "kind" in e && "message" in e;
 }
 
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
+  externalSignal?: AbortSignal,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let externalAborted = false;
+
+  // If the caller already cancelled, short-circuit.
+  if (externalSignal?.aborted) {
+    throw { kind: "interrupted", message: "web_fetch was interrupted before the request started." } satisfies FetchFailure;
+  }
+
+  const timer = setTimeout(() => controller.abort(new Error("fetch-timeout")), FETCH_TIMEOUT_MS);
+  const onExternalAbort = () => {
+    externalAborted = true;
+    controller.abort(new Error("external-abort"));
+  };
+  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+
   try {
     return await fetch(url, {
       ...init,
       signal: controller.signal,
     });
+  } catch (e) {
+    if (externalAborted) {
+      throw {
+        kind: "interrupted",
+        message: "web_fetch was interrupted while fetching.",
+      } satisfies FetchFailure;
+    }
+    if (e instanceof Error && e.name === "AbortError") {
+      throw {
+        kind: "timeout",
+        message: `Request timed out after ${FETCH_TIMEOUT_MS / 1000}s.`,
+      } satisfies FetchFailure;
+    }
+    throw e;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -201,6 +252,7 @@ function normalizeOutput(output: string): string {
 async function fetchViaJina(
   url: string,
   prompt?: string,
+  externalSignal?: AbortSignal,
 ): Promise<string | null> {
   const response = await fetchWithTimeout(JINA_READER_PREFIX + url, {
     headers: {
@@ -208,7 +260,7 @@ async function fetchViaJina(
       Accept: "text/plain, text/markdown;q=0.9, */*;q=0.1",
     },
     redirect: "follow",
-  });
+  }, externalSignal);
 
   if (!response.ok) {
     if (
@@ -240,6 +292,7 @@ async function fetchViaJina(
 async function fetchLocally(
   url: string,
   prompt?: string,
+  externalSignal?: AbortSignal,
 ): Promise<string> {
   let response: Response;
   try {
@@ -249,10 +302,11 @@ async function fetchLocally(
         Accept: "text/html, application/json, text/plain, */*",
       },
       redirect: "follow",
-    });
+    }, externalSignal);
   } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") {
-      return `ERROR: Request timed out after ${FETCH_TIMEOUT_MS / 1000}s.`;
+    if (isFetchFailure(e)) {
+      if (e.kind === "interrupted") return `ERROR: ${e.message}`;
+      if (e.kind === "timeout") return `ERROR: ${e.message}`;
     }
     return `ERROR: Fetch failed: ${e instanceof Error ? e.message : String(e)}`;
   }

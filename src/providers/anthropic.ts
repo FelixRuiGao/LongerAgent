@@ -11,6 +11,7 @@ import type { ModelConfig } from "../config.js";
 import {
   BaseProvider,
   Citation,
+  finalizeToolCall,
   ProviderResponse,
   ToolCall,
   Usage,
@@ -158,7 +159,42 @@ export class AnthropicProvider extends BaseProvider {
       }
     }
 
-    return { system, converted };
+    // Merge consecutive same-role messages.
+    // Anthropic requires strictly alternating user/assistant turns. Multiple
+    // tool_results (each converted to {role:"user"}) and a following user
+    // message must be collapsed into a single user message with combined
+    // content blocks.
+    const merged: Record<string, unknown>[] = [];
+    for (const msg of converted) {
+      const prev = merged.length > 0 ? merged[merged.length - 1] : null;
+      if (prev && prev["role"] === msg["role"] && msg["role"] === "user") {
+        const prevContent = prev["content"];
+        const curContent = msg["content"];
+        // Both are arrays (tool_result blocks, text blocks, etc.) — concat.
+        if (Array.isArray(prevContent) && Array.isArray(curContent)) {
+          prev["content"] = [...prevContent, ...curContent];
+        } else if (Array.isArray(prevContent)) {
+          // cur is string — append as text block
+          prev["content"] = [
+            ...prevContent,
+            { type: "text", text: String(curContent) },
+          ];
+        } else if (Array.isArray(curContent)) {
+          // prev is string — prepend as text block
+          prev["content"] = [
+            { type: "text", text: String(prevContent) },
+            ...curContent,
+          ];
+        } else {
+          // Both strings
+          prev["content"] = `${prevContent}\n\n${curContent}`;
+        }
+      } else {
+        merged.push(msg);
+      }
+    }
+
+    return { system, converted: merged };
   }
 
   // ------------------------------------------------------------------
@@ -265,14 +301,17 @@ export class AnthropicProvider extends BaseProvider {
         });
       } else if (block.type === "tool_use") {
         const input = block.input;
-        toolCalls.push({
-          id: block.id,
-          name: block.name,
-          arguments:
-            typeof input === "object" && input !== null
-              ? (input as Record<string, unknown>)
-              : JSON.parse(input as string),
-        });
+        if (typeof input === "object" && input !== null) {
+          toolCalls.push({
+            id: block.id,
+            name: block.name,
+            rawArguments: JSON.stringify(input),
+            arguments: input as Record<string, unknown>,
+            parseError: null,
+          });
+        } else {
+          toolCalls.push(finalizeToolCall(block.id, block.name, String(input ?? ""), `${block.name} response`));
+        }
       }
       // server_tool_use, web_search_tool_result — handled transparently
     }
@@ -377,8 +416,15 @@ export class AnthropicProvider extends BaseProvider {
     // Prompt caching (always enabled)
     this._applyCacheBreakpoint(kwargs);
 
-    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallStart) {
-      return this._callStream(kwargs, options.onTextChunk, options.onReasoningChunk, options?.signal, options?.onToolCallStart, options?.onToolCallArgDelta, options?.onToolCallClosed);
+    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallPartial) {
+      return this._callStream(
+        kwargs,
+        options.onTextChunk,
+        options.onReasoningChunk,
+        options?.signal,
+        options?.onToolCallPartial,
+        options?.onToolCallClosed,
+      );
     }
 
     const resp = await this._client.messages.create(
@@ -397,19 +443,18 @@ export class AnthropicProvider extends BaseProvider {
     onTextChunk?: (chunk: string) => void,
     onReasoningChunk?: (chunk: string) => void,
     signal?: AbortSignal,
-    onToolCallStart?: (callId: string, name: string) => void,
-    onToolCallArgDelta?: (callId: string, argDelta: string) => void,
-    onToolCallClosed?: (callId: string, argsBuffer: string) => void,
+    onToolCallPartial?: (callId: string, name: string, rawArguments: string) => void,
+    onToolCallClosed?: (call: ToolCall) => void,
   ): Promise<ProviderResponse> {
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
     const reasoningBlocks: Record<string, unknown>[] = [];
-    const toolCalls: ToolCall[] = [];
     const citations: Citation[] = [];
 
     let currentThinking: Record<string, string> | null = null;
     // Map block index → block id for routing input_json_delta events
     const indexToBlockId = new Map<number, string>();
+    const blockNameById = new Map<string, string>();
     const toolJsonById = new Map<string, string>();
 
     const stream = this._client.messages.stream(
@@ -438,11 +483,12 @@ export class AnthropicProvider extends BaseProvider {
           if (index !== undefined && blockId) {
             indexToBlockId.set(index, blockId);
           }
-          if (blockId && blockName && onToolCallStart) {
-            onToolCallStart(blockId, blockName);
-          }
           if (blockId && !toolJsonById.has(blockId)) {
             toolJsonById.set(blockId, "");
+          }
+          if (blockId && blockName) {
+            blockNameById.set(blockId, blockName);
+            onToolCallPartial?.(blockId, blockName, toolJsonById.get(blockId) ?? "");
           }
         }
       } else if (eventType === "content_block_delta") {
@@ -470,12 +516,15 @@ export class AnthropicProvider extends BaseProvider {
           if (sig && currentThinking) currentThinking["signature"] += sig;
         } else if (deltaType === "input_json_delta") {
           const partial = (delta["partial_json"] as string) || "";
-          if (partial && onToolCallArgDelta && index !== undefined) {
+          if (partial && onToolCallPartial && index !== undefined) {
             const blockId = indexToBlockId.get(index);
             if (blockId) {
               const merged = (toolJsonById.get(blockId) ?? "") + partial;
               toolJsonById.set(blockId, merged);
-              onToolCallArgDelta(blockId, merged);
+              const blockName = blockNameById.get(blockId);
+              if (blockName) {
+                onToolCallPartial(blockId, blockName, merged);
+              }
             }
           }
         }
@@ -487,8 +536,14 @@ export class AnthropicProvider extends BaseProvider {
         const index = (event as unknown as Record<string, unknown>)["index"] as number | undefined;
         if (index !== undefined) {
           const blockId = indexToBlockId.get(index);
-          if (blockId && onToolCallClosed) {
-            onToolCallClosed(blockId, toolJsonById.get(blockId) ?? "");
+          const blockName = blockId ? blockNameById.get(blockId) : undefined;
+          if (blockId && blockName && onToolCallClosed) {
+            onToolCallClosed(finalizeToolCall(
+              blockId,
+              blockName,
+              toolJsonById.get(blockId) ?? "",
+              `${blockName} stream`,
+            ));
           }
         }
       }
@@ -498,17 +553,7 @@ export class AnthropicProvider extends BaseProvider {
     const response = await stream.finalMessage();
 
     for (const block of response.content) {
-      if (block.type === "tool_use") {
-        const input = block.input;
-        toolCalls.push({
-          id: block.id,
-          name: block.name,
-          arguments:
-            typeof input === "object" && input !== null
-              ? (input as Record<string, unknown>)
-              : JSON.parse(input as string),
-        });
-      } else if (block.type === "text") {
+      if (block.type === "text") {
         const blockAny = block as unknown as Record<string, unknown>;
         if (blockAny["citations"] && Array.isArray(blockAny["citations"])) {
           for (const c of blockAny["citations"] as Record<string, unknown>[]) {
@@ -535,7 +580,7 @@ export class AnthropicProvider extends BaseProvider {
 
     return new ProviderResponse({
       text: textParts.join(""),
-      toolCalls,
+      toolCalls: [],
       usage,
       raw: response,
       reasoningContent: thinkingParts.length > 0 ? thinkingParts.join("") : "",

@@ -51,16 +51,24 @@ export interface ChildSessionMetaRecord {
   lifecycle: ChildSessionLifecycle;
   outcome?: ChildSessionOutcome;
   order: number;
-  inbox?: AgentMessage[];
+  inbox?: MessageEnvelope[];
 }
 
-/** Minimal message envelope for inter-agent communication. */
-export interface AgentMessage {
-  from: string;
-  to: string;
+/** Message type determines rendering category — not the sender string. */
+export type MessageType = "user_input" | "peer_message" | "system_notice";
+
+/** Typed message envelope for inter-session communication. */
+export interface MessageEnvelope {
+  type: MessageType;
+  sender: string;        // display only — not used for routing
   content: string;
   timestamp: number;
 }
+
+/**
+ * @deprecated Use MessageEnvelope. Kept as alias during migration.
+ */
+export type AgentMessage = MessageEnvelope;
 
 /** Record kept for archived children (Session instance released). */
 export interface ArchivedChildRecord {
