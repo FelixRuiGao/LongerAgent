@@ -69,6 +69,8 @@
     "markitdown-ts": "^0.0.10",
     "openai": "^4.90.0",
     "react": "^19.2.4",
+    "shiki": "^4.0.2",
+    "string-width": "7.2.0",
     "web-tree-sitter": "^0.26.7",
     "yoga-layout": "^3.2.1"
   },

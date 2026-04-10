@@ -15,6 +15,7 @@ describe("opentui composer tokens", () => {
   it("counts display width with newlines", () => {
     expect(displayWidthWithNewlines("abc")).toBe(3);
     expect(displayWidthWithNewlines("前a\n后")).toBe(6);
+    expect(displayWidthWithNewlines("🙂é\t👨‍👩‍👧‍👦")).toBe(7);
   });
 
   it("detects the inserted paste range", () => {
@@ -40,6 +41,26 @@ describe("opentui composer tokens", () => {
     });
   });
 
+  it("finds @file query bounds after grapheme clusters and tabs", () => {
+    expect(findFileReferenceQuery("🙂 @foo", displayWidthWithNewlines("🙂 @foo"))).toEqual({
+      prefix: "foo",
+      startOffset: 3,
+      endOffset: 7,
+    });
+
+    expect(findFileReferenceQuery("é @foo", displayWidthWithNewlines("é @foo"))).toEqual({
+      prefix: "foo",
+      startOffset: 2,
+      endOffset: 6,
+    });
+
+    expect(findFileReferenceQuery("\t@foo", displayWidthWithNewlines("\t@foo"))).toEqual({
+      prefix: "foo",
+      startOffset: 2,
+      endOffset: 6,
+    });
+  });
+
   it("slices text by display-width offsets", () => {
     const text = "前后 test";
     const start = displayWidthWithNewlines("前");
@@ -58,6 +79,20 @@ describe("opentui composer tokens", () => {
       text: "你",
       startOffset: 0,
       endOffset: 2,
+    });
+  });
+
+  it("finds display spans for grapheme clusters", () => {
+    expect(getDisplaySpanEndingAtOffset("👨‍👩‍👧‍👦x", 2)).toEqual({
+      text: "👨‍👩‍👧‍👦",
+      startOffset: 0,
+      endOffset: 2,
+    });
+
+    expect(getDisplaySpanStartingAtOffset("éx", 0)).toEqual({
+      text: "é",
+      startOffset: 0,
+      endOffset: 1,
     });
   });
 

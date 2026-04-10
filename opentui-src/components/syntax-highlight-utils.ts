@@ -128,14 +128,20 @@ export const DIFF_BRIGHTNESS_CONTEXT = 0.45;
 // Comment/meta color exemptions
 // ------------------------------------------------------------------
 
-export const HLJS_COMMENT_COLORS = [
+export const COMMENT_EXEMPT_COLORS = [
+  // highlight.js comment / meta
   RGBA.fromHex("#5a5565"),
   RGBA.fromHex("#636a76"),
+  // Shiki theme comments
+  RGBA.fromHex("#51597D"),  // tokyo-night
+  RGBA.fromHex("#5A6673"),  // ayu-dark
+  RGBA.fromHex("#6272A4"),  // dracula
+  RGBA.fromHex("#6A9955"),  // dark-plus
 ];
 
 export function isCommentColor(color: RGBA | undefined): boolean {
   if (!color) return false;
-  return HLJS_COMMENT_COLORS.some((c) => c.equals(color));
+  return COMMENT_EXEMPT_COLORS.some((c) => c.equals(color));
 }
 
 // ------------------------------------------------------------------

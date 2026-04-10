@@ -1,3 +1,5 @@
+import stringWidth from "string-width";
+
 export type ComposerTokenKind = "file" | "paste" | "image";
 
 export interface ComposerTokenMetadata {
@@ -38,32 +40,54 @@ export interface DisplaySpan {
   endOffset: number;
 }
 
-function isFullWidthCodePoint(cp: number): boolean {
-  return (
-    (cp >= 0x1100 && cp <= 0x115f) ||
-    (cp >= 0x2e80 && cp <= 0x303e) ||
-    (cp >= 0x3040 && cp <= 0x33bf) ||
-    (cp >= 0x3400 && cp <= 0x4dbf) ||
-    (cp >= 0x4e00 && cp <= 0xa4cf) ||
-    (cp >= 0xac00 && cp <= 0xd7af) ||
-    (cp >= 0xf900 && cp <= 0xfaff) ||
-    (cp >= 0xfe30 && cp <= 0xfe6f) ||
-    (cp >= 0xff01 && cp <= 0xff60) ||
-    (cp >= 0xffe0 && cp <= 0xffe6) ||
-    (cp >= 0x20000 && cp <= 0x2fffd) ||
-    (cp >= 0x30000 && cp <= 0x3fffd)
-  );
+interface DisplaySegment {
+  text: string;
+  startOffset: number;
+  endOffset: number;
 }
 
-function charDisplayWidth(ch: string): number {
-  const cp = ch.codePointAt(0) ?? 0;
-  return isFullWidthCodePoint(cp) ? 2 : 1;
+const DEFAULT_TAB_WIDTH = 2;
+const graphemeSegmenter = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
+
+function segmentDisplayWidth(segment: string): number {
+  if (segment === "\n") return 1;
+  if (segment === "\t") return DEFAULT_TAB_WIDTH;
+  return stringWidth(segment);
+}
+
+function* iterateDisplaySegments(text: string): Generator<DisplaySegment> {
+  let offset = 0;
+
+  if (graphemeSegmenter) {
+    for (const entry of graphemeSegmenter.segment(text)) {
+      const width = segmentDisplayWidth(entry.segment);
+      yield {
+        text: entry.segment,
+        startOffset: offset,
+        endOffset: offset + width,
+      };
+      offset += width;
+    }
+    return;
+  }
+
+  for (const segment of Array.from(text)) {
+    const width = segmentDisplayWidth(segment);
+    yield {
+      text: segment,
+      startOffset: offset,
+      endOffset: offset + width,
+    };
+    offset += width;
+  }
 }
 
 export function displayWidthWithNewlines(text: string): number {
   let width = 0;
-  for (const ch of text) {
-    width += ch === "\n" ? 1 : charDisplayWidth(ch);
+  for (const segment of iterateDisplaySegments(text)) {
+    width += segment.endOffset - segment.startOffset;
   }
   return width;
 }
@@ -106,25 +130,12 @@ export function buildFileReferenceLabel(candidate: string): string {
 export function sliceTextByOffset(text: string, startOffset: number, endOffset: number): string {
   if (endOffset <= startOffset) return "";
 
-  let offset = 0;
-  let started = false;
   let output = "";
 
-  for (const ch of text) {
-    const width = ch === "\n" ? 1 : charDisplayWidth(ch);
-    const nextOffset = offset + width;
-
-    if (!started && nextOffset > startOffset) {
-      started = true;
-    }
-
-    if (started) {
-      if (offset >= endOffset) break;
-      output += ch;
-    }
-
-    offset = nextOffset;
-    if (offset >= endOffset && started) break;
+  for (const segment of iterateDisplaySegments(text)) {
+    if (segment.endOffset <= startOffset) continue;
+    if (segment.startOffset >= endOffset) break;
+    output += segment.text;
   }
 
   return output;
@@ -143,7 +154,7 @@ export function findFileReferenceQuery(text: string, cursorOffset: number): File
   const prefix = beforeCursor.slice(atIdx + 1);
   if (/\s/.test(prefix)) return null;
 
-  const afterCursor = text.slice(beforeCursor.length);
+  const afterCursor = sliceTextByOffset(text, cursorOffset, displayWidthWithNewlines(text));
   const tokenSuffix = afterCursor.match(/^[^\s]*/)?.[0] ?? "";
   const startOffset = displayWidthWithNewlines(beforeCursor.slice(0, atIdx));
   const endOffset = cursorOffset + displayWidthWithNewlines(tokenSuffix);
@@ -156,35 +167,27 @@ export function findFileReferenceQuery(text: string, cursorOffset: number): File
 }
 
 export function getDisplaySpanEndingAtOffset(text: string, endOffset: number): DisplaySpan | null {
-  let offset = 0;
-  for (const ch of text) {
-    const width = ch === "\n" ? 1 : charDisplayWidth(ch);
-    const nextOffset = offset + width;
-    if (nextOffset === endOffset) {
+  for (const segment of iterateDisplaySegments(text)) {
+    if (segment.endOffset === endOffset) {
       return {
-        text: ch,
-        startOffset: offset,
-        endOffset: nextOffset,
+        text: segment.text,
+        startOffset: segment.startOffset,
+        endOffset: segment.endOffset,
       };
     }
-    offset = nextOffset;
   }
   return null;
 }
 
 export function getDisplaySpanStartingAtOffset(text: string, startOffset: number): DisplaySpan | null {
-  let offset = 0;
-  for (const ch of text) {
-    const width = ch === "\n" ? 1 : charDisplayWidth(ch);
-    const nextOffset = offset + width;
-    if (offset === startOffset) {
+  for (const segment of iterateDisplaySegments(text)) {
+    if (segment.startOffset === startOffset) {
       return {
-        text: ch,
-        startOffset: offset,
-        endOffset: nextOffset,
+        text: segment.text,
+        startOffset: segment.startOffset,
+        endOffset: segment.endOffset,
       };
     }
-    offset = nextOffset;
   }
   return null;
 }

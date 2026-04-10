@@ -15,6 +15,21 @@ import {
   writeVigilOpenTuiDiag,
 } from "./core/lib/diagnostic.js";
 import { DEFAULT_DISPLAY_THEME } from "../display/theme/index.js";
+import { isShikiReady, shikiHighlightToChunks } from "./shiki-highlighter.js";
+
+/**
+ * When `true`, `highlightToChunks` uses Shiki (TextMate grammars, VS Code
+ * themes) instead of highlight.js.  Requires `initShikiHighlighter()` to
+ * have been called at startup.
+ *
+ * Set to `false` (default) to keep the original highlight.js path.
+ */
+export let useShikiHighlighter = true;
+
+/** Toggle Shiki on/off at runtime. */
+export function setUseShikiHighlighter(value: boolean): void {
+  useShikiHighlighter = value;
+}
 
 const PATCH_FLAG = Symbol.for("vigil.opentui.markdown.patch.v4");
 const INNER_TEXT = Symbol.for("vigil.codeblock.text");
@@ -118,22 +133,27 @@ function hljsHtmlToChunks(html: string): TextChunk[] {
 }
 
 export function highlightToChunks(code: string, lang: string | undefined): TextChunk[] | null {
+  // ── Shiki path (opt-in) ──────────────────────────────────────────────────
+  if (useShikiHighlighter && isShikiReady()) {
+    const shikiResult = shikiHighlightToChunks(code, lang);
+    if (shikiResult) return shikiResult;
+    // Language not loaded yet or unsupported — fall through to hljs.
+  }
+
+  // ── highlight.js path (default) ──────────────────────────────────────────
+  // Only highlight when an explicit, known language is given.  No auto-detect:
+  // blocks without a language tag (```...```) render as plain text so we don't
+  // mis-colorize prose, shell output, or random pasted content.
   const h = getHljs();
   if (!h) return null;
+  if (!lang || !h.getLanguage(lang)) return null;
 
   try {
-    if (lang && h.getLanguage(lang)) {
-      const result = h.highlight(code, { language: lang, ignoreIllegals: true });
-      return hljsHtmlToChunks(result.value);
-    }
-    const result = h.highlightAuto(code);
-    if (result.relevance > 5) {
-      return hljsHtmlToChunks(result.value);
-    }
+    const result = h.highlight(code, { language: lang, ignoreIllegals: true });
+    return hljsHtmlToChunks(result.value);
   } catch {
-    // fall through
+    return null;
   }
-  return null;
 }
 
 // ── Markdown prototype patches ──────────────────────────────────────────────
@@ -256,7 +276,7 @@ if (isVigilMarkdownPatchDisabled()) {
       width: "100%",
       border: true,
       borderColor: CODE_BORDER,
-      borderStyle: "single",
+      borderStyle: "rounded",
       marginBottom,
     }) as WrappedBox;
 
