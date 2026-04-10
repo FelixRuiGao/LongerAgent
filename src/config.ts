@@ -18,7 +18,8 @@ import {
   MANAGED_PROVIDER_CREDENTIAL_SPECS,
   isManagedProvider,
 } from "./managed-provider-credentials.js";
-import type { LocalProviderConfig } from "./persistence.js";
+import { resolveConfigNameForModelIdentity } from "./model-selection.js";
+import type { AgentModelEntry, LocalProviderConfig, ModelTierEntry } from "./persistence.js";
 
 export { VIGIL_HOME_DIR } from "./home-path.js";
 
@@ -440,8 +441,10 @@ function optionalConfigBooleanField(
 /** Default home directory for Vigil configuration. */
 export interface ResolvedPaths {
   templatesPath: string | null;
+  projectTemplatesPath: string | null;  // {projectPath}/.vigil/agent_templates/
   promptsPath: string | null;
   skillsPath: string | null;
+  projectSkillsPath: string | null;     // {projectPath}/.vigil/skills/
   homeDir: string;                // ~/.vigil/
 }
 
@@ -455,6 +458,7 @@ export interface ResolvedPaths {
  */
 export function resolveAssetPaths(opts?: {
   templatesFlag?: string;
+  projectPath?: string;
 }): ResolvedPaths {
   const home = getVigilHomeDir();
 
@@ -510,7 +514,17 @@ export function resolveAssetPaths(opts?: {
     }
   }
 
-  return { templatesPath, promptsPath, skillsPath, homeDir: home };
+  // --- Project-level overrides ({projectPath}/.vigil/) ---
+  let projectTemplatesPath: string | null = null;
+  let projectSkillsPath: string | null = null;
+  if (opts?.projectPath) {
+    const pt = join(opts.projectPath, ".vigil", "agent_templates");
+    if (isDir(pt)) projectTemplatesPath = pt;
+    const ps = join(opts.projectPath, ".vigil", "skills");
+    if (isDir(ps)) projectSkillsPath = ps;
+  }
+
+  return { templatesPath, projectTemplatesPath, promptsPath, skillsPath, projectSkillsPath, homeDir: home };
 }
 
 function isDir(p: string): boolean {
@@ -562,13 +576,19 @@ export class Config {
   private _rawModels: Record<string, Record<string, unknown>> = {};
   private _models: Map<string, ModelConfig> = new Map();
   private _mcpServers: MCPServerConfig[];
+  private _modelTiers: { high?: ModelTierEntry; medium?: ModelTierEntry; low?: ModelTierEntry } = {};
+  private _agentModels: Record<string, AgentModelEntry> = {};
 
   constructor(opts: {
     providerEnvVars?: Record<string, string>;
     localProviders?: Record<string, LocalProviderConfig>;
     mcpServers?: MCPServerConfig[];
+    modelTiers?: { high?: ModelTierEntry; medium?: ModelTierEntry; low?: ModelTierEntry };
+    agentModels?: Record<string, AgentModelEntry>;
   }) {
     this._mcpServers = opts.mcpServers ?? [];
+    this._agentModels = opts.agentModels ?? {};
+    this._modelTiers = opts.modelTiers ?? {};
     this._populateFromPreferences(
       opts.providerEnvVars ?? {},
       opts.localProviders ?? {},
@@ -821,5 +841,70 @@ export class Config {
 
   get mcpServerConfigs(): MCPServerConfig[] {
     return this._mcpServers;
+  }
+
+  // -- Model tiers --
+
+  get modelTiers(): { high?: ModelTierEntry; medium?: ModelTierEntry; low?: ModelTierEntry } {
+    return this._modelTiers;
+  }
+
+  /**
+   * Resolve a model tier level to a ModelConfig.
+   * Returns `{ modelConfig, thinkingLevel }` on success.
+   * Throws if the tier is not configured or the model can't be resolved.
+   */
+  resolveModelTier(level: "high" | "medium" | "low"): { modelConfig: ModelConfig; thinkingLevel?: string } {
+    const tier = this._modelTiers[level];
+    if (!tier) {
+      throw new Error(`Model tier '${level}' is not configured.`);
+    }
+
+    const configName = resolveConfigNameForModelIdentity(this, {
+      provider: tier.provider,
+      selectionKey: tier.selection_key,
+      modelId: tier.model_id,
+    });
+    if (!configName) {
+      throw new Error(
+        `Model tier '${level}' references '${tier.provider}:${tier.selection_key}' ` +
+        `(${tier.model_id}) but that model is not currently configured.`,
+      );
+    }
+
+    const modelConfig = this.getModel(configName);
+    return { modelConfig, thinkingLevel: tier.thinking_level };
+  }
+
+  // -- Agent model pins --
+
+  get agentModels(): Record<string, AgentModelEntry> {
+    return this._agentModels;
+  }
+
+  /**
+   * Resolve a pinned agent model by template name.
+   * Returns `{ modelConfig, thinkingLevel }` if the template has a pin.
+   * Returns `null` if no pin is configured for this template.
+   * Throws if a pin exists but the referenced model can't be resolved.
+   */
+  resolveAgentModel(templateName: string): { modelConfig: ModelConfig; thinkingLevel?: string } | null {
+    const entry = this._agentModels[templateName];
+    if (!entry) return null;
+
+    const configName = resolveConfigNameForModelIdentity(this, {
+      provider: entry.provider,
+      selectionKey: entry.selection_key,
+      modelId: entry.model_id,
+    });
+    if (!configName) {
+      throw new Error(
+        `agent_models['${templateName}'] references '${entry.provider}:${entry.selection_key}' ` +
+        `(${entry.model_id}) but that model is not currently configured.`,
+      );
+    }
+
+    const modelConfig = this.getModel(configName);
+    return { modelConfig, thinkingLevel: entry.thinking_level };
   }
 }

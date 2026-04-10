@@ -6,8 +6,14 @@ import { Agent } from "../src/agents/agent.js";
 import { Session } from "../src/session.js";
 import { loadTemplates } from "../src/templates/loader.js";
 import { loadSkillsMulti } from "../src/skills/loader.js";
-import { SessionStore } from "../src/persistence.js";
-import { loadMcpServers } from "../src/mcp-config.js";
+import {
+  SessionStore,
+  loadGlobalSettings,
+  loadLocalSettings,
+  mergeSettings,
+  loadModelSelectionState,
+  settingsToConfigInputs,
+} from "../src/persistence.js";
 import { loadDotenv } from "../src/dotenv.js";
 import { getVigilHomeDir } from "../src/home-path.js";
 import {
@@ -19,8 +25,8 @@ import type { PersistedModelSelection } from "../src/model-selection.js";
 import { applyPersistedModelSelectionToSession } from "../src/model-restore.js";
 import {
   hasAnyManagedCredential,
-  isManagedProvider,
 } from "../src/managed-provider-credentials.js";
+import { setAccent } from "../src/accent.js";
 
 function identifyPrimaryAgent(
   agents: Record<string, Agent>,
@@ -48,21 +54,23 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   templates?: string;
   verbose?: boolean;
 }): Promise<OpenTuiRuntime> {
-  loadDotenv(getVigilHomeDir());
+  const homeDir = getVigilHomeDir();
+  loadDotenv(homeDir);
 
   const verbose = opts?.verbose ?? false;
-  const store = new SessionStore({ projectPath: process.cwd() });
-  let globalPreferences = store.loadGlobalPreferences();
+  const projectPath = process.cwd();
+  const store = new SessionStore({ projectPath });
 
-  const hasLegacyCloudProviders = Boolean(
-    globalPreferences.providerEnvVars
-      && Object.keys(globalPreferences.providerEnvVars).some(
-        (providerId) => !isManagedProvider(providerId),
-      ),
-  );
-  const hasProviders = hasLegacyCloudProviders
-    || (globalPreferences.localProviders
-      && Object.keys(globalPreferences.localProviders).length > 0)
+  // ── Load settings (global + local merge) ──
+  const globalSettings = loadGlobalSettings(homeDir);
+  const localSettings = loadLocalSettings(projectPath);
+  const settings = mergeSettings(globalSettings, localSettings);
+
+  // Check if any providers are configured
+  const { providerEnvVars, localProviders, mcpServers } = settingsToConfigInputs(settings);
+  const hasProviders =
+    Object.keys(providerEnvVars).length > 0
+    || Object.keys(localProviders).length > 0
     || hasAnyManagedCredential();
 
   if (!hasProviders) {
@@ -71,16 +79,18 @@ export async function bootstrapOpenTuiRuntime(opts?: {
     );
   }
 
+  // ── Build Config ──
   const paths = resolveAssetPaths({
     templatesFlag: opts?.templates,
   });
-  const mcpServers = loadMcpServers(paths.homeDir);
   const config = new Config({
-    providerEnvVars: globalPreferences.providerEnvVars ?? {},
-    localProviders: globalPreferences.localProviders ?? {},
+    providerEnvVars,
+    localProviders,
     mcpServers,
+    modelTiers: settings.model_tiers,
   });
 
+  // ── OAuth token refresh ──
   const oauthEntries = config.listModelEntries().filter(
     (entry) => entry.apiKeyRaw === "oauth:openai-codex",
   );
@@ -95,6 +105,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
     }
   }
 
+  // ── MCP client ──
   let mcpManager: unknown = null;
   if (config.mcpServerConfigs.length > 0) {
     try {
@@ -102,11 +113,12 @@ export async function bootstrapOpenTuiRuntime(opts?: {
       mcpManager = new MCPClientManager(config.mcpServerConfigs);
     } catch {
       console.warn(
-        "Warning: mcp.json configured but MCP client module not available. Install @modelcontextprotocol/sdk if needed.",
+        "Warning: MCP servers configured but MCP client module not available. Install @modelcontextprotocol/sdk if needed.",
       );
     }
   }
 
+  // ── Templates ──
   const bundledDir = getBundledAssetsDir();
   const bundledTemplates = join(bundledDir, "agent_templates");
   const bundledPrompts = join(bundledDir, "prompts");
@@ -123,6 +135,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   );
   const primary = identifyPrimaryAgent(agents);
 
+  // ── Skills ──
   const bundledSkills = join(bundledDir, "skills");
   const skillRoots: string[] = [];
   if (existsSync(bundledSkills) && statSync(bundledSkills).isDirectory()) {
@@ -139,7 +152,8 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   }
   const skills = loadSkillsMulti(skillRoots);
 
-  const contextRatio = globalPreferences.contextRatio ?? 1.0;
+  // ── Session ──
+  const contextRatio = settings.context_ratio ?? 1.0;
   const session = new Session({
     primaryAgent: primary as never,
     config,
@@ -153,18 +167,19 @@ export async function bootstrapOpenTuiRuntime(opts?: {
     contextRatio,
   });
 
+  // ── Restore model selection ──
+  // Priority: settings.default_model > state/model-selection.json
+  const modelState = loadModelSelectionState(homeDir);
+  const effectiveModelConfigName = settings.default_model ?? modelState.config_name;
   try {
-    if (
-      globalPreferences.modelConfigName
-      || (globalPreferences.modelProvider && (globalPreferences.modelSelectionKey || globalPreferences.modelId))
-    ) {
+    if (effectiveModelConfigName) {
       applyPersistedModelSelectionToSession(
         session,
         {
-          modelConfigName: globalPreferences.modelConfigName,
-          modelProvider: globalPreferences.modelProvider,
-          modelSelectionKey: globalPreferences.modelSelectionKey,
-          modelId: globalPreferences.modelId,
+          modelConfigName: effectiveModelConfigName,
+          modelProvider: modelState.provider,
+          modelSelectionKey: modelState.selection_key,
+          modelId: modelState.model_id,
         } satisfies PersistedModelSelection,
       );
     }
@@ -174,7 +189,27 @@ export async function bootstrapOpenTuiRuntime(opts?: {
     );
   }
 
-  session.applyGlobalPreferences(globalPreferences);
+  // ── Apply settings to session ──
+  session.applySettings(settings, modelState);
+  if (settings.accent_color) {
+    setAccent(settings.accent_color);
+  }
+
+  // ── Shiki syntax highlighter (disable with VIGIL_SHIKI=0) ──
+  if (process.env.VIGIL_SHIKI !== "0") {
+    import("./forked/shiki-highlighter.js").then(async ({ initShikiHighlighter }) => {
+      await initShikiHighlighter();
+    }).catch(() => {
+      // Shiki unavailable — silently fall back to hljs.
+      import("./forked/patch-opentui-markdown.js").then(({ setUseShikiHighlighter }) => {
+        setUseShikiHighlighter(false);
+      });
+    });
+  } else {
+    import("./forked/patch-opentui-markdown.js").then(({ setUseShikiHighlighter }) => {
+      setUseShikiHighlighter(false);
+    });
+  }
 
   const commandRegistry = buildDefaultRegistry();
   registerSkillCommands(commandRegistry, session.skills);

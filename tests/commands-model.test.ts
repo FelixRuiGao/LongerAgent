@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -358,97 +358,110 @@ describe("/model command", () => {
     expect(resetForNewSession).not.toHaveBeenCalled();
   });
 
-  it("preserves configured providers when persisting preferences after model switch", async () => {
+  it("preserves configured settings and writes model selection state after model switch", async () => {
     const registry = buildDefaultRegistry();
     const cmd = registry.lookup("/model");
     expect(cmd).toBeTruthy();
 
     process.env["VIGIL_GLM_CODE_API_KEY"] = "glm-test-key";
-
-    const switchModel = vi.fn();
-    const resetForNewSession = vi.fn();
-    const saveGlobalPreferences = vi.fn();
-    const loadGlobalPreferences = vi.fn(() => ({
-      version: 1,
-      modelConfigName: "lmstudio:qwen/qwen3.5-9b",
-      modelProvider: "lmstudio",
-      modelSelectionKey: "qwen/qwen3.5-9b",
-      modelId: "qwen/qwen3.5-9b",
-      thinkingLevel: "default",
-      providerEnvVars: { glm: "GLM_API_KEY" },
-      localProviders: {
+    const previousHome = process.env["HOME"];
+    const tempHome = mkdtempSync(join(tmpdir(), "vigil-model-home-"));
+    const vigilHome = join(tempHome, ".vigil");
+    mkdirSync(join(vigilHome, "state"), { recursive: true });
+    writeFileSync(join(vigilHome, "settings.json"), JSON.stringify({
+      providers: {
+        glm: { api_key_env: "GLM_API_KEY" },
         lmstudio: {
-          baseUrl: "http://localhost:1234/v1",
+          base_url: "http://localhost:1234/v1",
           model: "qwen/qwen3.5-9b",
-          contextLength: 260000,
+          context_length: 260000,
         },
       },
-      contextRatio: 0.75,
-    }));
+      context_ratio: 0.75,
+    }, null, 2));
+    process.env["HOME"] = tempHome;
 
-    const session = {
-      config: {
-        modelNames: [],
-        listModelEntries: () => [],
-        upsertModelRaw: vi.fn(),
-      },
-      switchModel: (name: string) => {
-        switchModel(name);
-        (session.primaryAgent as any).modelConfig = {
-          name,
-          provider: "glm-code",
-          model: "glm-5",
-          contextLength: 200000,
-          apiKey: "glm-test-key",
-        };
-      },
-      setPersistedModelSelection: vi.fn(),
-      getGlobalPreferences: () => ({
-        version: 1,
-        modelConfigName: "runtime-glm-code-glm-5",
-        modelProvider: "glm-code",
-        modelSelectionKey: "glm-5",
-        modelId: "glm-5",
-        thinkingLevel: "default",
+    try {
+      const switchModel = vi.fn();
+      const resetForNewSession = vi.fn();
+
+      const session = {
+        config: {
+          modelNames: [],
+          listModelEntries: () => [],
+          upsertModelRaw: vi.fn(),
+        },
+        switchModel: (name: string) => {
+          switchModel(name);
+          (session.primaryAgent as any).modelConfig = {
+            name,
+            provider: "glm-code",
+            model: "glm-5",
+            contextLength: 200000,
+            apiKey: "glm-test-key",
+          };
+        },
+        setPersistedModelSelection: vi.fn(),
+        getGlobalPreferences: () => ({
+          version: 1,
+          modelConfigName: "runtime-glm-code-glm-5",
+          modelProvider: "glm-code",
+          modelSelectionKey: "glm-5",
+          modelId: "glm-5",
+          thinkingLevel: "default",
         }),
-      resetForNewSession,
-      primaryAgent: {
-        modelConfig: {
-          name: "my-lmstudio",
-          provider: "lmstudio",
-          model: "qwen/qwen3.5-9b",
-          contextLength: 260000,
-          apiKey: "local",
+        resetForNewSession,
+        primaryAgent: {
+          modelConfig: {
+            name: "my-lmstudio",
+            provider: "lmstudio",
+            model: "qwen/qwen3.5-9b",
+            contextLength: 260000,
+            apiKey: "local",
+          },
         },
-      },
-    };
+      };
 
-    const ctx = {
-      ...makeContext(registry, session),
-      store: {
-        loadGlobalPreferences,
-        saveGlobalPreferences,
-        clearSession: vi.fn(),
-      },
-    };
-
-    await cmd!.handler(ctx, "glm-code:glm-5");
-
-    expect(saveGlobalPreferences).toHaveBeenCalledWith(expect.objectContaining({
-      modelConfigName: "runtime-glm-code-glm-5",
-      modelProvider: "glm-code",
-      modelSelectionKey: "glm-5",
-      modelId: "glm-5",
-      providerEnvVars: { glm: "GLM_API_KEY" },
-      localProviders: {
-        lmstudio: {
-          baseUrl: "http://localhost:1234/v1",
-          model: "qwen/qwen3.5-9b",
-          contextLength: 260000,
+      const ctx = {
+        ...makeContext(registry, session),
+        store: {
+          clearSession: vi.fn(),
         },
-      },
-      contextRatio: 0.75,
-    }));
+      };
+
+      await cmd!.handler(ctx, "glm-code:glm-5");
+
+      const persistedSettings = JSON.parse(readFileSync(join(vigilHome, "settings.json"), "utf-8"));
+      expect(persistedSettings).toEqual({
+        providers: {
+          glm: { api_key_env: "GLM_API_KEY" },
+          lmstudio: {
+            base_url: "http://localhost:1234/v1",
+            model: "qwen/qwen3.5-9b",
+            context_length: 260000,
+          },
+        },
+        context_ratio: 0.75,
+      });
+
+      const persistedState = JSON.parse(
+        readFileSync(join(vigilHome, "state", "model-selection.json"), "utf-8"),
+      );
+      expect(persistedState).toEqual({
+        config_name: "runtime-glm-code-glm-5",
+        provider: "glm-code",
+        selection_key: "glm-5",
+        model_id: "glm-5",
+        thinking_level: "default",
+      });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env["HOME"];
+      } else {
+        process.env["HOME"] = previousHome;
+      }
+      rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
   it("preserves preset-specific overrides for Anthropic 1M variants", async () => {

@@ -13,7 +13,7 @@
  * sees a 401 from `/copilot_internal/v2/token` and the user is prompted to
  * re-authenticate via `vigil oauth login copilot`.
  *
- * Persistence in `~/.vigil/auth.json` under the `github_copilot` field,
+ * Persistence in `~/.vigil/state/oauth.json` under the `github_copilot` field,
  * alongside `openai_codex`. Sync file I/O primitives are shared with
  * `openai-oauth.ts` via `loadAuthStore` / `saveAuthStore`.
  *

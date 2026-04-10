@@ -47,6 +47,9 @@ export interface ModelPickerTreeNode {
 
 export interface ModelPickerTreeContext {
   session: any;
+  allowedProviderIds?: Iterable<string>;
+  includeAddProviderAction?: boolean;
+  includeLocalDiscoverActions?: boolean;
 }
 
 const OPENROUTER_VENDOR_ORDER = ["anthropic", "openai", "moonshotai", "minimax", "z-ai"];
@@ -94,8 +97,10 @@ function isCurrentSelection(
   currentProvider: string,
   currentModel: string,
 ): boolean {
+  const stableSelectionName = `${providerId}:${selectionKey}`;
   const runtimeSelectionName = runtimeModelName(providerId, selectionKey);
-  return session.currentModelConfigName === runtimeSelectionName
+  return session.currentModelConfigName === stableSelectionName
+    || session.currentModelConfigName === runtimeSelectionName
     || (
       selectionKey === modelId
       && providerId === currentProvider
@@ -125,11 +130,15 @@ function buildBranchLabel(node: ModelPickerTreeNode): string {
   return node.label;
 }
 
+export function labelModelPickerNode(node: ModelPickerTreeNode): string {
+  return node.kind === "model" || node.kind === "action"
+    ? buildLeafLabel(node)
+    : buildBranchLabel(node);
+}
+
 export function toCommandPickerOptions(nodes: ModelPickerTreeNode[]): Array<{ label: string; value: string; children?: any[] }> {
   return nodes.map((node) => ({
-    label: node.kind === "model" || node.kind === "action"
-      ? buildLeafLabel(node)
-      : buildBranchLabel(node),
+    label: labelModelPickerNode(node),
     value: node.value,
     children: node.children ? toCommandPickerOptions(node.children) : undefined,
   }));
@@ -139,6 +148,11 @@ export function buildModelPickerTree(ctx: ModelPickerTreeContext): ModelPickerTr
   const session = ctx.session;
   const config = session.config;
   if (!config) return [];
+  const allowedProviderIds = ctx.allowedProviderIds
+    ? new Set(Array.from(ctx.allowedProviderIds))
+    : null;
+  const includeAddProviderAction = ctx.includeAddProviderAction !== false;
+  const includeLocalDiscoverActions = ctx.includeLocalDiscoverActions !== false;
 
   const entries = readModelEntries(config);
   const currentProvider = String(session.primaryAgent?.modelConfig?.provider ?? "");
@@ -149,6 +163,7 @@ export function buildModelPickerTree(ctx: ModelPickerTreeContext): ModelPickerTr
 
   const addModel = (providerId: string, selectionKey: string, modelId: string) => {
     if (!providerId || !selectionKey || !modelId) return;
+    if (allowedProviderIds && !allowedProviderIds.has(providerId)) return;
     if (!byProvider.has(providerId)) {
       byProvider.set(providerId, new Map());
       providerOrder.push(providerId);
@@ -387,18 +402,20 @@ export function buildModelPickerTree(ctx: ModelPickerTreeContext): ModelPickerTr
         modelId: currentProvider === providerId ? currentModel : providerId,
       });
       const children = buildModelChildren(providerId);
-      children.push({
-        kind: "action",
-        id: `${providerId}:__discover__`,
-        value: `${providerId}:__discover__`,
-        label: "Discover models...",
-        isCurrent: false,
-        credentialState: "not_required",
-        keyMissing: false,
-        brandKey: descriptor.brandKey,
-        brandLabel: descriptor.brandLabel,
-        providerId,
-      });
+      if (includeLocalDiscoverActions) {
+        children.push({
+          kind: "action",
+          id: `${providerId}:__discover__`,
+          value: `${providerId}:__discover__`,
+          label: "Discover models...",
+          isCurrent: false,
+          credentialState: "not_required",
+          keyMissing: false,
+          brandKey: descriptor.brandKey,
+          brandLabel: descriptor.brandLabel,
+          providerId,
+        });
+      }
       nodes.push({
         kind: "provider",
         id: providerId,
@@ -440,6 +457,7 @@ export function buildModelPickerTree(ctx: ModelPickerTreeContext): ModelPickerTr
 
   for (const preset of PROVIDER_PRESETS) {
     if (!preset.localServer || processed.has(preset.id)) continue;
+    if (allowedProviderIds && !allowedProviderIds.has(preset.id)) continue;
     const descriptor = describeModel({
       providerId: preset.id,
       selectionKey: preset.id,
@@ -456,7 +474,7 @@ export function buildModelPickerTree(ctx: ModelPickerTreeContext): ModelPickerTr
       brandKey: descriptor.brandKey,
       brandLabel: descriptor.brandLabel,
       providerId: preset.id,
-      children: [{
+      children: includeLocalDiscoverActions ? [{
         kind: "action",
         id: `${preset.id}:__discover__`,
         value: `${preset.id}:__discover__`,
@@ -467,7 +485,20 @@ export function buildModelPickerTree(ctx: ModelPickerTreeContext): ModelPickerTr
         brandKey: descriptor.brandKey,
         brandLabel: descriptor.brandLabel,
         providerId: preset.id,
-      }],
+      }] : [],
+    });
+  }
+
+  // "Add provider..." action at the bottom of the tree
+  if (includeAddProviderAction) {
+    nodes.push({
+      kind: "action",
+      id: "__add_provider__",
+      value: "__add_provider__",
+      label: "Add provider...",
+      isCurrent: false,
+      credentialState: "not_required",
+      keyMissing: false,
     });
   }
 

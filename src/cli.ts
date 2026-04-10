@@ -21,8 +21,15 @@ import { Agent } from "./agents/agent.js";
 import { Session } from "./session.js";
 import { loadTemplates } from "./templates/loader.js";
 import { loadSkillsMulti } from "./skills/loader.js";
-import { SessionStore, fixStorage } from "./persistence.js";
-import { loadMcpServers } from "./mcp-config.js";
+import {
+  SessionStore,
+  fixStorage,
+  loadGlobalSettings,
+  loadLocalSettings,
+  mergeSettings,
+  loadModelSelectionState,
+  settingsToConfigInputs,
+} from "./persistence.js";
 import { loadDotenv } from "./dotenv.js";
 import { getVigilHomeDir } from "./home-path.js";
 import { checkForUpdates } from "./update-check.js";
@@ -34,7 +41,7 @@ import {
 } from "./commands.js";
 import type { PersistedModelSelection } from "./model-selection.js";
 import { applyPersistedModelSelectionToSession } from "./model-restore.js";
-import { hasAnyManagedCredential, isManagedProvider } from "./managed-provider-credentials.js";
+import { hasAnyManagedCredential } from "./managed-provider-credentials.js";
 import { setAccent } from "./accent.js";
 
 // ------------------------------------------------------------------
@@ -160,16 +167,17 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     process.exit(1);
   }
 
-  // Load global preferences (provider env vars, model selection, etc.)
-  let globalPreferences = store.loadGlobalPreferences();
+  // ── Load settings (global + local merge) ──
+  const homeDir = getVigilHomeDir();
+  let globalSettings = loadGlobalSettings(homeDir);
+  const localSettings = loadLocalSettings(process.cwd());
+  let settings = mergeSettings(globalSettings, localSettings);
 
   // If no providers configured, run initialization wizard
-  const hasLegacyCloudProviders = Boolean(
-    globalPreferences.providerEnvVars
-      && Object.keys(globalPreferences.providerEnvVars).some((providerId) => !isManagedProvider(providerId)),
-  );
-  const hasProviders = hasLegacyCloudProviders
-    || (globalPreferences.localProviders && Object.keys(globalPreferences.localProviders).length > 0)
+  const { providerEnvVars, localProviders, mcpServers } = settingsToConfigInputs(settings);
+  let hasProviders =
+    Object.keys(providerEnvVars).length > 0
+    || Object.keys(localProviders).length > 0
     || hasAnyManagedCredential();
 
   if (!hasProviders) {
@@ -177,8 +185,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     try {
       const { runInitWizard } = await import("./init-wizard.js");
       await runInitWizard();
-      // Re-load preferences after wizard completes
-      globalPreferences = store.loadGlobalPreferences();
+      // Re-load settings after wizard completes
+      globalSettings = loadGlobalSettings(homeDir);
+      settings = mergeSettings(globalSettings, localSettings);
     } catch {
       console.error(
         "Error: no providers configured.\n" +
@@ -191,14 +200,17 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   // Resolve asset paths: templates, prompts, skills
   const paths = resolveAssetPaths({
     templatesFlag: opts.templates,
+    projectPath: process.cwd(),
   });
 
-  // Build Config from preferences
-  const mcpServers = loadMcpServers(paths.homeDir);
+  // ── Build Config from settings ──
+  const configInputs = settingsToConfigInputs(settings);
   const config = new Config({
-    providerEnvVars: globalPreferences.providerEnvVars ?? {},
-    localProviders: globalPreferences.localProviders ?? {},
-    mcpServers,
+    providerEnvVars: configInputs.providerEnvVars,
+    localProviders: configInputs.localProviders,
+    mcpServers: configInputs.mcpServers,
+    modelTiers: settings.model_tiers,
+    agentModels: settings.agent_models,
   });
 
   // Refresh OAuth tokens if any model uses them (before building providers)
@@ -218,8 +230,6 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   }
 
   // Startup credentials check for any model using GitHub Copilot OAuth.
-  // The GitHub App user token is non-expiring, so there's nothing to refresh
-  // — we just verify that credentials are present and warn the user if not.
   const copilotEntries = config.listModelEntries().filter(
     (e) => e.apiKeyRaw === "oauth:copilot",
   );
@@ -233,16 +243,15 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     }
   }
 
-  // Initialise MCP client manager (if mcp.json configured)
+  // Initialise MCP client manager
   let mcpManager: unknown = null;
   if (config.mcpServerConfigs.length > 0) {
     try {
-      // Dynamic import to keep MCP optional
       const { MCPClientManager } = await import("./mcp-client.js");
       mcpManager = new MCPClientManager(config.mcpServerConfigs);
     } catch {
       console.warn(
-        "Warning: mcp.json configured but MCP client module not available. " +
+        "Warning: MCP servers configured but MCP client module not available. " +
           "Install with: npm install @modelcontextprotocol/sdk",
       );
     }
@@ -258,13 +267,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   if (paths.promptsPath) promptsDirs.push(paths.promptsPath);
   promptsDirs.push(bundledPrompts);
 
-  // Load agent templates (bundled + user override, with layered prompt assembly)
+  // Load agent templates (bundled + user-global + project-local, with layered prompt assembly)
   const agents = loadTemplates(
     bundledTemplates,
     config,
     mcpManager as any,
     promptsDirs,
     paths.templatesPath ?? undefined,
+    paths.projectTemplatesPath ?? undefined,
   );
   const primary = identifyPrimaryAgent(agents);
 
@@ -283,10 +293,19 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   ) {
     skillRoots.push(userSkillsPath);
   }
+  // Project-local skills (highest priority — overrides bundled and user-global)
+  const projectSkillsPath = paths.projectSkillsPath;
+  if (
+    projectSkillsPath &&
+    existsSync(projectSkillsPath) &&
+    statSync(projectSkillsPath).isDirectory()
+  ) {
+    skillRoots.push(projectSkillsPath);
+  }
   const skills = loadSkillsMulti(skillRoots);
 
-  // Build Session
-  const contextRatio = globalPreferences.contextRatio ?? 1.0;
+  // ── Build Session ──
+  const contextRatio = settings.context_ratio ?? 1.0;
   const session = new Session({
     primaryAgent: primary as never,
     config,
@@ -300,19 +319,18 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     contextRatio,
   });
 
-  // Restore model selection from preferences
+  // ── Restore model selection ──
+  const modelState = loadModelSelectionState(homeDir);
+  const effectiveModelConfigName = settings.default_model ?? modelState.config_name;
   try {
-    if (
-      globalPreferences.modelConfigName
-      || (globalPreferences.modelProvider && (globalPreferences.modelSelectionKey || globalPreferences.modelId))
-    ) {
+    if (effectiveModelConfigName) {
       applyPersistedModelSelectionToSession(
         session,
         {
-          modelConfigName: globalPreferences.modelConfigName,
-          modelProvider: globalPreferences.modelProvider,
-          modelSelectionKey: globalPreferences.modelSelectionKey,
-          modelId: globalPreferences.modelId,
+          modelConfigName: effectiveModelConfigName,
+          modelProvider: modelState.provider,
+          modelSelectionKey: modelState.selection_key,
+          modelId: modelState.model_id,
         } satisfies PersistedModelSelection,
       );
     }
@@ -321,9 +339,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       `Warning: failed to restore saved model preference: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  session.applyGlobalPreferences(globalPreferences);
-  if (globalPreferences.accentColor) {
-    setAccent(globalPreferences.accentColor);
+
+  // ── Apply settings to session ──
+  session.applySettings(settings, modelState);
+  if (settings.accent_color) {
+    setAccent(settings.accent_color);
   }
 
   // Commands

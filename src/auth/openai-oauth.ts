@@ -5,7 +5,7 @@
  *   1. Browser login (PKCE) — recommended, opens browser for one-click auth
  *   2. Device code — fallback for SSH / headless environments
  *
- * Token persistence in ~/.vigil/auth.json with automatic refresh.
+ * Token persistence in ~/.vigil/state/oauth.json with automatic refresh.
  * No external dependencies — uses Node 18+ built-in fetch, crypto, http.
  */
 
@@ -81,7 +81,7 @@ export interface AuthStoreData {
 // =============================================================================
 
 function authStorePath(): string {
-  return join(getVigilHomeDir(), "auth.json");
+  return join(getVigilHomeDir(), "state", "oauth.json");
 }
 
 export function loadAuthStore(): AuthStoreData {
@@ -101,8 +101,8 @@ export function loadAuthStore(): AuthStoreData {
 
 export function saveAuthStore(store: AuthStoreData): void {
   const p = authStorePath();
-  const dir = getVigilHomeDir();
-  mkdirSync(dir, { recursive: true });
+  const stateDir = join(getVigilHomeDir(), "state");
+  mkdirSync(stateDir, { recursive: true });
   writeFileSync(p, JSON.stringify(store, null, 2) + "\n", {
     encoding: "utf-8",
     mode: 0o600,
@@ -751,7 +751,7 @@ async function codexLogin(): Promise<void> {
   saveOAuthTokens(tokens);
   console.log();
   console.log("  Codex login successful!");
-  console.log("  OAuth tokens saved to ~/.vigil/auth.json");
+  console.log("  OAuth tokens saved to ~/.vigil/state/oauth.json");
   console.log();
   console.log(
     "  To use with Vigil, run 'vigil init' and select",
@@ -834,7 +834,7 @@ async function copilotLogin(): Promise<void> {
 
   console.log();
   console.log("  Copilot login successful!");
-  console.log("  GitHub OAuth tokens saved to ~/.vigil/auth.json");
+  console.log("  GitHub OAuth tokens saved to ~/.vigil/state/oauth.json");
   console.log();
   console.log(
     "  To use with Vigil, run 'vigil init' and select",

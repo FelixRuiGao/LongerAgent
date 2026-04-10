@@ -2,21 +2,31 @@
  * Initialization wizard for Vigil.
  *
  * Provides an interactive first-run setup experience using @inquirer/prompts.
- * Saves provider configuration to ~/.vigil/tui-preferences.json.
+ * Saves provider configuration to ~/.vigil/settings.json + state/model-selection.json.
  * Supports Ctrl+C / ESC to go back to the previous step.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkbox, select, input, confirm } from "@inquirer/prompts";
+import { select, input, confirm } from "@inquirer/prompts";
 import { getVigilHomeDir } from "./home-path.js";
 import {
   PROVIDER_PRESETS,
+  buildProviderPresetRawConfig,
   type ProviderPreset,
 } from "./provider-presets.js";
 import { fetchModelsFromServer } from "./model-discovery.js";
 import { setDotenvKey } from "./dotenv.js";
-import type { GlobalTuiPreferences, LocalProviderConfig } from "./persistence.js";
+import {
+  type VigilSettings,
+  type ModelSelectionState,
+  type ProviderEntry,
+  type ModelTierEntry,
+  saveSettings,
+  globalSettingsPath,
+  saveModelSelectionState,
+  loadGlobalSettings,
+} from "./persistence.js";
 import {
   detectManagedCredentialCandidates,
   hasAnyManagedCredential,
@@ -27,6 +37,10 @@ import {
   ensureManagedProviderCredential,
   type CredentialPromptAdapter,
 } from "./provider-credential-flow.js";
+import { Config, getThinkingLevels } from "./config.js";
+import { buildModelPickerTree, labelModelPickerNode, type ModelPickerTreeNode } from "./model-picker-tree.js";
+import { createModelTierEntry, parseProviderModelTarget } from "./model-selection.js";
+import { describeModel } from "./model-presentation.js";
 
 // ------------------------------------------------------------------
 // Wizard result
@@ -37,6 +51,25 @@ export interface WizardResult {
 }
 
 // ------------------------------------------------------------------
+// Internal types
+// ------------------------------------------------------------------
+
+/** Result of configuring a single provider. */
+interface ProviderConfigResult {
+  providerId: string;
+  providerEntry: ProviderEntry;
+  skipped?: boolean;
+}
+
+/** A fully selected model: provider + model key + model id + config name. */
+interface ModelSelection {
+  configName: string;   // "providerId:modelKey"
+  providerId: string;
+  selectionKey: string; // model key
+  modelId: string;      // actual API model id
+}
+
+// ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
 
@@ -44,160 +77,6 @@ function isUserCancel(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   return (err as any).name === "ExitPromptError" ||
     (err as any).code === "ERR_USE_AFTER_CLOSE";
-}
-
-/**
- * Load existing preferences from tui-preferences.json (if present).
- */
-function loadExistingPreferences(homeDir: string): GlobalTuiPreferences | null {
-  const prefsPath = join(homeDir, "tui-preferences.json");
-  if (!existsSync(prefsPath)) return null;
-  try {
-    const raw = JSON.parse(readFileSync(prefsPath, "utf-8"));
-    return {
-      version: raw.version ?? 1,
-      modelConfigName: raw.model_config_name ?? undefined,
-      modelProvider: raw.model_provider ?? undefined,
-      modelSelectionKey: raw.model_selection_key ?? undefined,
-      modelId: raw.model_id ?? undefined,
-      thinkingLevel: raw.thinking_level ?? "",
-      accentColor: raw.accent_color ?? undefined,
-      disabledSkills: Array.isArray(raw.disabled_skills) ? raw.disabled_skills : undefined,
-      providerEnvVars: raw.provider_env_vars ?? undefined,
-      localProviders: raw.local_providers ?? undefined,
-      contextRatio: typeof raw.context_ratio === "number" ? raw.context_ratio : undefined,
-    } satisfies GlobalTuiPreferences;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Save preferences to tui-preferences.json (atomic write).
- */
-function savePreferences(homeDir: string, prefs: GlobalTuiPreferences): void {
-  mkdirSync(homeDir, { recursive: true });
-  const file = join(homeDir, "tui-preferences.json");
-  const tmp = file + ".tmp";
-  writeFileSync(
-    tmp,
-    JSON.stringify({
-      version: prefs.version ?? 1,
-      model_config_name: prefs.modelConfigName ?? null,
-      model_provider: prefs.modelProvider ?? null,
-      model_selection_key: prefs.modelSelectionKey ?? null,
-      model_id: prefs.modelId ?? null,
-      thinking_level: prefs.thinkingLevel ?? "",
-      accent_color: prefs.accentColor ?? null,
-      disabled_skills: prefs.disabledSkills ?? null,
-      provider_env_vars: prefs.providerEnvVars ?? null,
-      local_providers: prefs.localProviders ?? null,
-      context_ratio: prefs.contextRatio ?? null,
-    }, null, 2),
-  );
-  renameSync(tmp, file);
-}
-
-// ------------------------------------------------------------------
-// Provider configuration results
-// ------------------------------------------------------------------
-
-interface ProviderConfigResult {
-  providerId: string;
-  envVar?: string;
-  localProvider?: LocalProviderConfig;
-  skipped?: boolean;
-  /** Model config name (provider:modelKey) for default selection. */
-  defaultModelConfigName?: string;
-}
-
-// ------------------------------------------------------------------
-// Step functions
-// ------------------------------------------------------------------
-
-/**
- * Build a deduplicated top-level choice list.
- * Grouped presets (kimi, minimax, glm) appear once using their groupLabel.
- * The value is either a preset ID or a group key prefixed with "group:".
- */
-function buildProviderChoices(): Array<{ name: string; value: string }> {
-  const choices: Array<{ name: string; value: string }> = [];
-  const seenGroups = new Set<string>();
-
-  for (const p of PROVIDER_PRESETS) {
-    if (p.group) {
-      if (seenGroups.has(p.group)) continue;
-      seenGroups.add(p.group);
-      // Check if any preset in this group has a detected key
-      const groupPresets = PROVIDER_PRESETS.filter((pp) => pp.group === p.group);
-      const anyKeyDetected = groupPresets.some((pp) =>
-        isManagedProvider(pp.id)
-          ? hasManagedCredential(pp.id) || detectManagedCredentialCandidates(pp.id).length > 0
-          : Boolean(process.env[pp.envVar])
-      );
-      const suffix = anyKeyDetected ? " ✓ key detected" : "";
-      choices.push({
-        name: `${p.groupLabel ?? p.group}${suffix}`,
-        value: `group:${p.group}`,
-      });
-    } else {
-      const suffix = p.localServer
-        ? ""
-        : (
-          isManagedProvider(p.id)
-            ? (hasManagedCredential(p.id) || detectManagedCredentialCandidates(p.id).length > 0)
-            : Boolean(process.env[p.envVar])
-        )
-          ? " ✓ key detected"
-          : "";
-      choices.push({
-        name: `${p.name}${suffix}`,
-        value: p.id,
-      });
-    }
-  }
-  return choices;
-}
-
-async function stepSelectProviders(): Promise<string[]> {
-  const topLevel = await checkbox({
-    message: "Select providers (space to toggle, enter to confirm)",
-    choices: buildProviderChoices(),
-    required: true,
-  });
-
-  // Expand group selections into concrete preset IDs via sub-select
-  const resolved: string[] = [];
-  for (const selection of topLevel) {
-    if (selection.startsWith("group:")) {
-      const groupKey = selection.slice("group:".length);
-      const members = PROVIDER_PRESETS.filter((p) => p.group === groupKey);
-      if (members.length === 1) {
-        resolved.push(members[0].id);
-      } else {
-        const subChoice = await checkbox({
-          message: `${members[0].groupLabel ?? groupKey}: Select variants`,
-          choices: members.map((m) => ({
-            name: `${m.subLabel ?? m.name}${
-              isManagedProvider(m.id)
-                ? (hasManagedCredential(m.id) || detectManagedCredentialCandidates(m.id).length > 0)
-                  ? " ✓ key detected"
-                  : ""
-                : process.env[m.envVar]
-                  ? " ✓ key detected"
-                  : ""
-            }`,
-            value: m.id,
-          })),
-          required: true,
-        });
-        resolved.push(...subChoice);
-      }
-    } else {
-      resolved.push(selection);
-    }
-  }
-  return resolved;
 }
 
 function createInitPromptAdapter(): CredentialPromptAdapter {
@@ -220,6 +99,230 @@ function createInitPromptAdapter(): CredentialPromptAdapter {
     },
   };
 }
+
+/**
+ * Check whether a provider preset is already configured (has key / credentials).
+ */
+function isProviderConfigured(preset: ProviderPreset, configuredProviders: Map<string, ProviderEntry>): boolean {
+  if (configuredProviders.has(preset.id)) return true;
+  if (preset.localServer) return false;
+  if (isManagedProvider(preset.id)) {
+    return hasManagedCredential(preset.id) || detectManagedCredentialCandidates(preset.id).length > 0;
+  }
+  return Boolean(process.env[preset.envVar]);
+}
+
+function createWizardPickerSession(
+  configuredProviders: Map<string, ProviderEntry>,
+  currentSelection?: ModelSelection,
+): any {
+  const config = new Config({});
+
+  for (const [providerId, entry] of configuredProviders) {
+    if (entry.base_url && entry.model) {
+      config.upsertModelRaw(`${providerId}:${entry.model}`, {
+        provider: providerId,
+        model: entry.model,
+        api_key: entry.api_key ?? "local",
+        base_url: entry.base_url,
+        context_length: entry.context_length,
+        supports_web_search: false,
+      });
+      continue;
+    }
+
+    const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === providerId);
+    if (!preset || preset.localServer) continue;
+
+    const placeholderKey =
+      providerId === "openai-codex"
+        ? "oauth:openai-codex"
+        : providerId === "copilot"
+          ? "oauth:copilot"
+          : "wizard-configured";
+
+    for (const model of preset.models) {
+      config.upsertModelRaw(
+        `${providerId}:${model.key}`,
+        buildProviderPresetRawConfig(providerId, model, placeholderKey),
+      );
+    }
+  }
+
+  let currentModelConfig: Record<string, unknown> | undefined;
+  if (currentSelection) {
+    try {
+      currentModelConfig = config.getModel(currentSelection.configName) as unknown as Record<string, unknown>;
+    } catch {
+      currentModelConfig = {
+        provider: currentSelection.providerId,
+        model: currentSelection.modelId,
+      };
+    }
+  }
+
+  return {
+    config,
+    currentModelConfigName: currentSelection?.configName,
+    primaryAgent: { modelConfig: currentModelConfig ?? { provider: "", model: "" } },
+  };
+}
+
+function createInitialWizardProviders(): Map<string, ProviderEntry> {
+  const providers = new Map<string, ProviderEntry>();
+
+  for (const preset of PROVIDER_PRESETS) {
+    if (preset.localServer) continue;
+    if (isManagedProvider(preset.id)) {
+      if (hasManagedCredential(preset.id) || detectManagedCredentialCandidates(preset.id).length > 0) {
+        providers.set(preset.id, { api_key_env: preset.envVar });
+      }
+      continue;
+    }
+    if (process.env[preset.envVar]) {
+      providers.set(preset.id, { api_key_env: preset.envVar });
+    }
+  }
+
+  return providers;
+}
+
+function resolveWizardModelSelection(target: string): ModelSelection {
+  const parsed = parseProviderModelTarget(target);
+  if (!parsed) {
+    throw new Error(`Unexpected model picker value: ${target}`);
+  }
+
+  const presetModel = PROVIDER_PRESETS
+    .find((preset) => preset.id === parsed.provider)
+    ?.models.find((model) => model.key === parsed.model);
+  const modelId = presetModel?.id ?? parsed.model;
+
+  return {
+    configName: `${parsed.provider}:${parsed.model}`,
+    providerId: parsed.provider,
+    selectionKey: parsed.model,
+    modelId,
+  };
+}
+
+function describeWizardModelSelection(selection: ModelSelection): string {
+  const description = describeModel({
+    providerId: selection.providerId,
+    selectionKey: selection.selectionKey,
+    modelId: selection.modelId,
+    configName: selection.configName,
+  });
+  return description.scopedDetailedLabel || selection.configName;
+}
+
+function buildWizardModelPickerTree(
+  configuredProviders: Map<string, ProviderEntry>,
+  currentSelection?: ModelSelection,
+  opts?: {
+    allowedProviderIds?: Iterable<string>;
+    includeDoneAction?: boolean;
+    includeLocalDiscoverActions?: boolean;
+  },
+): ModelPickerTreeNode[] {
+  const tree = buildModelPickerTree({
+    session: createWizardPickerSession(configuredProviders, currentSelection),
+    allowedProviderIds: opts?.allowedProviderIds,
+    includeAddProviderAction: false,
+    includeLocalDiscoverActions: opts?.includeLocalDiscoverActions,
+  });
+
+  if (opts?.includeDoneAction && currentSelection) {
+    tree.push({
+      kind: "action",
+      id: "__done__",
+      value: "__done__",
+      label: `Done — use ${describeWizardModelSelection(currentSelection)}`,
+      isCurrent: false,
+      credentialState: "not_required",
+      keyMissing: false,
+    });
+  }
+
+  return tree;
+}
+
+async function stepSelectModelTreeValue(
+  nodes: ModelPickerTreeNode[],
+  message: string,
+): Promise<string | undefined> {
+  const stack: Array<{ message: string; nodes: ModelPickerTreeNode[] }> = [{ message, nodes }];
+
+  while (stack.length > 0) {
+    const current = stack[stack.length - 1];
+    const choices = [
+      ...(stack.length > 1 ? [{ name: "← Back", value: "__back__" }] : []),
+      ...current.nodes.map((node) => ({
+        name: labelModelPickerNode(node),
+        value: node.id,
+      })),
+    ];
+
+    const picked = await select({
+      message: current.message,
+      choices,
+    });
+
+    if (picked === "__back__") {
+      stack.pop();
+      continue;
+    }
+
+    const selectedNode = current.nodes.find((node) => node.id === picked);
+    if (!selectedNode) continue;
+    if (selectedNode.children && selectedNode.children.length > 0) {
+      stack.push({
+        message: selectedNode.label,
+        nodes: selectedNode.children,
+      });
+      continue;
+    }
+    return selectedNode.value;
+  }
+
+  return undefined;
+}
+
+async function stepPickTierModelFromTree(
+  configuredProviders: Map<string, ProviderEntry>,
+  tierName: "high" | "medium" | "low",
+): Promise<ModelSelection | undefined> {
+  const allowedProviderIds = new Set(configuredProviders.keys());
+  if (allowedProviderIds.size === 0) return undefined;
+
+  const tree = buildWizardModelPickerTree(configuredProviders, undefined, {
+    allowedProviderIds,
+    includeLocalDiscoverActions: false,
+  });
+  if (tree.length === 0) return undefined;
+
+  const picked = await stepSelectModelTreeValue(
+    tree,
+    `  ${tierName} tier: Select model`,
+  );
+  if (!picked) return undefined;
+
+  return resolveWizardModelSelection(picked);
+}
+
+function describeTierEntry(entry: ModelTierEntry): string {
+  const description = describeModel({
+    providerId: entry.provider,
+    selectionKey: entry.selection_key,
+    modelId: entry.model_id,
+    configName: `${entry.provider}:${entry.selection_key}`,
+  });
+  return description.scopedDetailedLabel || `${entry.provider}:${entry.selection_key}`;
+}
+
+// ------------------------------------------------------------------
+// Step: Configure a single provider (reused from old wizard)
+// ------------------------------------------------------------------
 
 async function stepConfigureProvider(provider: ProviderPreset): Promise<ProviderConfigResult> {
   // ── OpenAI Codex (OAuth) ──
@@ -255,22 +358,38 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       saveOAuthTokens(tokens);
       console.log("\n  Login successful!\n");
     }
-    // Select model
-    const selectedModelKey = await select({
-      message: `${provider.name}: Select model`,
-      choices: provider.models.map((m) => ({
-        name: m.label,
-        value: m.key,
-      })),
-    });
     return {
       providerId: provider.id,
-      envVar: "_OPENAI_CODEX_OAUTH",
-      defaultModelConfigName: `${provider.id}:${selectedModelKey}`,
+      providerEntry: { api_key_env: "_OPENAI_CODEX_OAUTH" },
     };
   }
 
-  // ── Local inference servers (oMLX, LM Studio) ──
+  // ── GitHub Copilot (device flow) ──
+  if (provider.id === "copilot") {
+    console.log(`  ${provider.name}: Logging in with your GitHub account...\n`);
+    const { deviceCodeLoginCLI, saveGitHubTokens, hasGitHubTokens } = await import("./auth/github-copilot-oauth.js");
+    if (hasGitHubTokens()) {
+      const reuse = await confirm({
+        message: "Existing GitHub Copilot login found. Use it?",
+        default: true,
+      });
+      if (!reuse) {
+        const tokens = await deviceCodeLoginCLI();
+        saveGitHubTokens(tokens);
+        console.log("\n  Login successful!\n");
+      }
+    } else {
+      const tokens = await deviceCodeLoginCLI();
+      saveGitHubTokens(tokens);
+      console.log("\n  Login successful!\n");
+    }
+    return {
+      providerId: provider.id,
+      providerEntry: { api_key_env: "_COPILOT_OAUTH" },
+    };
+  }
+
+  // ── Local inference servers (Ollama, oMLX, LM Studio) ──
   if (provider.localServer && provider.defaultBaseUrl) {
     console.log(`  Default: ${provider.defaultBaseUrl} (press Enter to use)\n`);
     const baseUrl = await input({
@@ -325,16 +444,13 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       contextLength = parseInt(ctxInput, 10) || 32768;
     }
 
-    const localProvider: LocalProviderConfig = { baseUrl, model: modelId, contextLength };
-    if (apiKey !== "local") localProvider.apiKey = apiKey;
+    const entry: ProviderEntry = { base_url: baseUrl, model: modelId, context_length: contextLength };
+    if (apiKey !== "local") entry.api_key = apiKey;
 
-    return {
-      providerId: provider.id,
-      localProvider,
-      defaultModelConfigName: `${provider.id}:${modelId}`,
-    };
+    return { providerId: provider.id, providerEntry: entry };
   }
 
+  // ── Managed credential providers (Kimi, GLM, MiniMax) ──
   if (isManagedProvider(provider.id)) {
     const result = await ensureManagedProviderCredential(
       provider.id,
@@ -342,27 +458,13 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       { mode: "init", allowReplaceExisting: true },
     );
     if (result.status === "skipped") {
-      return { providerId: provider.id, skipped: true };
+      return { providerId: provider.id, providerEntry: { api_key_env: result.envVar }, skipped: true };
     }
 
     console.log(`  ✓ Saved to ~/.vigil/.env as ${result.envVar}\n`);
-
-    let defaultModelConfigName: string | undefined;
-    if (provider.models.length > 0) {
-      const selectedModelKey = await select({
-        message: `${provider.name}: Select default model`,
-        choices: provider.models.map((m) => ({
-          name: m.label,
-          value: m.key,
-        })),
-      });
-      defaultModelConfigName = `${provider.id}:${selectedModelKey}`;
-    }
-
     return {
       providerId: provider.id,
-      envVar: result.envVar,
-      defaultModelConfigName,
+      providerEntry: { api_key_env: result.envVar },
     };
   }
 
@@ -395,39 +497,164 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
     }
   }
 
-  // Model selection
-  let defaultModelConfigName: string | undefined;
-  if (provider.models.length > 0) {
-    const selectedModelKey = await select({
-      message: `${provider.name}: Select default model`,
-      choices: provider.models.map((m) => ({
-        name: m.label,
-        value: m.key,
-      })),
+  return {
+    providerId: provider.id,
+    providerEntry: { api_key_env: envVarName },
+  };
+}
+
+// ------------------------------------------------------------------
+// Step: Provider & Model Picker (interactive loop)
+// ------------------------------------------------------------------
+
+async function stepProviderModelPicker(): Promise<{
+  selection: ModelSelection;
+  providers: Map<string, ProviderEntry>;
+}> {
+  const providers = createInitialWizardProviders();
+  let currentSelection: ModelSelection | undefined;
+
+  while (true) {
+    const tree = buildWizardModelPickerTree(providers, currentSelection, {
+      includeDoneAction: currentSelection !== undefined,
+      includeLocalDiscoverActions: true,
     });
-    defaultModelConfigName = `${provider.id}:${selectedModelKey}`;
+    const picked = await stepSelectModelTreeValue(
+      tree,
+      currentSelection
+        ? `Current: ${describeWizardModelSelection(currentSelection)}`
+        : "Select a model",
+    );
+
+    if (!picked) continue;
+    if (picked === "__done__") {
+      if (currentSelection) return { selection: currentSelection, providers };
+      continue;
+    }
+
+    if (picked.endsWith(":__discover__")) {
+      const providerId = picked.split(":")[0];
+      const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === providerId);
+      if (!preset) {
+        throw new Error(`Unknown local provider preset: ${providerId}`);
+      }
+      console.log();
+      const result = await stepConfigureProvider(preset);
+      if (!result.skipped) {
+        providers.set(result.providerId, result.providerEntry);
+        if (result.providerEntry.model) {
+          currentSelection = {
+            configName: `${result.providerId}:${result.providerEntry.model}`,
+            providerId: result.providerId,
+            selectionKey: result.providerEntry.model,
+            modelId: result.providerEntry.model,
+          };
+        }
+      }
+      continue;
+    }
+
+    const modelSelection = resolveWizardModelSelection(picked);
+    const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === modelSelection.providerId);
+    if (preset && !isProviderConfigured(preset, providers)) {
+      console.log();
+      const result = await stepConfigureProvider(preset);
+      if (result.skipped) continue;
+      providers.set(result.providerId, result.providerEntry);
+    }
+
+    currentSelection = modelSelection;
+  }
+}
+
+// ------------------------------------------------------------------
+// Step: Thinking level selection
+// ------------------------------------------------------------------
+
+async function stepSelectThinkingLevel(modelId: string, label: string): Promise<string | undefined> {
+  const levels = getThinkingLevels(modelId);
+  if (levels.length === 0) return undefined;
+
+  // Build choices: "off" first (if not already in the list), then the model's levels
+  const choices: Array<{ name: string; value: string }> = [];
+  if (!levels.includes("off") && !levels.includes("none")) {
+    choices.push({ name: "off", value: "off" });
+  }
+  for (const level of levels) {
+    choices.push({ name: level, value: level });
   }
 
-  return { providerId: provider.id, envVar: envVarName, defaultModelConfigName };
+  const selected = await select({
+    message: `${label}: Thinking level`,
+    choices,
+  });
+
+  return selected;
+}
+
+// ------------------------------------------------------------------
+// Step: Configure sub-agent tiers
+// ------------------------------------------------------------------
+
+async function stepConfigureTiers(
+  mainProviders: Map<string, ProviderEntry>,
+): Promise<Record<string, ModelTierEntry> | undefined> {
+  const wantTiers = await confirm({
+    message: "Configure sub-agent model tiers? (Skip = all inherit main model)",
+    default: false,
+  });
+
+  if (!wantTiers) return undefined;
+
+  const tiers: Record<string, ModelTierEntry> = {};
+
+  for (const tierName of ["high", "medium", "low"] as const) {
+    const skipTier = await confirm({
+      message: `  ${tierName} tier: Configure? (No = inherit main model)`,
+      default: false,
+    });
+
+    if (!skipTier) continue;
+
+    const picked = await stepPickTierModelFromTree(mainProviders, tierName);
+    if (!picked) {
+      console.log("    No configured providers with models available. Skipping.\n");
+      continue;
+    }
+
+    // Thinking level for this tier model
+    const thinkingLevel = await stepSelectThinkingLevel(picked.modelId, `  ${tierName} tier`);
+
+    tiers[tierName] = createModelTierEntry({
+      provider: picked.providerId,
+      selectionKey: picked.selectionKey,
+      modelId: picked.modelId,
+    }, thinkingLevel);
+  }
+
+  return Object.keys(tiers).length > 0 ? tiers : undefined;
 }
 
 // ------------------------------------------------------------------
 // Main wizard — state machine with back support
 // ------------------------------------------------------------------
 
-const enum Step { CHECK_EXISTING, SELECT_PROVIDERS, CONFIGURE_PROVIDERS, SELECT_DEFAULT, WRITE }
+const enum Step {
+  CHECK_EXISTING,
+  SELECT_MODEL,
+  THINKING_LEVEL,
+  CONFIGURE_TIERS,
+  WRITE,
+}
 
 export async function runInitWizard(): Promise<WizardResult> {
   const homeDir = getVigilHomeDir();
-  const existing = loadExistingPreferences(homeDir);
-  const hasLegacyCloudProviders = Boolean(
-    existing?.providerEnvVars
-      && Object.keys(existing.providerEnvVars).some((providerId) => !isManagedProvider(providerId)),
-  );
-  const hasExisting = existing &&
-    (hasLegacyCloudProviders
-    || (existing.localProviders && Object.keys(existing.localProviders).length > 0)
-    || hasAnyManagedCredential());
+
+  // Check if settings.json already exists with providers
+  const existingSettings = loadGlobalSettings(homeDir);
+  const hasExisting = Boolean(
+    existingSettings.providers && Object.keys(existingSettings.providers).length > 0,
+  ) || hasAnyManagedCredential();
 
   console.log();
   console.log("  ╔══════════════════════════════════════╗");
@@ -435,17 +662,19 @@ export async function runInitWizard(): Promise<WizardResult> {
   console.log("  ╚══════════════════════════════════════╝");
   console.log("  (Ctrl+C to go back, double Ctrl+C to quit)\n");
 
-  let step: Step = hasExisting ? Step.CHECK_EXISTING : Step.SELECT_PROVIDERS;
-  let selectedProviderIds: string[] = [];
-  let results: ProviderConfigResult[] = [];
-  let providerIdx = 0;
-  let defaultModelConfigName = "";
+  let step: Step = hasExisting ? Step.CHECK_EXISTING : Step.SELECT_MODEL;
+
+  // State accumulated across steps
+  let modelSelection: ModelSelection | undefined;
+  let configuredProviders = new Map<string, ProviderEntry>();
+  let thinkingLevel: string | undefined;
+  let tierConfig: Record<string, ModelTierEntry> | undefined;
 
   while (step !== Step.WRITE) {
     try {
       switch (step) {
         case Step.CHECK_EXISTING: {
-          console.log(`  Existing configuration found.`);
+          console.log("  Existing configuration found.");
           const useExisting = await confirm({
             message: "Use existing configuration?",
             default: true,
@@ -454,50 +683,31 @@ export async function runInitWizard(): Promise<WizardResult> {
             console.log("\n  ✓ Using existing configuration.\n");
             return { homeDir };
           }
-          step = Step.SELECT_PROVIDERS;
+          step = Step.SELECT_MODEL;
           break;
         }
 
-        case Step.SELECT_PROVIDERS: {
-          selectedProviderIds = await stepSelectProviders();
-          results = [];
-          providerIdx = 0;
-          step = Step.CONFIGURE_PROVIDERS;
+        case Step.SELECT_MODEL: {
+          const result = await stepProviderModelPicker();
+          modelSelection = result.selection;
+          configuredProviders = result.providers;
+          step = Step.THINKING_LEVEL;
           break;
         }
 
-        case Step.CONFIGURE_PROVIDERS: {
-          const selectedProviders = PROVIDER_PRESETS.filter((p) =>
-            selectedProviderIds.includes(p.id),
-          );
-          if (providerIdx >= selectedProviders.length) {
-            step = Step.SELECT_DEFAULT;
-            break;
+        case Step.THINKING_LEVEL: {
+          if (modelSelection) {
+            thinkingLevel = await stepSelectThinkingLevel(
+              modelSelection.modelId,
+              "Main model",
+            );
           }
-          console.log();
-          const result = await stepConfigureProvider(selectedProviders[providerIdx]);
-          results.push(result);
-          providerIdx++;
-          if (providerIdx >= selectedProviders.length) {
-            step = Step.SELECT_DEFAULT;
-          }
+          step = Step.CONFIGURE_TIERS;
           break;
         }
 
-        case Step.SELECT_DEFAULT: {
-          // Collect all possible default model config names
-          const candidates = results
-            .filter((r) => r.defaultModelConfigName)
-            .map((r) => r.defaultModelConfigName!);
-
-          if (candidates.length <= 1) {
-            defaultModelConfigName = candidates[0] ?? "";
-          } else {
-            defaultModelConfigName = await select({
-              message: "Select default model",
-              choices: candidates.map((c) => ({ name: c, value: c })),
-            });
-          }
+        case Step.CONFIGURE_TIERS: {
+          tierConfig = await stepConfigureTiers(configuredProviders);
           step = Step.WRITE;
           break;
         }
@@ -505,11 +715,12 @@ export async function runInitWizard(): Promise<WizardResult> {
     } catch (err) {
       if (!isUserCancel(err)) throw err;
 
+      // Back navigation
       switch (step) {
         case Step.CHECK_EXISTING:
           console.log("\n  Setup cancelled.\n");
           throw err;
-        case Step.SELECT_PROVIDERS:
+        case Step.SELECT_MODEL:
           if (hasExisting) {
             step = Step.CHECK_EXISTING;
           } else {
@@ -517,67 +728,47 @@ export async function runInitWizard(): Promise<WizardResult> {
             throw err;
           }
           break;
-        case Step.CONFIGURE_PROVIDERS:
-          if (providerIdx > 0) {
-            results.pop();
-            providerIdx--;
-          } else {
-            step = Step.SELECT_PROVIDERS;
-          }
+        case Step.THINKING_LEVEL:
+          step = Step.SELECT_MODEL;
           break;
-        case Step.SELECT_DEFAULT: {
-          results.pop();
-          providerIdx = Math.max(0, providerIdx - 1);
-          step = Step.CONFIGURE_PROVIDERS;
+        case Step.CONFIGURE_TIERS:
+          step = Step.THINKING_LEVEL;
           break;
-        }
       }
       console.log();
     }
   }
 
-  // Build preferences from results
-  const providerEnvVars: Record<string, string> = {};
-  const localProviders: Record<string, LocalProviderConfig> = {};
+  // ------------------------------------------------------------------
+  // Build and save settings
+  // ------------------------------------------------------------------
 
-  for (const r of results) {
-    if (r.localProvider) {
-      localProviders[r.providerId] = r.localProvider;
-    } else if (r.envVar && !isManagedProvider(r.providerId)) {
-      providerEnvVars[r.providerId] = r.envVar;
-    }
-  }
+  const providers: Record<string, ProviderEntry> = {};
+  configuredProviders.forEach((entry, id) => {
+    providers[id] = entry;
+  });
 
-  // Parse default model config name into provider + model
-  let modelProvider: string | undefined;
-  let modelSelectionKey: string | undefined;
-  let modelId: string | undefined;
-  if (defaultModelConfigName) {
-    const colonIdx = defaultModelConfigName.indexOf(":");
-    if (colonIdx > 0) {
-      modelProvider = defaultModelConfigName.slice(0, colonIdx);
-      modelSelectionKey = defaultModelConfigName.slice(colonIdx + 1);
-      modelId = modelSelectionKey;
-    }
-  }
-
-  // Merge with existing preferences (keep accent color, thinking level, etc.)
-  const prefs: GlobalTuiPreferences = {
-    version: 1,
-    thinkingLevel: existing?.thinkingLevel ?? "",
-    accentColor: existing?.accentColor,
-    disabledSkills: existing?.disabledSkills,
-    providerEnvVars,
-    localProviders: Object.keys(localProviders).length > 0 ? localProviders : undefined,
-    contextRatio: existing?.contextRatio,
-    modelConfigName: defaultModelConfigName || undefined,
-    modelProvider,
-    modelSelectionKey,
-    modelId,
+  const settings: VigilSettings = {
+    default_model: modelSelection?.configName,
+    thinking_level: thinkingLevel && thinkingLevel !== "off" && thinkingLevel !== "none"
+      ? thinkingLevel
+      : undefined,
+    providers: Object.keys(providers).length > 0 ? providers : undefined,
+    model_tiers: tierConfig,
   };
 
-  // Save preferences
-  savePreferences(homeDir, prefs);
+  saveSettings(settings, globalSettingsPath(homeDir));
+
+  // Save model selection state
+  if (modelSelection) {
+    saveModelSelectionState({
+      config_name: modelSelection.configName,
+      provider: modelSelection.providerId,
+      selection_key: modelSelection.selectionKey,
+      model_id: modelSelection.modelId,
+      thinking_level: thinkingLevel,
+    });
+  }
 
   // Ensure user override directories and global memory file
   mkdirSync(join(homeDir, "agent_templates"), { recursive: true });
@@ -587,42 +778,39 @@ export async function runInitWizard(): Promise<WizardResult> {
     writeFileSync(globalAgentsMd, "");
   }
 
+  // ------------------------------------------------------------------
   // Summary
+  // ------------------------------------------------------------------
+
   console.log();
   console.log("  ✓ Configuration saved");
-  console.log(`    Preferences: ${join(homeDir, "tui-preferences.json")}`);
+  console.log(`    Settings: ${globalSettingsPath(homeDir)}`);
   console.log();
-  if (defaultModelConfigName) {
-    console.log(`  Default model: ${defaultModelConfigName}`);
-  }
 
-  for (const r of results) {
-    const preset = PROVIDER_PRESETS.find((p) => p.id === r.providerId);
-    if (r.skipped) {
-      console.log(`  - ${preset?.name ?? r.providerId} (skipped)`);
-      continue;
-    }
-    if (r.localProvider) {
-      console.log(`  ✓ ${preset?.name ?? r.providerId} (no API key needed)`);
-    } else if (isManagedProvider(r.providerId) && r.envVar && process.env[r.envVar]) {
-      console.log(`  ✓ ${preset?.name ?? r.providerId} (${r.envVar})`);
-    } else if (r.envVar && process.env[r.envVar]) {
-      console.log(`  ✓ ${r.envVar}`);
-    } else if (r.envVar) {
-      console.log(`  ✗ ${r.envVar} (not set)`);
+  if (modelSelection) {
+    console.log(`  Default model: ${describeWizardModelSelection(modelSelection)}`);
+  }
+  if (thinkingLevel && thinkingLevel !== "off" && thinkingLevel !== "none") {
+    console.log(`  Thinking level: ${thinkingLevel}`);
+  }
+  if (tierConfig) {
+    for (const [tier, entry] of Object.entries(tierConfig)) {
+      console.log(`  ${tier} tier: ${describeTierEntry(entry)}${entry.thinking_level ? ` (thinking: ${entry.thinking_level})` : ""}`);
     }
   }
 
-  const missing = results.filter((r) =>
-    r.envVar && !r.localProvider && !r.skipped && !process.env[r.envVar]
-  );
-  if (missing.length > 0) {
-    console.log();
-    console.log("  Set the missing keys before starting:");
-    for (const r of missing) {
-      console.log(`    export ${r.envVar}="your-key-here"`);
+  console.log();
+  configuredProviders.forEach((entry, id) => {
+    const preset = PROVIDER_PRESETS.find((p) => p.id === id);
+    if (entry.base_url) {
+      console.log(`  ✓ ${preset?.name ?? id} (local: ${entry.base_url})`);
+    } else if (entry.api_key_env) {
+      const hasKey = isManagedProvider(id)
+        ? hasManagedCredential(id)
+        : Boolean(process.env[entry.api_key_env]);
+      console.log(`  ${hasKey ? "✓" : "✗"} ${preset?.name ?? id} (${entry.api_key_env}${hasKey ? "" : " — not set"})`);
     }
-  }
+  });
 
   console.log();
   console.log("  Run 'vigil' to start.");

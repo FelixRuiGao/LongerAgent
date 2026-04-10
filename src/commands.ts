@@ -12,8 +12,9 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { SessionStore, LocalProviderConfig } from "./persistence.js";
-import { loadLog, validateAndRepairLog } from "./persistence.js";
+import type { SessionStore, LocalProviderConfig, ModelSelectionState, VigilSettings, ProviderEntry, ModelTierEntry } from "./persistence.js";
+import { loadLog, validateAndRepairLog, saveModelSelectionState, saveSettings, globalSettingsPath, loadGlobalSettings } from "./persistence.js";
+import { setDotenvKey } from "./dotenv.js";
 import { fetchModelsFromServer } from "./model-discovery.js";
 import {
   getThinkingLevels,
@@ -24,6 +25,8 @@ import {
 } from "./provider-presets.js";
 import {
   resolveModelSelection as resolveModelSelectionCore,
+  type ResolvedModelSelection,
+  createModelTierEntry,
   parseProviderModelTarget,
   runtimeModelName,
 } from "./model-selection.js";
@@ -38,8 +41,8 @@ import {
 } from "./provider-credential-flow.js";
 import { resolveSkillContent, type SkillMeta } from "./skills/loader.js";
 import { ACCENT_PRESETS, DEFAULT_ACCENT, setAccent, theme } from "./accent.js";
-import { buildModelPickerTree, toCommandPickerOptions } from "./model-picker-tree.js";
-import { formatCurrentModelScopedLabel, getCurrentModelDescriptor } from "./model-presentation.js";
+import { buildModelPickerTree, toCommandPickerOptions, type ModelPickerTreeContext } from "./model-picker-tree.js";
+import { describeModel, formatCurrentModelScopedLabel, getCurrentModelDescriptor } from "./model-presentation.js";
 import { hasOAuthTokens, isTokenExpiring, readOAuthAccessToken, clearOAuthTokens } from "./auth/openai-oauth.js";
 import { hasGitHubTokens, clearGitHubTokens } from "./auth/github-copilot-oauth.js";
 
@@ -94,6 +97,12 @@ export interface CommandContext {
 
   /** Prompt the user for a secret value during command execution. */
   promptSecret?: (request: PromptSecretRequest) => Promise<string | undefined>;
+
+  /**
+   * Show the hierarchical command picker (with drill-down children support).
+   * Returns the selected leaf value, or undefined if cancelled.
+   */
+  promptCommandPicker?: (options: CommandOption[]) => Promise<string | undefined>;
 
   /**
    * Show the inline OAuth login overlay for the given provider and return
@@ -414,75 +423,87 @@ function currentSessionModelDisplayName(session: any): string {
   return getCurrentModelDescriptor(session)?.compactScopedDetailedLabel ?? "";
 }
 
-function persistGlobalPreferences(ctx: CommandContext): void {
-  if (!ctx.store || typeof ctx.store.saveGlobalPreferences !== "function") return;
-  if (typeof ctx.session.getGlobalPreferences !== "function") return;
+/**
+ * Persist model selection state to state/model-selection.json.
+ * Reads the current model selection from the session and the thinking level,
+ * then writes them to the new state file.
+ */
+function persistModelSelection(ctx: CommandContext): void {
   try {
-    const current = ctx.session.getGlobalPreferences();
-    const existing = typeof ctx.store.loadGlobalPreferences === "function"
-      ? ctx.store.loadGlobalPreferences()
+    const session = ctx.session;
+    // Use getGlobalPreferences() which exposes the persisted model selection
+    const prefs = typeof session.getGlobalPreferences === "function"
+      ? session.getGlobalPreferences()
       : undefined;
-    ctx.store.saveGlobalPreferences({
-      ...existing,
-      ...current,
-      providerEnvVars: current.providerEnvVars ?? existing?.providerEnvVars,
-      localProviders: current.localProviders ?? existing?.localProviders,
-      contextRatio: current.contextRatio ?? existing?.contextRatio,
-    });
+    if (!prefs) return;
+    const state: ModelSelectionState = {
+      config_name: prefs.modelConfigName ?? undefined,
+      provider: prefs.modelProvider ?? undefined,
+      selection_key: prefs.modelSelectionKey ?? undefined,
+      model_id: prefs.modelId ?? undefined,
+      thinking_level: prefs.thinkingLevel && prefs.thinkingLevel !== "none"
+        ? prefs.thinkingLevel
+        : undefined,
+    };
+    saveModelSelectionState(state);
   } catch {
-    // Ignore preference persistence failures during command execution.
+    // Ignore persistence failures during command execution.
   }
 }
 
-function thinkingOptions(ctx: CommandOptionsContext): CommandOption[] {
+/**
+ * Persist a partial settings update to global settings.json.
+ * Reads existing settings, merges the patch, and writes back.
+ */
+function persistSettingsPatch(patch: Partial<VigilSettings>): void {
+  try {
+    const existing = loadGlobalSettings();
+    saveSettings({ ...existing, ...patch }, globalSettingsPath());
+  } catch {
+    // Ignore persistence failures during command execution.
+  }
+}
+
+/**
+ * Prompt the user to select a thinking level for the current model.
+ * Called after model switch to let the user choose a thinking level
+ * (replaces the removed /thinking command).
+ *
+ * Returns the selected level string, or undefined if the model doesn't
+ * support thinking or the user cancelled.
+ */
+async function promptThinkingLevel(ctx: CommandContext): Promise<string | undefined> {
   const session = ctx.session;
   const model = session.currentModelName ?? "";
   const levels = getThinkingLevels(model);
+  if (levels.length === 0) return undefined;
+
+  // If only one level (e.g. "on" for models with non-configurable thinking),
+  // auto-apply without prompting.
+  if (levels.length === 1) {
+    session.thinkingLevel = levels[0];
+    return levels[0];
+  }
+
+  if (!ctx.promptSelect) {
+    // Non-interactive environment — keep current/default thinking level.
+    return undefined;
+  }
+
   const current = session.thinkingLevel ?? "";
+  const options = levels.map((level) => ({
+    label: current === level ? `${level}  (current)` : level,
+    value: level,
+  }));
 
-  const opts: CommandOption[] = [];
-  for (const level of levels) {
-    const isCurrent = current === level;
-    opts.push({
-      label: isCurrent ? `${level}  (current)` : level,
-      value: level,
-    });
-  }
-  return opts;
-}
+  const choice = await ctx.promptSelect({
+    message: "Select thinking level",
+    options,
+  });
+  if (!choice) return undefined;
 
-async function cmdThinking(ctx: CommandContext, args: string): Promise<void> {
-  const session = ctx.session;
-  const model = session.currentModelName;
-  const displayModel = currentSessionModelDisplayName(session);
-  const levels = getThinkingLevels(model);
-  const trimmed = args.trim().toLowerCase();
-
-  if (!trimmed) {
-    // No arg: show info (fallback for non-overlay usage)
-    const current = session.thinkingLevel;
-    if (!levels.length) {
-      ctx.showMessage(`Model '${displayModel}' does not support configurable thinking levels.`);
-    } else {
-      ctx.showMessage(
-        `Thinking level: ${current}\n` +
-        `Available levels for ${displayModel}: ${levels.join(", ")}`,
-      );
-    }
-    return;
-  }
-
-  if (levels.length && !levels.includes(trimmed)) {
-    ctx.showMessage(
-      `Invalid level '${trimmed}' for ${displayModel}.\n` +
-      `Available: ${levels.join(", ")}`,
-    );
-    return;
-  }
-
-  session.thinkingLevel = trimmed;
-  persistGlobalPreferences(ctx);
-  ctx.showMessage(`Thinking level set to: ${trimmed}`);
+  session.thinkingLevel = choice;
+  return choice;
 }
 
 
@@ -536,7 +557,143 @@ export function resolveModelSelection(
  * - Three-level via vendor prefix: openrouter → vendor → model
  */
 function modelOptions(ctx: CommandOptionsContext): CommandOption[] {
-  return toCommandPickerOptions(buildModelPickerTree({ session: ctx.session })) as CommandOption[];
+  return modelOptionsWithTree(ctx);
+}
+
+/**
+ * Flatten the hierarchical model picker tree to leaf-only options.
+ * Used when the UI doesn't support drill-down children.
+ */
+function flatModelOptions(ctx: CommandOptionsContext): CommandOption[] {
+  return flatModelOptionsWithTree(ctx);
+}
+
+type ModelPickerOverrides = Omit<ModelPickerTreeContext, "session">;
+
+function modelOptionsWithTree(
+  ctx: CommandOptionsContext,
+  overrides?: ModelPickerOverrides,
+): CommandOption[] {
+  return toCommandPickerOptions(buildModelPickerTree({
+    session: ctx.session,
+    ...overrides,
+  })) as CommandOption[];
+}
+
+function flatModelOptionsWithTree(
+  ctx: CommandOptionsContext,
+  overrides?: ModelPickerOverrides,
+): CommandOption[] {
+  const tree = buildModelPickerTree({
+    session: ctx.session,
+    ...overrides,
+  });
+  const flat: CommandOption[] = [];
+  function walk(nodes: Array<{ label: string; value: string; children?: any[] }>) {
+    for (const node of nodes) {
+      if (node.children && node.children.length > 0) {
+        walk(node.children);
+      } else {
+        flat.push({ label: node.label, value: node.value });
+      }
+    }
+  }
+  walk(toCommandPickerOptions(tree));
+  return flat;
+}
+
+async function ensureModelSelectionReady(
+  ctx: CommandContext,
+  target: string,
+): Promise<ResolvedModelSelection | undefined> {
+  const parsedTarget = parseProviderModelTarget(target);
+
+  if (parsedTarget?.provider === "openai-codex") {
+    const existingToken = readOAuthAccessToken();
+    const needsLogin = !hasOAuthTokens()
+      || (existingToken && isTokenExpiring(existingToken));
+    if (needsLogin && ctx.requestOAuthLogin) {
+      const tokens = await ctx.requestOAuthLogin("codex");
+      if (!tokens) return undefined;
+    } else if (needsLogin) {
+      throw new Error(
+        "OpenAI OAuth token is missing or expired.\n" +
+        "Run 'vigil oauth' to log in.",
+      );
+    }
+  }
+
+  if (parsedTarget?.provider === "copilot" && !hasGitHubTokens()) {
+    if (ctx.requestOAuthLogin) {
+      const tokens = await ctx.requestOAuthLogin("copilot");
+      if (!tokens) return undefined;
+    } else {
+      throw new Error(
+        "Not logged in to GitHub Copilot.\n" +
+        "Run 'vigil oauth' to log in.",
+      );
+    }
+  }
+
+  try {
+    return resolveModelSelection(ctx.session, target);
+  } catch (err) {
+    const adapter = createCommandPromptAdapter(ctx);
+    if (parsedTarget && isManagedProvider(parsedTarget.provider) && adapter) {
+      const result = await ensureManagedProviderCredential(
+        parsedTarget.provider,
+        adapter,
+        { mode: "model", allowReplaceExisting: false },
+      );
+      if (result.status === "skipped") return undefined;
+      return resolveModelSelection(ctx.session, target);
+    }
+    throw err;
+  }
+}
+
+async function pickResolvedModelSelection(
+  ctx: CommandContext,
+  opts?: {
+    initialTarget?: string;
+    treeOverrides?: ModelPickerOverrides;
+    flatMessage?: string;
+  },
+): Promise<ResolvedModelSelection | undefined> {
+  let target = opts?.initialTarget?.trim() ?? "";
+
+  while (true) {
+    if (!target) {
+      if (ctx.promptCommandPicker) {
+        target = (await ctx.promptCommandPicker(
+          modelOptionsWithTree({ session: ctx.session, store: ctx.store }, opts?.treeOverrides),
+        )) ?? "";
+      } else if (ctx.promptSelect) {
+        const choice = await ctx.promptSelect({
+          message: opts?.flatMessage ?? "Select model",
+          options: flatModelOptionsWithTree({ session: ctx.session, store: ctx.store }, opts?.treeOverrides),
+        });
+        target = choice ?? "";
+      } else {
+        throw new Error("Interactive model selection is not available in this UI.");
+      }
+      if (!target) return undefined;
+    }
+
+    if (target === "__add_provider__") {
+      await cmdAddProvider(ctx);
+      target = "";
+      continue;
+    }
+
+    if (target.endsWith(":__discover__")) {
+      await cmdModelLocalDiscover(ctx, target.split(":")[0]);
+      target = "";
+      continue;
+    }
+
+    return ensureModelSelectionReady(ctx, target);
+  }
 }
 
 /**
@@ -565,76 +722,13 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
 
   try {
     const { target } = parseModelArgs(trimmed);
-
-    // ── Local provider discovery: "ollama:__discover__" ──
-    if (target.endsWith(":__discover__")) {
-      await cmdModelLocalDiscover(ctx, target.split(":")[0]);
+    const resolvedSelection = await pickResolvedModelSelection(ctx, {
+      initialTarget: target,
+      flatMessage: "Select model",
+    });
+    if (!resolvedSelection) {
+      ctx.showMessage("Model switch cancelled.");
       return;
-    }
-
-    // ── Codex OAuth check: ensure valid token before resolving ──
-    const parsedForCodex = parseProviderModelTarget(target);
-    if (parsedForCodex?.provider === "openai-codex") {
-      const existingToken = readOAuthAccessToken();
-      const needsLogin = !hasOAuthTokens()
-        || (existingToken && isTokenExpiring(existingToken));
-      if (needsLogin && ctx.requestOAuthLogin) {
-        const tokens = await ctx.requestOAuthLogin("codex");
-        if (!tokens) {
-          ctx.showMessage("Model switch cancelled.");
-          return;
-        }
-      } else if (needsLogin) {
-        ctx.showMessage(
-          "OpenAI OAuth token is missing or expired.\n" +
-          "Run 'vigil oauth' to log in.",
-        );
-        return;
-      }
-    }
-
-    // ── Copilot OAuth check: ensure GitHub token exists before resolving ──
-    // The GitHub App user token is non-expiring, so we only need to check
-    // presence — never expiry. If the token is revoked server-side, the first
-    // Copilot API call surfaces a 401 and we prompt re-login from there.
-    if (parsedForCodex?.provider === "copilot") {
-      if (!hasGitHubTokens()) {
-        if (ctx.requestOAuthLogin) {
-          const tokens = await ctx.requestOAuthLogin("copilot");
-          if (!tokens) {
-            ctx.showMessage("Model switch cancelled.");
-            return;
-          }
-        } else {
-          ctx.showMessage(
-            "Not logged in to GitHub Copilot.\n" +
-            "Run 'vigil oauth' to log in.",
-          );
-          return;
-        }
-      }
-    }
-
-    let resolvedSelection;
-    try {
-      resolvedSelection = resolveModelSelection(session, target);
-    } catch (err) {
-      const parsed = parseProviderModelTarget(target);
-      const adapter = createCommandPromptAdapter(ctx);
-      if (parsed && isManagedProvider(parsed.provider) && adapter) {
-        const result = await ensureManagedProviderCredential(
-          parsed.provider,
-          adapter,
-          { mode: "model", allowReplaceExisting: false },
-        );
-        if (result.status === "skipped") {
-          ctx.showMessage("Model switch cancelled.");
-          return;
-        }
-        resolvedSelection = resolveModelSelection(session, target);
-      } else {
-        throw err;
-      }
     }
     const { selectedConfigName, selectedHint } = resolvedSelection;
 
@@ -654,7 +748,10 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
       modelId: resolvedSelection.modelId,
     });
     await session.resetForNewSession(ctx.store);
-    persistGlobalPreferences(ctx);
+
+    // Prompt for thinking level if the new model supports it
+    await promptThinkingLevel(ctx);
+    persistModelSelection(ctx);
 
     void selectedHint;
   } catch (e) {
@@ -771,18 +868,20 @@ async function cmdModelLocalDiscover(ctx: CommandContext, providerId: string): P
     supports_web_search: false,
   });
 
-  // Persist localProvider config so it survives restarts
-  if (ctx.store && typeof ctx.store.loadGlobalPreferences === "function") {
-    const existing = ctx.store.loadGlobalPreferences();
-    const localCfg: LocalProviderConfig = { baseUrl, model: modelChoice, contextLength };
-    if (apiKey !== "local") localCfg.apiKey = apiKey;
-    const localProviders: Record<string, LocalProviderConfig> = {
-      ...(existing?.localProviders ?? {}),
-      [providerId]: localCfg,
+  // Persist local provider config to settings.json so it survives restarts
+  {
+    const existing = loadGlobalSettings();
+    const providerEntry: ProviderEntry = {
+      base_url: baseUrl,
+      model: modelChoice,
+      context_length: contextLength,
     };
-    ctx.store.saveGlobalPreferences({
-      ...existing,
-      localProviders,
+    if (apiKey !== "local") providerEntry.api_key = apiKey;
+    persistSettingsPatch({
+      providers: {
+        ...(existing.providers ?? {}),
+        [providerId]: providerEntry,
+      },
     });
   }
 
@@ -801,8 +900,216 @@ async function cmdModelLocalDiscover(ctx: CommandContext, providerId: string): P
     modelId: modelChoice,
   });
   await session.resetForNewSession(ctx.store);
-  persistGlobalPreferences(ctx);
 
+  // Prompt for thinking level if the new model supports it
+  await promptThinkingLevel(ctx);
+  persistModelSelection(ctx);
+
+}
+
+/**
+ * "Add provider..." sub-flow for /model and /tier pickers.
+ * Prompts user to select a provider type, configure credentials,
+ * and registers the provider in settings.json + runtime config.
+ * Returns true if a provider was successfully added.
+ */
+async function cmdAddProvider(ctx: CommandContext): Promise<boolean> {
+  if (!ctx.promptSelect) {
+    ctx.showMessage("Interactive provider setup is not available in this UI.");
+    return false;
+  }
+  const session = ctx.session;
+  const config = session.config;
+
+  // Build list of provider types the user can add
+  const seen = new Set<string>();
+  const options: Array<{ label: string; value: string }> = [];
+
+  for (const preset of PROVIDER_PRESETS) {
+    // For grouped providers, show group label once
+    const groupKey = preset.group ?? preset.id;
+    if (seen.has(groupKey)) continue;
+    seen.add(groupKey);
+
+    const label = preset.group && preset.groupLabel
+      ? preset.groupLabel
+      : preset.name;
+
+    // Skip if already configured (has models in config)
+    const alreadyHasModels = config.modelNames.some((n: string) => {
+      if (preset.group) {
+        return PROVIDER_PRESETS
+          .filter((p) => p.group === preset.group)
+          .some((p) => n.startsWith(p.id + ":"));
+      }
+      return n.startsWith(preset.id + ":");
+    });
+    const suffix = alreadyHasModels ? "  (configured)" : "";
+
+    options.push({ label: `${label}${suffix}`, value: preset.id });
+  }
+
+  const providerId = await ctx.promptSelect({
+    message: "Select provider to add",
+    options,
+  });
+  if (!providerId) return false;
+
+  const preset = findProviderPreset(providerId);
+  if (!preset) return false;
+
+  // ── OAuth providers ──
+  if (preset.id === "openai-codex") {
+    if (!ctx.requestOAuthLogin) {
+      ctx.showMessage("OAuth login is not available in this UI.");
+      return false;
+    }
+    const tokens = await ctx.requestOAuthLogin("codex");
+    if (!tokens) return false;
+    // Register models in config
+    const existing = loadGlobalSettings();
+    persistSettingsPatch({
+      providers: {
+        ...(existing.providers ?? {}),
+        [preset.id]: { api_key_env: "_OPENAI_CODEX_OAUTH" },
+      },
+    });
+    // Register preset models in runtime config
+    for (const model of preset.models) {
+      config.upsertModelRaw(`${preset.id}:${model.key}`, {
+        provider: preset.id,
+        model: model.id,
+        api_key: "oauth:openai-codex",
+        ...(model.config ?? {}),
+      });
+    }
+    return true;
+  }
+
+  if (preset.id === "copilot") {
+    if (!ctx.requestOAuthLogin) {
+      ctx.showMessage("OAuth login is not available in this UI.");
+      return false;
+    }
+    const tokens = await ctx.requestOAuthLogin("copilot");
+    if (!tokens) return false;
+    const existing = loadGlobalSettings();
+    persistSettingsPatch({
+      providers: {
+        ...(existing.providers ?? {}),
+        [preset.id]: { api_key_env: "_COPILOT_OAUTH" },
+      },
+    });
+    for (const model of preset.models) {
+      config.upsertModelRaw(`${preset.id}:${model.key}`, {
+        provider: preset.id,
+        model: model.id,
+        api_key: "oauth:copilot",
+        ...(model.config ?? {}),
+      });
+    }
+    return true;
+  }
+
+  // ── Local servers ──
+  if (preset.localServer) {
+    await cmdModelLocalDiscover(ctx, preset.id);
+    return config.modelNames.some((n: string) => n.startsWith(preset.id + ":"));
+  }
+
+  // ── Managed providers (Kimi/GLM/MiniMax) ──
+  if (isManagedProvider(providerId)) {
+    // For grouped providers, let user select the specific endpoint
+    const groupMembers = PROVIDER_PRESETS.filter((p) => (p.group ?? p.id) === (preset.group ?? preset.id));
+    let targetPreset = preset;
+    if (groupMembers.length > 1 && ctx.promptSelect) {
+      const subChoice = await ctx.promptSelect({
+        message: `${preset.groupLabel ?? preset.name}: Select endpoint`,
+        options: groupMembers.map((p) => ({
+          label: p.subLabel ?? p.name,
+          value: p.id,
+        })),
+      });
+      if (!subChoice) return false;
+      targetPreset = findProviderPreset(subChoice) ?? preset;
+    }
+
+    if (!ctx.promptSecret) return false;
+    const adapter: CredentialPromptAdapter = {
+      select: (req) => ctx.promptSelect!(req),
+      secret: (req) => ctx.promptSecret!(req),
+    };
+    const result = await ensureManagedProviderCredential(targetPreset.id, adapter, { mode: "model" });
+    if (!result) return false;
+
+    // Register preset models in runtime config
+    for (const model of targetPreset.models) {
+      config.upsertModelRaw(`${targetPreset.id}:${model.key}`, {
+        provider: targetPreset.id,
+        model: model.id,
+        api_key: `\${${result.envVar}}`,
+        ...(model.config ?? {}),
+      });
+    }
+    return true;
+  }
+
+  // ── Standard API key providers ──
+  if (!ctx.promptSecret) {
+    ctx.showMessage("API key input is not available in this UI.");
+    return false;
+  }
+
+  const envVarName = preset.envVar;
+  const existingKey = process.env[envVarName];
+
+  let apiKey: string | undefined;
+  if (existingKey) {
+    const action = await ctx.promptSelect({
+      message: `${preset.name}: API key found in $${envVarName}`,
+      options: [
+        { label: `Use existing key`, value: "use" },
+        { label: "Enter a different key", value: "new" },
+      ],
+    });
+    if (!action) return false;
+    if (action === "use") {
+      apiKey = existingKey;
+    } else {
+      const input = await ctx.promptSecret({ message: `${preset.name}: Paste API key` });
+      if (!input?.trim()) return false;
+      apiKey = input.trim();
+    }
+  } else {
+    const input = await ctx.promptSecret({ message: `${preset.name}: Paste API key` });
+    if (!input?.trim()) return false;
+    apiKey = input.trim();
+  }
+
+  // Save key to .env
+  setDotenvKey(envVarName, apiKey);
+  process.env[envVarName] = apiKey;
+
+  // Register in settings.json
+  const existing = loadGlobalSettings();
+  persistSettingsPatch({
+    providers: {
+      ...(existing.providers ?? {}),
+      [preset.id]: { api_key_env: envVarName },
+    },
+  });
+
+  // Register preset models in runtime config
+  for (const model of preset.models) {
+    config.upsertModelRaw(`${preset.id}:${model.key}`, {
+      provider: preset.id,
+      model: model.id,
+      api_key: `\${${envVarName}}`,
+      ...(model.config ?? {}),
+    });
+  }
+
+  return true;
 }
 
 // ------------------------------------------------------------------
@@ -845,7 +1152,7 @@ async function cmdTheme(ctx: CommandContext, args: string): Promise<void> {
 
   setAccent(color);
   ctx.session.accentColor = color;
-  persistGlobalPreferences(ctx);
+  persistSettingsPatch({ accent_color: color });
 
   const label = preset ? `${preset.label} (${color})` : color;
   ctx.showMessage(`Accent color set to: ${label}`);
@@ -1017,6 +1324,179 @@ async function cmdCopilot(ctx: CommandContext, args: string): Promise<void> {
 }
 
 // ------------------------------------------------------------------
+// /tier command — configure sub-agent model tiers
+// ------------------------------------------------------------------
+
+function describeTierModel(session: any, entry: ModelTierEntry): string {
+  const configName =
+    typeof session?.config?.findModelConfigName === "function"
+      ? session.config.findModelConfigName(entry.provider, entry.model_id)
+      : undefined;
+  const desc = describeModel({
+    providerId: entry.provider,
+    selectionKey: entry.selection_key,
+    modelId: entry.model_id,
+    configName: configName ?? `${entry.provider}:${entry.selection_key}`,
+  });
+  return desc.scopedDetailedLabel || `${entry.provider}:${entry.selection_key}`;
+}
+
+function tierOptions(ctx: CommandOptionsContext): CommandOption[] {
+  const tiers = ctx.session?.config?.modelTiers ?? {};
+  const levels: Array<"high" | "medium" | "low"> = ["high", "medium", "low"];
+  const opts: CommandOption[] = [];
+
+  for (const level of levels) {
+    const entry = tiers[level];
+    if (entry) {
+      const label = describeTierModel(ctx.session, entry);
+      const thinkingSuffix = entry.thinking_level ? ` [${entry.thinking_level}]` : "";
+      opts.push({
+        label: `${level}: ${label}${thinkingSuffix}`,
+        value: level,
+      });
+    } else {
+      opts.push({
+        label: `${level}: (inherits main model)`,
+        value: level,
+      });
+    }
+  }
+
+  opts.push({ label: "Clear all tiers", value: "clear" });
+  return opts;
+}
+
+async function cmdTier(ctx: CommandContext, args: string): Promise<void> {
+  const session = ctx.session;
+  const tiers: { high?: ModelTierEntry; medium?: ModelTierEntry; low?: ModelTierEntry } =
+    session.config?.modelTiers ?? {};
+  const trimmed = args.trim().toLowerCase();
+
+  if (!trimmed) {
+    // No arg — show current tiers
+    const levels: Array<"high" | "medium" | "low"> = ["high", "medium", "low"];
+    const lines = ["Model tiers:"];
+    for (const level of levels) {
+      const entry = tiers[level];
+      if (entry) {
+        const label = describeTierModel(session, entry);
+        const thinkingSuffix = entry.thinking_level ? ` [${entry.thinking_level}]` : "";
+        lines.push(`  ${level}: ${label}${thinkingSuffix}`);
+      } else {
+        lines.push(`  ${level}: (inherits main model)`);
+      }
+    }
+    lines.push("");
+    lines.push("Use /tier to configure a tier.");
+    ctx.showMessage(lines.join("\n"));
+    return;
+  }
+
+  // Handle "clear" — remove all tiers
+  if (trimmed === "clear") {
+    persistSettingsPatch({ model_tiers: {} });
+    // Update runtime config
+    if (session.config?._modelTiers !== undefined) {
+      (session.config as any)._modelTiers = {};
+    }
+    ctx.showMessage("All model tiers cleared. Sub-agents will inherit the main model.");
+    return;
+  }
+
+  // Handle tier level selection
+  const validLevels: Array<"high" | "medium" | "low"> = ["high", "medium", "low"];
+  if (!validLevels.includes(trimmed as any)) {
+    ctx.showMessage(`Invalid tier: "${trimmed}". Use high, medium, low, or clear.`);
+    return;
+  }
+  const level = trimmed as "high" | "medium" | "low";
+
+  // Prompt for action: assign model or clear this tier
+  if (!ctx.promptSelect) {
+    ctx.showMessage("Interactive tier configuration is not available in this UI.");
+    return;
+  }
+
+  const currentEntry = tiers[level];
+  const actionOptions: CommandOption[] = [
+    { label: "Assign model...", value: "assign" },
+  ];
+  if (currentEntry) {
+    actionOptions.push({ label: "Clear this tier", value: "clear_one" });
+  }
+
+  const action = await ctx.promptSelect({
+    message: `${level} tier`,
+    options: actionOptions,
+  });
+  if (!action) return;
+
+  if (action === "clear_one") {
+    const updatedTiers = { ...tiers };
+    delete updatedTiers[level];
+    persistSettingsPatch({ model_tiers: updatedTiers });
+    if (session.config?._modelTiers !== undefined) {
+      (session.config as any)._modelTiers = updatedTiers;
+    }
+    ctx.showMessage(`Tier '${level}' cleared. Sub-agents at this level will inherit the main model.`);
+    return;
+  }
+
+  const resolvedSelection = await pickResolvedModelSelection(ctx, {
+    flatMessage: `Select model for ${level} tier`,
+  });
+  if (!resolvedSelection) {
+    ctx.showMessage(`Tier '${level}' configuration cancelled.`);
+    return;
+  }
+  const selectedConfigName = resolvedSelection.selectedConfigName;
+
+  // Get the resolved model's actual model ID for thinking level check
+  let resolvedModelId: string;
+  try {
+    const mc = session.config.getModel(selectedConfigName);
+    resolvedModelId = mc.model;
+  } catch {
+    resolvedModelId = selectedConfigName;
+  }
+
+  // Determine thinking level for the chosen model
+  const levels = getThinkingLevels(resolvedModelId);
+  let thinkingLevel: string | undefined;
+
+  if (levels.length > 0) {
+    const thinkingChoice = await ctx.promptSelect({
+      message: `Thinking level for ${level} tier`,
+      options: levels.map((l) => ({ label: l, value: l })),
+    });
+    if (thinkingChoice) {
+      thinkingLevel = thinkingChoice;
+    }
+  }
+
+  // Build the tier entry
+  const tierEntry = createModelTierEntry({
+    provider: resolvedSelection.modelProvider,
+    selectionKey: resolvedSelection.modelSelectionKey,
+    modelId: resolvedSelection.modelId,
+  }, thinkingLevel);
+
+  // Persist
+  const updatedTiers = { ...tiers, [level]: tierEntry };
+  persistSettingsPatch({ model_tiers: updatedTiers });
+
+  // Update runtime config
+  if (session.config?._modelTiers !== undefined) {
+    (session.config as any)._modelTiers = updatedTiers;
+  }
+
+  const displayLabel = describeTierModel(session, tierEntry);
+  const thinkingSuffix = thinkingLevel ? ` [${thinkingLevel}]` : "";
+  ctx.showMessage(`Tier '${level}' set to: ${displayLabel}${thinkingSuffix}`);
+}
+
+// ------------------------------------------------------------------
 // Registry builder
 // ------------------------------------------------------------------
 
@@ -1031,8 +1511,8 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/sessions", description: "Resume a previous session", handler: cmdResume, options: resumeOptions, aliases: ["/resume"] });
   registry.register({ name: "/summarize", description: "Manually summarize older context", handler: cmdSummarize });
   registry.register({ name: "/model", description: "Switch model", handler: cmdModel, options: modelOptions });
+  registry.register({ name: "/tier", description: "Configure sub-agent model tiers", handler: cmdTier, options: tierOptions });
   registry.register({ name: "/quit", description: "Exit the application", handler: cmdQuit, aliases: ["/exit"] });
-  registry.register({ name: "/thinking", description: "Set thinking level", handler: cmdThinking, options: thinkingOptions });
   registry.register({ name: "/skills", description: "Manage installed skills", handler: cmdSkills, options: skillsOptions, checkboxMode: true });
   registry.register({ name: "/mcp", description: "Show MCP server status and tools", handler: cmdMcp });
   registry.register({ name: "/rename", description: "Rename current session", handler: cmdRename });
@@ -1161,7 +1641,11 @@ async function cmdSkills(ctx: CommandContext, args: string): Promise<void> {
   const enabledCount = enabledNames.size;
   const totalCount = allSkills.length;
   ctx.showMessage(`Skills updated: ${enabledCount}/${totalCount} enabled.`);
-  persistGlobalPreferences(ctx);
+  // Persist disabled skills list to settings.json
+  const disabledSkills = allSkills
+    .filter((s: { name: string }) => !enabledNames.has(s.name))
+    .map((s: { name: string }) => s.name);
+  persistSettingsPatch({ disabled_skills: disabledSkills.length > 0 ? disabledSkills : undefined });
 }
 
 // ------------------------------------------------------------------

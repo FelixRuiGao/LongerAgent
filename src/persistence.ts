@@ -30,12 +30,17 @@ import { basename, dirname, join } from "node:path";
 import { getVigilHomeDir } from "./home-path.js";
 import { LogIdAllocator, type LogEntry, type LogEntryType, type TuiDisplayKind } from "./log-entry.js";
 import type { ChildSessionMetaRecord } from "./session-tree-types.js";
+import { parseJsonc } from "./jsonc.js";
+import type { MCPServerConfig } from "./config.js";
 
 // ------------------------------------------------------------------
 // Constants
 // ------------------------------------------------------------------
 
 const GLOBAL_TUI_PREFERENCES_FILE = "tui-preferences.json";
+const SETTINGS_FILE = "settings.json";
+const STATE_DIR = "state";
+const MODEL_SELECTION_FILE = "model-selection.json";
 
 // ------------------------------------------------------------------
 // Helpers
@@ -539,7 +544,7 @@ export interface LogSessionMeta {
   thinkingLevel: string;
   childSessions?: ChildSessionMetaRecord[];
   /** Root session's frozen inbox (persisted on close for snapshot/restore). */
-  inbox?: import("./session-tree-types.js").AgentMessage[];
+  inbox?: import("./session-tree-types.js").MessageEnvelope[];
 }
 
 /** Local inference server config (oMLX, LM Studio, etc.) */
@@ -550,6 +555,95 @@ export interface LocalProviderConfig {
   /** API key for servers that require authentication (e.g. oMLX). Defaults to "local" if omitted. */
   apiKey?: string;
 }
+
+// ------------------------------------------------------------------
+// New settings types (replaces GlobalTuiPreferences)
+// ------------------------------------------------------------------
+
+/** A single sub-agent model tier entry: stable model identity + optional thinking level. */
+export interface ModelTierEntry {
+  provider: string;
+  selection_key: string;
+  model_id: string;
+  thinking_level?: string;
+}
+
+/** Per-template model pin: locks a specific agent template to a fixed model. */
+export type AgentModelEntry = ModelTierEntry;
+
+/** User-editable settings. Lives in settings.json (JSONC). */
+export interface VigilSettings {
+  // -- Model --
+  /** Declarative default model. Overrides state/model-selection.json. */
+  default_model?: string;
+  /** Sub-agent model tiers. Each level maps to a model + optional thinking level. */
+  model_tiers?: {
+    high?: ModelTierEntry;
+    medium?: ModelTierEntry;
+    low?: ModelTierEntry;
+  };
+  /** Default thinking level for the main agent. */
+  thinking_level?: string;
+  /** Context window multiplier (0.0–1.0). */
+  context_ratio?: number;
+
+  // -- Providers (global only, not overridden by local settings) --
+  /** Cloud provider → env var name, or local provider → full config. */
+  providers?: Record<string, ProviderEntry>;
+
+  // -- Display --
+  accent_color?: string;
+
+  // -- Skills --
+  disabled_skills?: string[];
+
+  // -- Agent Models (per-template model pins, global + local merge) --
+  agent_models?: Record<string, AgentModelEntry>;
+
+  // -- MCP Servers (global + local merge) --
+  mcp_servers?: Record<string, MCPServerSettingsEntry>;
+}
+
+/**
+ * A provider entry in settings.json.
+ * Cloud providers have `api_key_env`; local providers have `base_url` + `model`.
+ */
+export interface ProviderEntry {
+  /** Environment variable name holding the API key (cloud providers). */
+  api_key_env?: string;
+  /** Base URL (local providers / custom endpoints). */
+  base_url?: string;
+  /** Model identifier (local providers). */
+  model?: string;
+  /** Context window size (local providers). */
+  context_length?: number;
+  /** Optional API key for local servers that need auth. */
+  api_key?: string;
+}
+
+/** MCP server entry in settings.json. Same shape as the old mcp.json values. */
+export interface MCPServerSettingsEntry {
+  transport?: "stdio" | "sse";
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  env_allowlist?: string[];
+  sensitive_tools?: string[];
+}
+
+/** System-managed model selection state. Lives in state/model-selection.json. */
+export interface ModelSelectionState {
+  config_name?: string;
+  provider?: string;
+  selection_key?: string;
+  model_id?: string;
+  thinking_level?: string;
+}
+
+// ------------------------------------------------------------------
+// Old preferences type (kept temporarily during migration)
+// ------------------------------------------------------------------
 
 export interface GlobalTuiPreferences {
   version: number;
@@ -845,6 +939,7 @@ export function validateAndRepairLog(
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     if (entry.type !== "tool_call" || entry.discarded) continue;
+    if (entry.apiRole !== "assistant") continue;
 
     const toolCallId = entry.meta.toolCallId as string;
     // Check if there's a matching tool_result
@@ -860,14 +955,10 @@ export function validateAndRepairLog(
       const isNearEnd = entries.length - i <= 5;
       if (isNearEnd) {
         const execState = entry.meta.toolExecState as string | undefined;
-        const streamState = entry.meta.toolStreamState as string | undefined;
-        const repairedFromPartial = entry.meta.repairedFromPartial === true;
         const recoveredContent =
           execState === "running"
             ? "Session recovered. Tool execution was interrupted and may have caused partial or unknown real-world effects."
-            : repairedFromPartial || streamState === "partial" || streamState === "partial_closed"
-              ? "Session recovered. Tool call was interrupted before execution. Arguments were repaired from a partial stream and the tool was not executed."
-              : "Session recovered. Tool result unavailable due to abnormal termination.";
+            : "Session recovered. Tool result unavailable due to abnormal termination.";
         // Add a recovered tool_result (we need an ID — use a predictable format)
         const recoveredId = `tr-recovered-${toolCallId}`;
         const recoveredEntry: LogEntry = {
@@ -1156,4 +1247,194 @@ export function fixStorage(baseDir?: string): FixStorageResult {
   }
 
   return result;
+}
+
+// ------------------------------------------------------------------
+// New settings API
+// ------------------------------------------------------------------
+
+/** Load global settings from ~/.vigil/settings.json (JSONC). */
+export function loadGlobalSettings(homeDir?: string): VigilSettings {
+  const dir = homeDir ?? getVigilHomeDir();
+  const path = join(dir, SETTINGS_FILE);
+  if (!existsSync(path)) return {};
+  try {
+    const text = readFileSync(path, "utf-8");
+    return parseJsonc<VigilSettings>(text) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** Load project-local settings from {projectPath}/.vigil/settings.json (JSONC). */
+export function loadLocalSettings(projectPath: string): VigilSettings {
+  const path = join(projectPath, ".vigil", SETTINGS_FILE);
+  if (!existsSync(path)) return {};
+  try {
+    const text = readFileSync(path, "utf-8");
+    return parseJsonc<VigilSettings>(text) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Merge global + local settings.
+ *
+ * Rules:
+ * - Scalars: local overrides global
+ * - Objects (model_tiers, mcp_servers): per-key merge (local keys override)
+ * - Arrays (disabled_skills): local replaces global
+ * - `providers`: global only — local value is ignored
+ */
+export function mergeSettings(global: VigilSettings, local: VigilSettings): VigilSettings {
+  const merged: VigilSettings = { ...global };
+
+  // Scalars — local overrides if present
+  if (local.default_model !== undefined) merged.default_model = local.default_model;
+  if (local.thinking_level !== undefined) merged.thinking_level = local.thinking_level;
+  if (local.context_ratio !== undefined) merged.context_ratio = local.context_ratio;
+  if (local.accent_color !== undefined) merged.accent_color = local.accent_color;
+
+  // Arrays — local replaces
+  if (local.disabled_skills !== undefined) merged.disabled_skills = local.disabled_skills;
+
+  // Objects — per-key merge
+  if (local.model_tiers) {
+    merged.model_tiers = { ...merged.model_tiers, ...local.model_tiers };
+  }
+  if (local.mcp_servers) {
+    merged.mcp_servers = { ...merged.mcp_servers, ...local.mcp_servers };
+  }
+  if (local.agent_models) {
+    merged.agent_models = { ...merged.agent_models, ...local.agent_models };
+  }
+
+  // providers: global only — do NOT merge local.providers
+  return merged;
+}
+
+/** Load model selection state from state/model-selection.json. */
+export function loadModelSelectionState(homeDir?: string): ModelSelectionState {
+  const dir = homeDir ?? getVigilHomeDir();
+  const path = join(dir, STATE_DIR, MODEL_SELECTION_FILE);
+  if (!existsSync(path)) return {};
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8"));
+    return {
+      config_name: raw.config_name ?? undefined,
+      provider: raw.provider ?? undefined,
+      selection_key: raw.selection_key ?? undefined,
+      model_id: raw.model_id ?? undefined,
+      thinking_level: raw.thinking_level ?? undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** Save model selection state to state/model-selection.json. Atomic write. */
+export function saveModelSelectionState(state: ModelSelectionState, homeDir?: string): void {
+  const dir = homeDir ?? getVigilHomeDir();
+  const stateDir = join(dir, STATE_DIR);
+  mkdirSync(stateDir, { recursive: true });
+  const file = join(stateDir, MODEL_SELECTION_FILE);
+  const tmp = file + ".tmp";
+  writeFileSync(tmp, JSON.stringify(state, null, 2));
+  renameSync(tmp, file);
+}
+
+/**
+ * Save settings.json (global or local). Atomic write.
+ * Only writes the fields that are defined — undefined fields are omitted.
+ */
+export function saveSettings(settings: VigilSettings, filePath: string): void {
+  const dir = dirname(filePath);
+  mkdirSync(dir, { recursive: true });
+  const tmp = filePath + ".tmp";
+  // Build a clean object without undefined values
+  const clean: Record<string, unknown> = {};
+  if (settings.default_model !== undefined) clean.default_model = settings.default_model;
+  if (settings.model_tiers !== undefined) clean.model_tiers = settings.model_tiers;
+  if (settings.thinking_level !== undefined) clean.thinking_level = settings.thinking_level;
+  if (settings.context_ratio !== undefined) clean.context_ratio = settings.context_ratio;
+  if (settings.providers !== undefined) clean.providers = settings.providers;
+  if (settings.accent_color !== undefined) clean.accent_color = settings.accent_color;
+  if (settings.disabled_skills !== undefined) clean.disabled_skills = settings.disabled_skills;
+  if (settings.mcp_servers !== undefined) clean.mcp_servers = settings.mcp_servers;
+  if (settings.agent_models !== undefined) clean.agent_models = settings.agent_models;
+  writeFileSync(tmp, JSON.stringify(clean, null, 2));
+  renameSync(tmp, filePath);
+}
+
+/** Get the global settings.json path. */
+export function globalSettingsPath(homeDir?: string): string {
+  return join(homeDir ?? getVigilHomeDir(), SETTINGS_FILE);
+}
+
+/** Get the project-local settings.json path. */
+export function localSettingsPath(projectPath: string): string {
+  return join(projectPath, ".vigil", SETTINGS_FILE);
+}
+
+/**
+ * Convert VigilSettings providers + mcp_servers into the formats
+ * expected by Config and MCPClientManager.
+ */
+export function settingsToConfigInputs(settings: VigilSettings): {
+  providerEnvVars: Record<string, string>;
+  localProviders: Record<string, LocalProviderConfig>;
+  mcpServers: MCPServerConfig[];
+} {
+  const providerEnvVars: Record<string, string> = {};
+  const localProviders: Record<string, LocalProviderConfig> = {};
+
+  if (settings.providers) {
+    for (const [id, entry] of Object.entries(settings.providers)) {
+      if (entry.api_key_env) {
+        // Cloud provider
+        providerEnvVars[id] = entry.api_key_env;
+      } else if (entry.base_url && entry.model) {
+        // Local provider
+        localProviders[id] = {
+          baseUrl: entry.base_url,
+          model: entry.model,
+          contextLength: entry.context_length ?? 128_000,
+          apiKey: entry.api_key,
+        };
+      }
+    }
+  }
+
+  const mcpServers: MCPServerConfig[] = [];
+  if (settings.mcp_servers) {
+    for (const [name, cfg] of Object.entries(settings.mcp_servers)) {
+      if (!cfg || typeof cfg !== "object") continue;
+      const env: Record<string, string> = {};
+      if (cfg.env) {
+        for (const [k, v] of Object.entries(cfg.env)) {
+          // Resolve ${ENV_VAR} references
+          if (typeof v === "string" && v.startsWith("${") && v.endsWith("}")) {
+            const envName = v.slice(2, -1);
+            const resolved = process.env[envName];
+            if (resolved !== undefined) env[k] = resolved;
+          } else {
+            env[k] = v;
+          }
+        }
+      }
+      mcpServers.push({
+        name,
+        transport: cfg.transport ?? "stdio",
+        command: cfg.command ?? "",
+        args: cfg.args ?? [],
+        url: cfg.url ?? "",
+        env,
+        envAllowlist: cfg.env_allowlist,
+        sensitiveTools: cfg.sensitive_tools,
+      });
+    }
+  }
+
+  return { providerEnvVars, localProviders, mcpServers };
 }

@@ -8,6 +8,7 @@ import {
 } from "./provider-presets.js";
 import { isManagedProvider } from "./managed-provider-credentials.js";
 import { describeModel } from "./model-presentation.js";
+import type { ModelTierEntry } from "./persistence.js";
 
 export type ModelEntryLike = {
   name: string;
@@ -29,6 +30,12 @@ export interface ResolvedModelSelection {
   selectedHint: string;
   modelProvider: string;
   modelSelectionKey: string;
+  modelId: string;
+}
+
+export interface StableModelIdentity {
+  provider: string;
+  selectionKey: string;
   modelId: string;
 }
 
@@ -139,6 +146,49 @@ export function runtimeModelName(provider: string, model: string): string {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
   return `runtime-${slug(provider)}-${slug(model)}`;
+}
+
+export function toStableModelIdentity(
+  selection: Pick<ResolvedModelSelection, "modelProvider" | "modelSelectionKey" | "modelId">,
+): StableModelIdentity {
+  return {
+    provider: selection.modelProvider,
+    selectionKey: selection.modelSelectionKey,
+    modelId: selection.modelId,
+  };
+}
+
+export function createModelTierEntry(
+  identity: StableModelIdentity,
+  thinkingLevel?: string,
+): ModelTierEntry {
+  const entry: ModelTierEntry = {
+    provider: identity.provider,
+    selection_key: identity.selectionKey,
+    model_id: identity.modelId,
+  };
+  if (thinkingLevel && thinkingLevel !== "off" && thinkingLevel !== "none") {
+    entry.thinking_level = thinkingLevel;
+  }
+  return entry;
+}
+
+export function resolveConfigNameForModelIdentity(
+  config: any,
+  identity: StableModelIdentity,
+): string | undefined {
+  const stableConfigName = `${identity.provider}:${identity.selectionKey}`;
+  const knownNames = new Set<string>((config?.modelNames as string[]) ?? []);
+  if (knownNames.has(stableConfigName)) {
+    return stableConfigName;
+  }
+
+  if (typeof config?.findModelConfigName === "function") {
+    return config.findModelConfigName(identity.provider, identity.modelId)
+      ?? config.findModelConfigName(identity.provider, identity.selectionKey);
+  }
+
+  return undefined;
 }
 
 export function resolveModelSelection(

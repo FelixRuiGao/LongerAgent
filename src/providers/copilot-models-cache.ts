@@ -55,7 +55,7 @@ interface CopilotModelsCacheData {
 // =============================================================================
 
 function cachePath(): string {
-  return join(getVigilHomeDir(), CACHE_FILENAME);
+  return join(getVigilHomeDir(), "state", CACHE_FILENAME);
 }
 
 function loadCacheFromDisk(): CopilotModelsCacheData | null {
@@ -78,7 +78,7 @@ function loadCacheFromDisk(): CopilotModelsCacheData | null {
 
 function saveCacheToDisk(data: CopilotModelsCacheData): void {
   try {
-    const dir = getVigilHomeDir();
+    const dir = join(getVigilHomeDir(), "state");
     mkdirSync(dir, { recursive: true });
     writeFileSync(cachePath(), JSON.stringify(data, null, 2) + "\n", {
       encoding: "utf-8",
