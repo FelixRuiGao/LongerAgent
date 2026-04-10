@@ -90,10 +90,10 @@ export interface OpenTuiScreenProps {
   inputRef: React.RefObject<TextareaRenderable | null>;
   phase: ActivityPhase;
   modelName: string;
+  thinkingSuffix: string;
   modelColor: string;
   turnElapsed: number;
   hint: string | null;
-  inputVisibleLines: number;
   composerTokenVisuals: ComposerTokenVisuals;
   keyBindings: readonly KeyBinding[];
   onSubmit: () => void;
@@ -175,10 +175,10 @@ export function OpenTuiScreen({
   inputRef,
   phase,
   modelName,
+  thinkingSuffix,
   modelColor,
   turnElapsed,
   hint,
-  inputVisibleLines,
   composerTokenVisuals,
   keyBindings,
   onSubmit,
@@ -243,6 +243,7 @@ export function OpenTuiScreen({
       selectedChildId={selectedChildId}
       phase={phase}
       modelName={modelName}
+      thinkingSuffix={thinkingSuffix}
       modelColor={modelColor}
       elapsed={turnElapsed}
       cwd={shortenPath(process.cwd())}
@@ -253,7 +254,6 @@ export function OpenTuiScreen({
       usageText={usageText ?? null}
       contentWidth={Math.max(20, conversationColumnWidth - effectiveSidebarWidth)}
       colors={theme.colors}
-      inputVisibleLines={inputVisibleLines}
       maxInputLines={theme.layout.inputMaxVisibleLines}
       composerTokenVisuals={composerTokenVisuals}
       keyBindings={keyBindings}

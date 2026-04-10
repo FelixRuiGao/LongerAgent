@@ -313,13 +313,20 @@ export class TextareaRenderable extends EditBufferRenderable {
     super.textColor = effectiveFg
   }
 
+  /** Mark layout dirty and schedule viewport clamp after content changes. */
+  private contentChanged(): void {
+    this.yogaNode.markDirty()
+    this._pendingViewportClamp = true
+    this.requestRender()
+  }
+
   public insertChar(char: string): void {
     if (this.hasSelection()) {
       this.deleteSelectedText()
     }
 
     this.editBuffer.insertChar(char)
-    this.requestRender()
+    this.contentChanged()
   }
 
   public insertText(text: string): void {
@@ -328,7 +335,7 @@ export class TextareaRenderable extends EditBufferRenderable {
     }
 
     this.editBuffer.insertText(text)
-    this.requestRender()
+    this.contentChanged()
   }
 
   public deleteChar(): boolean {
@@ -339,7 +346,7 @@ export class TextareaRenderable extends EditBufferRenderable {
 
     this._ctx.clearSelection()
     this.editBuffer.deleteChar()
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
@@ -351,7 +358,7 @@ export class TextareaRenderable extends EditBufferRenderable {
 
     this._ctx.clearSelection()
     this.editBuffer.deleteCharBackward()
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
@@ -359,20 +366,20 @@ export class TextareaRenderable extends EditBufferRenderable {
     this.editorView.deleteSelectedText()
 
     this._ctx.clearSelection()
-    this.requestRender()
+    this.contentChanged()
   }
 
   public newLine(): boolean {
     this._ctx.clearSelection()
     this.editBuffer.newLine()
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
   public deleteLine(): boolean {
     this._ctx.clearSelection()
     this.editBuffer.deleteLine()
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
@@ -403,8 +410,7 @@ export class TextareaRenderable extends EditBufferRenderable {
     // move cursor to the end of the selection
     if (!select && this.hasSelection()) {
       const selection = this.getSelection()!
-      const targetOffset = this.cursorOffset === selection.start ? selection.end - 1 : selection.end
-      this.editBuffer.setCursorByOffset(targetOffset)
+      this.editBuffer.setCursorByOffset(selection.end)
       this._ctx.clearSelection()
       this.requestRender()
       return true
@@ -530,7 +536,7 @@ export class TextareaRenderable extends EditBufferRenderable {
       this.editBuffer.deleteRange(cursor.row, cursor.col, eol.row, eol.col)
     }
 
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
@@ -567,21 +573,21 @@ export class TextareaRenderable extends EditBufferRenderable {
       this.editBuffer.deleteRange(cursor.row, 0, cursor.row, cursor.col)
     }
 
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
   public undo(): boolean {
     this._ctx.clearSelection()
     this.editBuffer.undo()
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
   public redo(): boolean {
     this._ctx.clearSelection()
     this.editBuffer.redo()
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
@@ -619,7 +625,7 @@ export class TextareaRenderable extends EditBufferRenderable {
     }
 
     this._ctx.clearSelection()
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 
@@ -637,7 +643,7 @@ export class TextareaRenderable extends EditBufferRenderable {
     }
 
     this._ctx.clearSelection()
-    this.requestRender()
+    this.contentChanged()
     return true
   }
 

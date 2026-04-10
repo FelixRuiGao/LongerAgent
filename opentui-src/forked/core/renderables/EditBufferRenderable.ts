@@ -65,6 +65,7 @@ export abstract class EditBufferRenderable extends Renderable implements LineInf
   private _keyboardSelectionActive: boolean = false
   private _pendingWheelDeltaX: number = 0
   private _pendingWheelDeltaY: number = 0
+  protected _pendingViewportClamp: boolean = false
 
   public readonly editBuffer: EditBuffer
   public readonly editorView: EditorView
@@ -556,6 +557,17 @@ export abstract class EditBufferRenderable extends Renderable implements LineInf
         this._autoScrollAccumulator -= direction * linesToScroll
       }
     }
+
+    // Clamp viewport after content deletions that reduce total virtual lines
+    if (this._pendingViewportClamp) {
+      this._pendingViewportClamp = false
+      const viewport = this.editorView.getViewport()
+      const totalVirtualLines = this.editorView.getTotalVirtualLineCount()
+      const maxOffsetY = Math.max(0, totalVirtualLines - viewport.height)
+      if (viewport.offsetY > maxOffsetY) {
+        this.editorView.setViewport(viewport.offsetX, maxOffsetY, viewport.width, viewport.height, true)
+      }
+    }
   }
 
   getSelectedText(): string {
@@ -640,9 +652,17 @@ export abstract class EditBufferRenderable extends Renderable implements LineInf
     const cursorX = this.x + visualCursor.visualCol + 1 // +1 for 1-based terminal coords
     const cursorY = this.y + visualCursor.visualRow + 1 // +1 for 1-based terminal coords
 
+    // Hide cursor if it's outside the textarea's own bounds
+    const cx = cursorX - 1
+    const cy = cursorY - 1
+    if (cx < this.x || cx >= this.x + this.width || cy < this.y || cy >= this.y + this.height) {
+      this._ctx.setCursorPosition(cursorX, cursorY, false)
+      return
+    }
+
     // Hide cursor if it's clipped by a scrollbox viewport (scissor rect).
     // Coordinates are 1-based for the terminal, but scissor rects are 0-based.
-    if (!buffer.isWithinScissorRect(cursorX - 1, cursorY - 1)) {
+    if (!buffer.isWithinScissorRect(cx, cy)) {
       this._ctx.setCursorPosition(cursorX, cursorY, false)
       return
     }

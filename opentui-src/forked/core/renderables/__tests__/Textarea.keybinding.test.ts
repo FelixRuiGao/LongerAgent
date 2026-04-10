@@ -1488,6 +1488,52 @@ describe("Textarea - Keybinding Tests", () => {
       expect(editor.logicalCursor.col).toBe(0)
     })
 
+    it("should collapse a selection to its end when pressing right", async () => {
+      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
+        initialValue: "ab",
+        width: 40,
+        height: 10,
+        selectable: true,
+      })
+
+      editor.focus()
+      editor.cursorOffset = 2
+
+      currentMockInput.pressArrow("left", { shift: true })
+      currentMockInput.pressArrow("left", { shift: true })
+      expect(editor.getSelectedText()).toBe("ab")
+
+      currentMockInput.pressArrow("right")
+      expect(editor.hasSelection()).toBe(false)
+      expect(editor.cursorOffset).toBe(2)
+
+      currentMockInput.pressKey("X")
+      expect(editor.plainText).toBe("abX")
+    })
+
+    it("should collapse a double-width selection to its end when pressing right", async () => {
+      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
+        initialValue: "🙂a",
+        width: 40,
+        height: 10,
+        selectable: true,
+      })
+
+      editor.focus()
+      editor.cursorOffset = Bun.stringWidth(editor.plainText)
+
+      currentMockInput.pressArrow("left", { shift: true })
+      currentMockInput.pressArrow("left", { shift: true })
+      expect(editor.getSelectedText()).toBe("🙂a")
+
+      currentMockInput.pressArrow("right")
+      expect(editor.hasSelection()).toBe(false)
+      expect(editor.cursorOffset).toBe(Bun.stringWidth("🙂a"))
+
+      currentMockInput.pressKey("X")
+      expect(editor.plainText).toBe("🙂aX")
+    })
+
     it("should handle complex keybinding scenario with multiple custom mappings", async () => {
       const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
         initialValue: "Line 1\nLine 2\nLine 3",

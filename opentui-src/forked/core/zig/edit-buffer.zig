@@ -385,13 +385,15 @@ pub const EditBuffer = struct {
         self.tb.markViewsDirty();
 
         if (self.cursors.items.len > 0) {
-            const new_line_count = self.tb.lineCount();
-            const clamped_row = if (start.row >= new_line_count) new_line_count -| 1 else start.row;
-            const line_width = if (new_line_count > 0) iter_mod.lineWidthAt(self.tb.rope(), clamped_row) else 0;
-            const clamped_col = @min(start.col, line_width);
-            const offset = iter_mod.coordsToOffset(self.tb.rope(), clamped_row, clamped_col) orelse 0;
-
-            self.cursors.items[0] = .{ .row = clamped_row, .col = clamped_col, .desired_col = clamped_col, .offset = offset };
+            // Use offset-based cursor positioning: start_offset was calculated
+            // before deletion and now points to the exact deletion boundary
+            // in the post-deletion rope. start_offset <= new_total is guaranteed
+            // (deletion removes content between start and end, preserving everything
+            // before start), so @min is a safety clamp only.
+            const new_total = self.tb.rope().totalWeight();
+            const safe_offset = @min(start_offset, new_total);
+            const coords = iter_mod.offsetToCoords(self.tb.rope(), safe_offset) orelse iter_mod.Coords{ .row = 0, .col = 0 };
+            self.cursors.items[0] = .{ .row = coords.row, .col = coords.col, .desired_col = coords.col, .offset = safe_offset };
         }
 
         self.events.emit(.cursorChanged);

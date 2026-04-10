@@ -90,6 +90,7 @@ import {
 import {
   buildFileReferenceLabel,
   createComposerTokenVisuals,
+  displayWidthWithNewlines,
   ensureComposerTokenType,
   findFileReferenceQuery,
   getComposerTokenSnapshots,
@@ -234,7 +235,6 @@ export function OpenTuiApp({
   const renderer = useRenderer();
   const terminal = useTerminalDimensions();
   const theme = themeProp ?? DEFAULT_DISPLAY_THEME;
-  const inputMaxVisibleLines = theme.layout.inputMaxVisibleLines;
   const [processing, _setProcessing] = useState(false);
   const processingRef = useRef(false);
   const setProcessing = useCallback((v: boolean) => {
@@ -356,7 +356,7 @@ export function OpenTuiApp({
   const [askInputValue, setAskInputValue] = useState("");
   const [optionNotes, setOptionNotes] = useState<Map<string, string>>(new Map());
   const [draftValue, setDraftValue] = useState("");
-  const [inputVisibleLines, setInputVisibleLines] = useState(1);
+  // inputVisibleLines removed — textarea self-drives height via Yoga measure
   const [commandOverlay, setCommandOverlay] = useState<CommandOverlayState>(EMPTY_COMMAND_OVERLAY);
   const [commandPicker, setCommandPicker] = useState<CommandPickerState | null>(null);
   const [checkboxPicker, setCheckboxPicker] = useState<CheckboxPickerState | null>(null);
@@ -383,6 +383,7 @@ export function OpenTuiApp({
   const composerTokenVisualsRef = useRef<ComposerTokenVisuals | null>(null);
   const promptSelectResolverRef = useRef<((value: string | undefined) => void) | null>(null);
   const promptSecretResolverRef = useRef<((value: string | undefined) => void) | null>(null);
+  const commandPickerResolverRef = useRef<((value: string | undefined) => void) | null>(null);
   const colors = theme.colors;
   const composerTokenColorsRef = useRef(colors);
   const markdownStyle = theme.markdownStyle;
@@ -768,8 +769,6 @@ export function OpenTuiApp({
 
   // Stable ref for the textarea's expected character width — used by syncComposerState
   // when getComputedWidth() returns 0 (layout not yet computed inside scrollbox).
-  const composerWidthRef = useRef(Math.max(20, terminal.width - (theme.spacing.screenPaddingX * 2) - 5));
-  composerWidthRef.current = Math.max(20, terminal.width - (theme.spacing.screenPaddingX * 2) - 5);
 
   const syncComposerState = useCallback(() => {
     const composer = inputRef.current;
@@ -789,34 +788,17 @@ export function OpenTuiApp({
     }
     const visibleValue = composer.plainText;
     const cursorOffset = composer.cursorOffset;
-    // Use Yoga-computed width when available; fall back to terminal-based estimate
-    // (getComputedWidth() returns 0 when layout hasn't run yet inside a scrollbox).
-    const yogaWidth = composer.getLayoutNode().getComputedWidth();
-    const computedWidth = yogaWidth > 10 ? yogaWidth : composerWidthRef.current;
-    const measured = composer.editorView.measureForDimensions(computedWidth, inputMaxVisibleLines);
-    // Text-based estimate as a ceiling — prevents stale native measurements
-    // from keeping the box inflated after deletions.
-    const textWidth = Math.max(1, computedWidth - 3);
-    let textBasedLines = 0;
-    for (const line of visibleValue.split("\n")) {
-      textBasedLines += Math.max(1, Math.ceil((line.length + 1) / textWidth));
-    }
-    const measuredLines = Math.min(
-      measured?.lineCount ?? textBasedLines,
-      textBasedLines + 2, // allow small margin for CJK double-width chars
-    );
     lastInputValueRef.current = visibleValue;
     setDraftValue(visibleValue);
-    setInputVisibleLines(Math.max(1, Math.min(inputMaxVisibleLines, measuredLines)));
     updateInputOverlayRef.current(visibleValue, cursorOffset);
-  }, [inputMaxVisibleLines]);
+  }, []);
 
   const setComposerText = useCallback((value: string, cursorToEnd = true) => {
     const composer = inputRef.current;
     if (!composer) return;
     composer.setText(value);
     if (cursorToEnd) {
-      composer.cursorOffset = Bun.stringWidth(value);
+      composer.cursorOffset = displayWidthWithNewlines(value);
     }
     syncComposerState();
   }, [syncComposerState]);
@@ -825,7 +807,7 @@ export function OpenTuiApp({
     pasteCounterRef.current.reset();
     lastInputValueRef.current = "";
     setDraftValue("");
-    setInputVisibleLines(1);
+
     setCommandOverlay(EMPTY_COMMAND_OVERLAY);
     setCommandPicker(null);
     setCheckboxPicker(null);
@@ -1345,9 +1327,22 @@ export function OpenTuiApp({
           });
         });
       },
+      promptCommandPicker: async (options: Array<{ label: string; value: string; children?: any[] }>) => {
+        resolvePromptSelect(undefined);
+        resolvePromptSecret(undefined);
+        return await new Promise<string | undefined>((resolve) => {
+          commandPickerResolverRef.current = resolve;
+          setCommandOverlay(EMPTY_COMMAND_OVERLAY);
+          setPromptSelect(null);
+          setCheckboxPicker(null);
+          setCommandPicker(
+            createCommandPicker("", options, pickerMaxVisible),
+          );
+        });
+      },
       requestOAuthLogin,
     };
-  }, [session, store, commandRegistry, autoSave, performExit, resolvePromptSecret, resolvePromptSelect, requestOAuthLogin]);
+  }, [session, store, commandRegistry, autoSave, performExit, resolvePromptSecret, resolvePromptSelect, requestOAuthLogin, pickerMaxVisible]);
 
   const runTurn = useCallback(async (input: string, inlineImages?: InlineImageInput[]) => {
     const controller = new AbortController();
@@ -1465,7 +1460,7 @@ export function OpenTuiApp({
         resetTurnPasteState();
         lastInputValueRef.current = "";
         setDraftValue("");
-        setInputVisibleLines(1);
+    
         return;
       }
     }
@@ -1590,7 +1585,7 @@ export function OpenTuiApp({
       resetTurnPasteState();
       lastInputValueRef.current = "";
       setDraftValue("");
-      setInputVisibleLines(1);
+  
       return;
     }
 
@@ -1635,6 +1630,15 @@ export function OpenTuiApp({
     }
 
     setCommandPicker(null);
+    // If a promptCommandPicker resolver is active, resolve with the leaf value
+    const pickerResolver = commandPickerResolverRef.current;
+    if (pickerResolver) {
+      commandPickerResolverRef.current = null;
+      // result.command is "<commandName> <value>" — extract value after first space
+      const spaceIdx = result.command.indexOf(" ");
+      pickerResolver(spaceIdx >= 0 ? result.command.slice(spaceIdx + 1) : result.command);
+      return;
+    }
     void handleSubmit(result.command);
   }, [commandPicker, handleSubmit]);
 
@@ -1651,6 +1655,13 @@ export function OpenTuiApp({
       return;
     }
     setCommandPicker(null);
+    const pickerResolver = commandPickerResolverRef.current;
+    if (pickerResolver) {
+      commandPickerResolverRef.current = null;
+      const spaceIdx = result.command.indexOf(" ");
+      pickerResolver(spaceIdx >= 0 ? result.command.slice(spaceIdx + 1) : result.command);
+      return;
+    }
     void handleSubmit(result.command);
   }, [commandPicker, handleSubmit]);
 
@@ -1686,7 +1697,7 @@ export function OpenTuiApp({
       resetTurnPasteState();
       lastInputValueRef.current = "";
       setDraftValue("");
-      setInputVisibleLines(1);
+  
       return;
     }
     void handleSubmit(selectedValue);
@@ -2079,7 +2090,17 @@ export function OpenTuiApp({
         return;
       }
       if (event.name === "escape") {
-        setCommandPicker((current) => current ? exitCommandPickerLevel(current) : null);
+        setCommandPicker((current) => {
+          if (!current) return null;
+          const exited = exitCommandPickerLevel(current);
+          // If we've exited the last level and a resolver is waiting, cancel it
+          if (!exited && commandPickerResolverRef.current) {
+            const resolver = commandPickerResolverRef.current;
+            commandPickerResolverRef.current = null;
+            resolver(undefined);
+          }
+          return exited;
+        });
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -2242,12 +2263,6 @@ export function OpenTuiApp({
         if (snapshot?.lifecycle === "running") {
           const decision = session.interruptChildSession?.(selectedChildId) ?? { accepted: false, reason: "unsupported" };
           if (decision.accepted) {
-            if (event.name === "c" && event.ctrl) {
-              session.deliverMessage?.(
-                "system",
-                `${selectedChildId} was interrupted early by the user. Ask the user for next steps if more information is needed.`,
-              );
-            }
             showHint(`Interrupted ${selectedChildId}`);
           }
           event.preventDefault();
@@ -2520,6 +2535,15 @@ export function OpenTuiApp({
   const modelName = modelDescriptor?.compactScopedLabel ?? "unknown";
   const modelNameColor = resolveModelNameColor(modelDescriptor, theme);
 
+  // Thinking level suffix for the status line
+  const thinkingLevel = session.thinkingLevel ?? "";
+  const thinkingSuffix = (() => {
+    if (!thinkingLevel || thinkingLevel === "none") return "";        // not a thinking model
+    if (thinkingLevel === "off") return "(Thinking Off)";             // explicitly disabled
+    if (thinkingLevel === "on" || thinkingLevel === "default") return "(Thinking On)"; // on but no granular level
+    return `(${thinkingLevel})`;                                      // low/medium/high/xhigh/max
+  })();
+
   // Agent counts for indicator — all 3 states
   const runningAgentCount = childSessions.filter((s) => s.lifecycle === "running").length;
   const idleAgentCount = childSessions.filter((s) => s.lifecycle === "idle").length;
@@ -2618,10 +2642,10 @@ export function OpenTuiApp({
       inputRef={inputRef}
       phase={effectivePhase}
       modelName={effectiveModelName}
+      thinkingSuffix={childSnapshot ? "" : thinkingSuffix}
       modelColor={effectiveModelColor}
       turnElapsed={effectiveElapsed}
       hint={hint}
-      inputVisibleLines={inputVisibleLines}
       composerTokenVisuals={composerTokenVisuals}
       keyBindings={COMPOSER_KEY_BINDINGS}
       onSubmit={() => {

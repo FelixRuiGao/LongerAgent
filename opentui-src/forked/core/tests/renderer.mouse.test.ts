@@ -2,6 +2,8 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import { createTestRenderer, MouseButtons, type MockMouse, type TestRenderer } from "../testing.js"
 import { Renderable, type RenderableOptions } from "../Renderable.js"
+import { BoxRenderable } from "../renderables/Box.js"
+import { TextRenderable } from "../renderables/Text.js"
 import type { RenderContext } from "../types.js"
 import type { Selection } from "../lib/selection.js"
 import type { MouseEvent } from "../renderer.js"
@@ -579,6 +581,36 @@ describe("renderer handleMouseData", () => {
       expect(renderer.hasSelection).toBe(true)
 
       await mockMouse.click(renderer.width - 1, renderer.height - 1)
+      expect(renderer.hasSelection).toBe(false)
+    } finally {
+      renderer.destroy()
+    }
+  })
+
+  test("preventDefault on clickable ancestor blocks starting selection on selectable text children", async () => {
+    try {
+      const button = new BoxRenderable(renderer, {
+        id: "button",
+        position: "absolute",
+        left: 2,
+        top: 2,
+        width: 20,
+        height: 3,
+      })
+      button.onMouseDown = (event) => {
+        event.preventDefault()
+      }
+
+      const label = new TextRenderable(renderer, {
+        id: "button-label",
+        content: "Todos (4 pending)",
+      })
+      button.add(label)
+      renderer.root.add(button)
+      await renderOnce()
+
+      await mockMouse.click(label.x + 1, label.y)
+
       expect(renderer.hasSelection).toBe(false)
     } finally {
       renderer.destroy()

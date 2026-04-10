@@ -27,6 +27,8 @@ interface InputAreaProps {
   selectedChildId: string | null;
   phase: ActivityPhase;
   modelName: string;
+  /** Thinking level suffix shown after the model name in dim color, e.g. "(high)". Empty string = hidden. */
+  thinkingSuffix: string;
   modelColor: string;
   elapsed: number;
   cwd: string;
@@ -43,7 +45,6 @@ interface InputAreaProps {
   /** Width of the content column (terminal width minus screen padding). */
   contentWidth: number;
   colors: ConversationPalette;
-  inputVisibleLines: number;
   maxInputLines: number;
   composerTokenVisuals: ComposerTokenVisuals;
   keyBindings: readonly KeyBinding[];
@@ -145,7 +146,6 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
     usageText,
     contentWidth,
     colors,
-    inputVisibleLines,
     maxInputLines,
     composerTokenVisuals,
     keyBindings,
@@ -243,9 +243,14 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
 
         <box flexGrow={1} />
         <box
+          flexDirection="row"
+          flexShrink={0}
           onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onModelClick(); }}
         >
           <text fg={modelColor} content={modelName} />
+          {props.thinkingSuffix ? (
+            <text fg={colors.dim} content={` ${props.thinkingSuffix}`} />
+          ) : null}
         </box>
       </box>
 
@@ -253,7 +258,6 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
       <box
         flexDirection="row"
         width="100%"
-        height={inputVisibleLines + 2}
         flexShrink={0}
         border={true}
         borderStyle="rounded"
@@ -271,8 +275,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
           placeholderColor={colors.muted}
           cursorStyle={{ style: "block", blinking: false }}
           cursorColor={colors.accent}
-          width={Math.max(10, contentWidth - 2 - 2 - 1)}
-          height={inputVisibleLines}
+          flexGrow={1}
           maxHeight={maxInputLines}
           minHeight={1}
           syntaxStyle={composerTokenVisuals.syntaxStyle}
