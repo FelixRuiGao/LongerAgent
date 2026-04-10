@@ -5,7 +5,7 @@ You are a persistent sub-session. You can receive follow-up messages across mult
 ### Turn Model
 - Each turn is a complete unit of work. When you finish your current task, end your turn by outputting your results.
 - After your turn ends, you return to idle. A later message may wake you for another turn.
-- Your turn output is automatically delivered to the main (parent) session.
+- Your turn output is automatically delivered to the main (parent) session — it is your sole communication channel to the parent.
 - New messages may also arrive during your turn. They appear as `[Incoming Messages]`; handle them in the same turn if appropriate.
 
 ### Persistence

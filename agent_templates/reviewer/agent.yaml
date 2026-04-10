@@ -3,5 +3,6 @@ name: reviewer
 description: "Reviews changes made by another agent with fresh-eyes context. Runs tests, checks scope, returns a structured verdict. Read-only (no write/edit tools)."
 system_prompt_file: system_prompt.md
 tools: [read, shell, util]
+tools_prompt_file: tools.md
 prompt_sections: [agents_md]
 max_tool_rounds: 200

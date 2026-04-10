@@ -150,15 +150,28 @@ export function assembleSystemPrompt(recipe: PromptRecipe): string {
   let systemPrompt = resolveSystemPrompt(spec, templateDir);
 
   // --- 2. Assemble tool prompts ---
-  if (promptsDirs.length > 0) {
+  const toolsPromptFile = spec["tools_prompt_file"] as string | undefined;
+  if (toolsPromptFile) {
+    // Per-agent unified tools file — preferred path
+    const toolsPath = join(templateDir, toolsPromptFile);
+    if (existsSync(toolsPath)) {
+      const toolsContent = readFileSync(toolsPath, "utf-8").trimEnd();
+      if (toolsContent) {
+        systemPrompt = systemPrompt.trimEnd() + "\n\n---\n\n# Tools\n\n" + toolsContent;
+      }
+    }
+  } else if (promptsDirs.length > 0) {
+    // Fallback: per-tool assembly for custom/legacy templates
     const toolNames = resolveToolNames(spec);
     validateToolDependencies(toolNames);
     const toolPrompts = assembleToolPrompts(toolNames, promptsDirs);
     if (toolPrompts) {
       systemPrompt = systemPrompt.trimEnd() + "\n\n---\n\n# Tools\n\n" + toolPrompts;
     }
+  }
 
-    // --- 3. Assemble section prompts ---
+  // --- 3. Assemble section prompts ---
+  if (promptsDirs.length > 0) {
     const sections = resolveSections(spec);
     const sectionPrompts = assembleSectionPrompts(sections, promptsDirs);
     if (sectionPrompts) {
@@ -240,14 +253,20 @@ export function loadTemplate(
 /**
  * Scan template directories and load all templates with layered override.
  *
- * When both `bundledRoot` and `userRoot` are provided, user templates override
- * bundled templates with the same folder name. User-only templates are also loaded.
+ * Three-layer template loading with layered override:
+ *
+ * 1. **Bundled** — always loaded from the package.
+ * 2. **User-global** (`~/.vigil/agent_templates/`) — adds new templates only;
+ *    cannot override bundled templates (their prompt assembly assumes a specific format).
+ * 3. **Project-local** (`{project}/.vigil/agent_templates/`) — highest priority;
+ *    CAN override both bundled and user-global templates.
  *
  * @param bundledRoot  Bundled templates root (always available from the package).
  * @param config       Global Config instance.
  * @param mcpManager   Optional MCP client manager.
  * @param promptsDirs  Ordered prompts directories (user first, bundled second).
  * @param userRoot     Optional user override templates root (~/.vigil/agent_templates/).
+ * @param projectRoot  Optional project-local templates root ({project}/.vigil/agent_templates/).
  * @returns `{ name: agent }` record.
  */
 export function loadTemplates(
@@ -256,15 +275,13 @@ export function loadTemplates(
   mcpManager?: MCPClientManager,
   promptsDirs?: string[],
   userRoot?: string,
+  projectRoot?: string,
 ): Record<string, Agent> {
   if (!existsSync(bundledRoot) || !statSync(bundledRoot).isDirectory()) {
     throw new Error(`Bundled templates root not found: ${bundledRoot}`);
   }
 
-  // Discover template dirs: bundled first, then user-only additions.
-  // User templates whose name collides with a bundled template are
-  // silently skipped — bundled templates are authoritative and their
-  // prompt assembly pipeline assumes a specific system_prompt format.
+  // Pass 1: bundled templates (base layer)
   const templateDirs: Record<string, string> = {};
   const bundledNames = new Set<string>();
   for (const child of readdirSync(bundledRoot).sort()) {
@@ -274,11 +291,24 @@ export function loadTemplates(
       bundledNames.add(child);
     }
   }
+
+  // Pass 2: user-global additions (cannot override bundled)
   if (userRoot && existsSync(userRoot) && statSync(userRoot).isDirectory()) {
     for (const child of readdirSync(userRoot).sort()) {
       if (bundledNames.has(child)) continue; // never override bundled templates
       if (child.startsWith("_")) continue; // _-prefixed dirs are examples, not loaded
       const childPath = join(userRoot, child);
+      if (isTemplateDir(childPath)) {
+        templateDirs[child] = childPath;
+      }
+    }
+  }
+
+  // Pass 3: project-local templates (CAN override bundled and user-global)
+  if (projectRoot && existsSync(projectRoot) && statSync(projectRoot).isDirectory()) {
+    for (const child of readdirSync(projectRoot).sort()) {
+      if (child.startsWith("_")) continue;
+      const childPath = join(projectRoot, child);
       if (isTemplateDir(childPath)) {
         templateDirs[child] = childPath;
       }
@@ -337,6 +367,13 @@ export function validateTemplate(templateDir: string): string | null {
     const promptPath = join(templateDir, spec["system_prompt_file"]);
     if (!existsSync(promptPath)) {
       return `system_prompt_file not found: ${spec["system_prompt_file"]}`;
+    }
+  }
+
+  if (typeof spec["tools_prompt_file"] === "string") {
+    const toolsPromptPath = join(templateDir, spec["tools_prompt_file"]);
+    if (!existsSync(toolsPromptPath)) {
+      return `tools_prompt_file not found: ${spec["tools_prompt_file"]}`;
     }
   }
 

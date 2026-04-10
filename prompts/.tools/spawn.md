@@ -17,6 +17,9 @@ spawn(
 
 Required parameters: `id`, `template` (or `template_path`), `task`, `mode`.
 
+Optional parameters:
+- `model_level` (string): One of `"high"`, `"medium"`, `"low"`. Selects a pre-configured model tier for the sub-agent. If omitted, the sub-agent inherits the parent agent's model. Tiers must be configured by the user via `/tier` or `settings.json`.
+
 ### `spawn_file` — multiple agents / teams
 
 For spawning multiple agents or creating teams, write a YAML call file and reference it:
@@ -157,19 +160,8 @@ Packs and individual tool names can be mixed: `tools: [read, bash, time]`
 
 **Step 2.** Reference it with `template_path`:
 
-Inline:
 ```
 spawn(id="analyst-1", template_path="my-template", mode="oneshot", task="Analyze the database schema at ...")
-```
-
-Or in a call file:
-```yaml
-agents:
-  - id: analyst-1
-    template_path: my-template
-    mode: oneshot
-    task: |
-      Analyze the database schema at ...
 ```
 
 The template persists in `{SESSION_ARTIFACTS}` for the entire session — you can reuse it across multiple `spawn` / `spawn_file` calls without recreating it.
@@ -277,13 +269,9 @@ If the user changes the goal partway through — adding a new requirement, dropp
    - **Partially relevant** — usually best to let it finish (sunk cost is low) and use its partial output as input to the new plan.
 3. **Update the plan first, then spawn.** Rewrite `plan.md` to reflect the new goal — mark dropped checkpoints, add new ones, preserve still-applicable ones. Only after the plan is updated should you spawn new sub-agents for the new direction.
 
-Concrete example. User originally said "build a CRM with email notifications" and you had an executor building the email module. User now says "forget the email feature, I want Slack instead." You:
+Example: user says "forget email, I want Slack." → (1) `check_status`, (2) `kill_agent` the email executor, keep the event-bus work, (3) update `plan.md` then spawn a new executor for Slack.
 
-1. `check_status` — executor is mid-edit on `src/notifications/email.ts`.
-2. `kill_agent` the email executor (obsolete). Keep the generic event-bus work done earlier (still relevant).
-3. Rewrite `plan.md`: mark the email checkpoints as dropped, add Slack checkpoints, keep the event-bus foundation. Then spawn a new executor targeting the Slack integration.
-
-The key principle: **scope changes are plan-level events, not spawn-level events.** Update the plan, then derive the spawns from the updated plan.
+**Scope changes are plan-level events, not spawn-level events.** Update the plan, then derive the spawns from the updated plan.
 
 ### Child Session Modes
 
@@ -292,19 +280,9 @@ Every agent must explicitly set `mode` (both inline and file):
 - `mode: oneshot` — runs one turn, returns its result, then becomes read-only.
 - `mode: persistent` — returns to idle after each turn and can receive later messages via `send`.
 
-Inline example:
+Example:
 ```
 spawn(id="auth-inspector", template="explorer", mode="persistent", task="Review the auth module...")
-```
-
-File example:
-```yaml
-agents:
-  - id: auth-inspector
-    template: explorer
-    mode: persistent
-    task: |
-      Review the current state of the auth module...
 ```
 
 ### Agent Teams
@@ -324,30 +302,9 @@ agents:
       Wait for researcher's findings. Implement the changes based on what you receive.
 ```
 
-Team members can `send` to each other, to `"main"` (you), or to `"all"` (broadcast). Their turn output is also auto-delivered to you. Communication is async — `send` returns immediately, the recipient is activated automatically.
+Team members can `send` to each other or to `"all"` (broadcast). Their turn output is automatically delivered to you. Communication is async — `send` returns immediately, the recipient is activated automatically.
 
-Use `idle: true` to spawn agents that start idle — they won't begin working until they receive their first `send` message. This is useful for standby workers that should wait for task assignment:
-
-```yaml
-team: code-review
-agents:
-  - id: lead
-    template: explorer
-    task: |
-      Analyze PR scope and assign review tasks to the workers.
-  - id: reviewer-api
-    template: explorer
-    idle: true
-    task: |
-      Standby for review assignment.
-  - id: reviewer-tests
-    template: explorer
-    idle: true
-    task: |
-      Standby for review assignment.
-```
-
-To add members to an existing team later, use the same `team:` name in a new call file.
+Use `idle: true` to spawn agents that start idle — they won't begin working until they receive their first `send` message. To add members to an existing team later, use the same `team:` name in a new call file.
 
 ### Patience with Sub-Agents
 
