@@ -12,11 +12,9 @@
   <img alt="Author" src="https://img.shields.io/badge/author-Felix%20Rui%20Gao-4b4bf0?style=flat-square" />
 </p>
 
-> ## ⚠️ Major refactor in progress (v0.3.0)
+> ## ⚠️ Major refactor in progress (v0.2.0)
 >
-> Vigil is undergoing a large-scale refactor of its release pipeline and runtime boundary. **The next published version will not be backwards-compatible with `0.2.x`** — config layout, entry point, and minimum environment requirements will all change.
->
-> If you need stability today, pin to `0.2.0`.
+> Vigil is undergoing a large-scale refactor of its release pipeline and runtime boundary. **This version is not backwards-compatible with `0.1.x`** — config layout, entry point, and minimum environment requirements have all changed.
 
 Vigil is a terminal AI coding agent that tries to squeeze the most out of every model by using less context to do more work. It follows an **Explore → Plan → Execute → Review** workflow, supports communicating agent teams, and lets the agent summarize and distill context it deems no longer relevant — even a single tool result — so sessions stay productive longer.
 

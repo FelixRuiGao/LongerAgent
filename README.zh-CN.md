@@ -12,11 +12,9 @@
   <img alt="Author" src="https://img.shields.io/badge/author-Felix%20Rui%20Gao-4b4bf0?style=flat-square" />
 </p>
 
-> ## ⚠️ 正在进行大规模重构（v0.3.0）
+> ## ⚠️ 正在进行大规模重构（v0.2.0）
 >
-> Vigil 正在重写发布流程与 runtime 边界。**下一个发布版本将与 `0.2.x` 不向后兼容** —— 配置文件布局、entry point 与最低环境要求都会变化。
->
-> 如需稳定使用，请 pin 在 `0.2.0`。
+> Vigil 正在重写发布流程与 runtime 边界。**此版本与 `0.1.x` 不向后兼容** —— 配置文件布局、entry point 与最低环境要求都已变化。
 
 Vigil 是一个终端 AI 编程 Agent，尝试用更少的上下文发挥出模型的最大潜能。它遵循 **Explore → Plan → Execute → Review** 工作流，支持可相互交流的 Agent 团队，并让 Agent 自己使用工具总结、提炼它认为对后续任务不再重要的上下文（精确到单个 tool result）——让会话保持高效更长时间。
 
