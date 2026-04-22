@@ -1,0 +1,10 @@
+import type { BaseRenderable, RootRenderable, TextNodeRenderable } from "../../core/index.js"
+import { baseComponents } from "../components/index.js"
+
+export type Type = keyof typeof baseComponents
+export type Props = Record<string, any>
+export type Container = RootRenderable
+export type Instance = BaseRenderable
+export type TextInstance = TextNodeRenderable
+export type PublicInstance = Instance
+export type HostContext = Record<string, any> & { isInsideText?: boolean }

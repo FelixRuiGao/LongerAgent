@@ -1,0 +1,35 @@
+# Exclude test/dev/build artifacts from opentui-src
+opentui-src/core/tests/
+opentui-src/core/examples/
+opentui-src/core/benchmark/
+opentui-src/core/__snapshots__/
+opentui-src/core/*.test.ts
+opentui-src/core/**/*.test.ts
+opentui-src/core/zig/.zig-cache/
+opentui-src/core/zig/src/
+opentui-src/core/zig/tests/
+opentui-src/core/zig/build.zig
+opentui-src/core/zig/build.zig.zon
+opentui-src/react/test-utils.ts
+
+# General
+node_modules/
+.pnpm-store/
+.DS_Store
+*.tgz
+.env*
+*.local.*
+CLAUDE.local.md
+.claude/
+.codex/
+.cursor/
+Docs/
+.archive/
+tmp_repos/
+experiments/
+gui/
+docs-site/
+tests/
+vitest.config.ts
+tsconfig.build.json
+scripts/

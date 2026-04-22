@@ -1,0 +1,309 @@
+/** @jsxImportSource opentui-jsx */
+
+
+import * as React from "react";
+
+import { createTextAttributes, type KeyBinding, type TextareaRenderable } from "../core/index.js";
+
+const ATTRS_BOLD = createTextAttributes({ bold: true });
+import type { ConversationPalette } from "../components/conversation-types.js";
+import type { ComposerTokenVisuals } from "../composer-tokens.js";
+import type { ActivityPhase } from "../display/types.js";
+import { formatCompactTokensShort } from "../display/utils/format.js";
+import { formatElapsed } from "../presentation/use-turn-timer.js";
+import {
+  useSpinner,
+  DECODING_SPINNER_FRAMES,
+  DECODING_SPINNER_INTERVAL,
+  PREFILL_SPINNER_FRAMES,
+  PREFILL_SPINNER_INTERVAL,
+  AWAITING_SPINNER_FRAMES,
+  AWAITING_SPINNER_INTERVAL,
+} from "../presentation/use-spinner.js";
+
+interface InputAreaProps {
+  inputRef: React.RefObject<TextareaRenderable | null>;
+  processing: boolean;
+  pendingAsk: boolean;
+  selectedChildId: string | null;
+  phase: ActivityPhase;
+  modelName: string;
+  /** Thinking level suffix shown after the model name in dim color, e.g. "(high)". Empty string = hidden. */
+  thinkingSuffix: string;
+  modelColor: string;
+  elapsed: number;
+  cwd: string;
+  hint: string | null;
+  contextTokens: number;
+  contextLimit: number | undefined;
+  cacheReadTokens: number;
+  /**
+   * Pre-formatted one-line usage indicator (e.g. "5h: 90% left | wk: 80% left"
+   * or "month: 300/300 left"). When null, the indicator is hidden entirely.
+   * Only shown when cwd + usage + context all fit inside contentWidth.
+   */
+  usageText: string | null;
+  /** Width of the content column (terminal width minus screen padding). */
+  contentWidth: number;
+  colors: ConversationPalette;
+  maxInputLines: number;
+  composerTokenVisuals: ComposerTokenVisuals;
+  keyBindings: readonly KeyBinding[];
+  onSubmit: () => void;
+  onModelClick: () => void;
+  onAgentIndicatorClick?: () => void;
+  commandOverlayVisible: boolean;
+  commandPicker: boolean;
+  checkboxPicker: boolean;
+  promptSelect: boolean;
+  promptSecret: boolean;
+  /** Number of running child agents. */
+  runningAgentCount?: number;
+  /** Number of idle child agents. */
+  idleAgentCount?: number;
+  /** Number of archived child agents. */
+  archivedAgentCount?: number;
+  /** Number of open (non-done) todo items. */
+  todoOpenCount?: number;
+  /** Number of done todo items. */
+  todoDoneCount?: number;
+  /** Whether the todo panel is currently expanded. */
+  todoPanelOpen?: boolean;
+  /** Toggle the todo panel. */
+  onTodoClick?: () => void;
+  /** Whether the agents panel is currently expanded. */
+  agentsPanelOpen?: boolean;
+  /** Toggle the agents panel. */
+  onAgentsPanelClick?: () => void;
+  /** True when user has scrolled away — hides textarea cursor. */
+  scrolledAway?: boolean;
+}
+
+function getPhaseLabel(phase: ActivityPhase): string {
+  switch (phase) {
+    case "decoding": return "Decoding";
+    case "waiting": return "Waiting";
+    case "asking": return "Asking";
+    case "cancelling": return "Cancelling";
+    case "error": return "Error";
+    case "prefilling":
+    default: return "Prefilling";
+  }
+}
+
+function getPhaseSpinnerConfig(phase: ActivityPhase): { frames: readonly string[]; interval: number } {
+  switch (phase) {
+    case "decoding": return { frames: DECODING_SPINNER_FRAMES, interval: DECODING_SPINNER_INTERVAL };
+    case "waiting": return { frames: AWAITING_SPINNER_FRAMES, interval: AWAITING_SPINNER_INTERVAL };
+    case "asking": return { frames: AWAITING_SPINNER_FRAMES, interval: AWAITING_SPINNER_INTERVAL };
+    case "prefilling":
+    default: return { frames: PREFILL_SPINNER_FRAMES, interval: PREFILL_SPINNER_INTERVAL };
+  }
+}
+
+function getPhaseColor(phase: ActivityPhase, colors: ConversationPalette): string {
+  switch (phase) {
+    case "decoding": return colors.generatingStatus;
+    case "waiting": return colors.waitingStatus;
+    case "asking": return colors.waitingStatus;
+    case "prefilling":
+    default: return colors.dim;
+  }
+}
+
+/**
+ * Decide whether the usage indicator fits on the bottom row alongside cwd
+ * and context. `hint` is NOT reserved — it has flexShrink={1} + truncate,
+ * so it collapses to whatever space is left. If the fixed-shrink parts
+ * (cwd + usage + context + separators) fit inside contentWidth, we show
+ * the usage indicator; otherwise it's hidden entirely.
+ */
+function shouldShowUsage(
+  contentWidth: number,
+  cwdLen: number,
+  usageLen: number,
+  contextLen: number,
+): boolean {
+  const inner = contentWidth - 2; // paddingLeft=1 + paddingRight=1
+  const fixedWidth = cwdLen + usageLen + contextLen + 4; // "  " × 2 separators
+  return inner >= fixedWidth;
+}
+
+function InputAreaInner(props: InputAreaProps): React.ReactNode {
+  const {
+    inputRef,
+    processing,
+    pendingAsk,
+    selectedChildId,
+    phase,
+    modelName,
+    modelColor,
+    elapsed,
+    cwd,
+    hint,
+    contextTokens,
+    contextLimit,
+    cacheReadTokens,
+    usageText,
+    contentWidth,
+    colors,
+    maxInputLines,
+    composerTokenVisuals,
+    keyBindings,
+    onSubmit,
+    onModelClick,
+    commandOverlayVisible,
+    commandPicker,
+    checkboxPicker,
+    promptSelect,
+    promptSecret,
+    runningAgentCount = 0,
+    idleAgentCount = 0,
+    archivedAgentCount = 0,
+    onAgentIndicatorClick,
+    todoOpenCount = 0,
+    todoDoneCount = 0,
+    todoPanelOpen = false,
+    onTodoClick,
+    agentsPanelOpen = false,
+    onAgentsPanelClick,
+    scrolledAway = false,
+  } = props;
+
+  const placeholder = pendingAsk
+    ? "ask pending..."
+    : selectedChildId
+      ? "Esc/^C close or interrupt · Opt+←→ switch tabs · Opt+↑ main"
+      : "message or /command";
+
+  const focused = phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !selectedChildId;
+
+  const spinnerConfig = getPhaseSpinnerConfig(phase);
+  const activeSpinner = useSpinner(spinnerConfig.frames, spinnerConfig.interval, processing);
+  const phaseLabel = getPhaseLabel(phase);
+  const phaseColor = getPhaseColor(phase, colors);
+
+  const cacheLabel = cacheReadTokens > 0 ? ` (${formatCompactTokensShort(cacheReadTokens)} cached)` : "";
+  const contextText = contextLimit
+    ? `${formatCompactTokensShort(contextTokens)}/${formatCompactTokensShort(contextLimit)}${cacheLabel}`
+    : `${formatCompactTokensShort(contextTokens)}${cacheLabel}`;
+
+  return (
+    <box flexDirection="column" gap={0} flexShrink={0}>
+      {/* Top row: activity indicator (left) + agent indicator (center) + model name (right) */}
+      <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
+        {processing ? (
+          <box flexDirection="row" flexShrink={0}>
+            <text fg={phaseColor} content={`${activeSpinner} ${phaseLabel}`} />
+            {elapsed > 0 ? (
+              <text fg={colors.dim} content={` ${formatElapsed(elapsed)}`} />
+            ) : null}
+          </box>
+        ) : null}
+
+        {/* Agent indicator: show whenever agents exist */}
+        {(runningAgentCount + idleAgentCount + archivedAgentCount) > 0 && !selectedChildId ? (
+          <>
+          {processing ? <box width={2} /> : null}
+          <box
+            flexDirection="row"
+            flexShrink={0}
+            backgroundColor={agentsPanelOpen ? "#3a3058" : "#2a2640"}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onAgentsPanelClick?.(); }}
+          >
+            <text fg="#b4a0ec" content={(() => {
+              const parts: string[] = [];
+              if (runningAgentCount > 0) parts.push(`${runningAgentCount} running`);
+              const doneAgents = idleAgentCount + archivedAgentCount;
+              if (doneAgents > 0) parts.push(`${doneAgents} done`);
+              return ` Agents (${parts.join(", ")}) `;
+            })()} />
+          </box>
+          </>
+        ) : null}
+
+        {/* Todo indicator: show whenever checkpoints exist */}
+        {(todoOpenCount + todoDoneCount) > 0 && !selectedChildId ? (
+          <>
+          {((runningAgentCount + idleAgentCount + archivedAgentCount) > 0 || processing) ? <box width={1} /> : null}
+          <box
+            flexDirection="row"
+            flexShrink={0}
+            backgroundColor={todoPanelOpen ? "#1a3838" : "#1a2a2e"}
+            onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onTodoClick?.(); }}
+          >
+            <text fg="#86ded4" content={(() => {
+              const parts: string[] = [];
+              if (todoOpenCount > 0) parts.push(`${todoOpenCount} pending`);
+              if (todoDoneCount > 0) parts.push(`${todoDoneCount} done`);
+              return ` Todos (${parts.join(", ")}) `;
+            })()} />
+          </box>
+          </>
+        ) : null}
+
+        <box flexGrow={1} />
+        <box
+          flexDirection="row"
+          flexShrink={0}
+          onMouseDown={(e: any) => { e.stopPropagation(); e.preventDefault(); onModelClick(); }}
+        >
+          <text fg={modelColor} content={modelName} />
+          {props.thinkingSuffix ? (
+            <text fg={colors.dim} content={` ${props.thinkingSuffix}`} />
+          ) : null}
+        </box>
+      </box>
+
+      {/* Input box with round border */}
+      <box
+        flexDirection="row"
+        width="100%"
+        flexShrink={0}
+        border={true}
+        borderStyle="rounded"
+        borderColor={colors.dim}
+      >
+        <text fg={colors.accent} attributes={ATTRS_BOLD} content="❯ " flexShrink={0} />
+        <textarea
+          ref={(node: any) => {
+            (inputRef as any).current = node;
+          }}
+          placeholder={placeholder}
+          focused={focused}
+          textColor={selectedChildId ? colors.muted : colors.text}
+          focusedTextColor={selectedChildId ? colors.muted : colors.text}
+          placeholderColor={colors.muted}
+          cursorStyle={{ style: "block", blinking: false }}
+          cursorColor={colors.accent}
+          flexGrow={1}
+          maxHeight={maxInputLines}
+          minHeight={1}
+          syntaxStyle={composerTokenVisuals.syntaxStyle}
+          keyBindings={[...keyBindings]}
+          onSubmit={onSubmit}
+          wrapMode="word"
+          scrollMargin={0}
+        />
+      </box>
+
+      {/* Bottom row: cwd (left) + hint (middle) + usage + context (right) — hidden when overlays are open */}
+      {!commandOverlayVisible && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !pendingAsk ? (
+        <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
+          <text fg={colors.muted} content={cwd} flexShrink={0} />
+          {hint ? (
+            <text fg={colors.dim} content={`  ${hint}`} truncate flexGrow={1} flexShrink={1} />
+          ) : (
+            <box flexGrow={1} />
+          )}
+          {usageText && shouldShowUsage(contentWidth, cwd.length, usageText.length, contextText.length) ? (
+            <text fg={colors.dim} content={`  ${usageText}`} flexShrink={0} />
+          ) : null}
+          <text fg={colors.dim} content={`  ${contextText}`} flexShrink={0} />
+        </box>
+      ) : null}
+    </box>
+  );
+}
+
+export const InputArea = React.memo(InputAreaInner);

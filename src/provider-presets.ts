@@ -1,0 +1,301 @@
+/**
+ * Shared provider/model catalog used by setup and runtime model picker.
+ */
+
+import { getManagedCredentialEnvVar } from "./managed-provider-credentials.js";
+
+export interface ProviderPresetModel {
+  /** Stable selector used by `/model` and init choices. */
+  key: string;
+  /** Actual API model ID sent to the provider. */
+  id: string;
+  /** Human-friendly label used in docs and init. */
+  label: string;
+  /** Optional note appended in `/model` picker labels. */
+  optionNote?: string;
+  /** Backward-compatible selector aliases. */
+  aliases?: string[];
+  /** Raw config overrides merged into generated/runtime model configs. */
+  config?: Record<string, unknown>;
+}
+
+export interface ProviderPreset {
+  id: string;
+  name: string;
+  envVar: string;
+  models: ProviderPresetModel[];
+  /** Group key for three-level picker grouping. Presets with the same group are nested under a common parent. */
+  group?: string;
+  /** Display label for the group parent node in the picker (e.g. "Moonshot (Kimi)"). */
+  groupLabel?: string;
+  /** Display label for this preset within its group (middle level, e.g. "Kimi-Global"). */
+  subLabel?: string;
+  /** Whether this is a local inference server (oMLX, LM Studio, etc.). Local providers skip API key prompts and use dynamic model discovery. */
+  localServer?: boolean;
+  /** Default base URL for local servers (e.g. "http://localhost:8000/v1"). */
+  defaultBaseUrl?: string;
+}
+
+const KIMI_MODELS = [
+  { key: "kimi-k2.5", id: "kimi-k2.5", label: "Kimi K2.5" },
+  { key: "kimi-k2-instruct", id: "kimi-k2-instruct", label: "Kimi K2 Instruct" },
+] satisfies ProviderPresetModel[];
+
+const GLM_MODELS = [
+  { key: "glm-5.1", id: "glm-5.1", label: "GLM-5.1" },
+  { key: "glm-5", id: "glm-5", label: "GLM-5" },
+  { key: "glm-5-turbo", id: "glm-5-turbo", label: "GLM-5 Turbo" },
+  { key: "glm-5v-turbo", id: "glm-5v-turbo", label: "GLM-5V Turbo" },
+  { key: "glm-4.7", id: "glm-4.7", label: "GLM-4.7" },
+] satisfies ProviderPresetModel[];
+
+const MINIMAX_MODELS = [
+  { key: "MiniMax-M2.1", id: "MiniMax-M2.1", label: "MiniMax M2.1" },
+  { key: "MiniMax-M2.1-highspeed", id: "MiniMax-M2.1-highspeed", label: "MiniMax M2.1 Highspeed" },
+  { key: "MiniMax-M2.5", id: "MiniMax-M2.5", label: "MiniMax M2.5" },
+  { key: "MiniMax-M2.5-highspeed", id: "MiniMax-M2.5-highspeed", label: "MiniMax M2.5 Highspeed" },
+  { key: "MiniMax-M2.7", id: "MiniMax-M2.7", label: "MiniMax M2.7" },
+  { key: "MiniMax-M2.7-highspeed", id: "MiniMax-M2.7-highspeed", label: "MiniMax M2.7 Highspeed" },
+] satisfies ProviderPresetModel[];
+
+const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
+
+export const PROVIDER_PRESETS: ProviderPreset[] = [
+  // ── Anthropic (no group, two-level) ──
+  {
+    id: "anthropic", name: "Anthropic (Claude)", envVar: "ANTHROPIC_API_KEY",
+    models: [
+      { key: "claude-haiku-4-5", id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+      { key: "claude-sonnet-4-6", id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+      {
+        key: "claude-sonnet-4-6-1m",
+        id: "claude-sonnet-4-6",
+        label: "Claude Sonnet 4.6 (1M context beta)",
+        optionNote: "1M context beta",
+        config: {
+          context_length: 1_000_000,
+          betas: [ANTHROPIC_CONTEXT_1M_BETA],
+        },
+      },
+      { key: "claude-opus-4-6", id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+      {
+        key: "claude-opus-4-6-1m",
+        id: "claude-opus-4-6",
+        label: "Claude Opus 4.6 (1M context beta)",
+        optionNote: "1M context beta",
+        config: {
+          context_length: 1_000_000,
+          betas: [ANTHROPIC_CONTEXT_1M_BETA],
+        },
+      },
+    ],
+  },
+  // ── OpenAI (no group, two-level) ──
+  {
+    id: "openai", name: "OpenAI", envVar: "OPENAI_API_KEY",
+    models: [
+      { key: "gpt-5.2", id: "gpt-5.2", label: "GPT-5.2" },
+      { key: "gpt-5.2-codex", id: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
+      { key: "gpt-5.3-codex", id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+      { key: "gpt-5.4", id: "gpt-5.4", label: "GPT-5.4" },
+      { key: "gpt-5.4-mini", id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+      { key: "gpt-5.4-nano", id: "gpt-5.4-nano", label: "GPT-5.4 Nano" },
+    ],
+  },
+  // ── OpenAI Codex (ChatGPT OAuth login) ──
+  // The Codex backend at chatgpt.com requires `store: false` in every request
+  // and does not support web_search_preview.
+  {
+    id: "openai-codex", name: "OpenAI (ChatGPT Login)", envVar: "_OPENAI_CODEX_OAUTH",
+    models: [
+      { key: "gpt-5.2-codex", id: "gpt-5.2-codex", label: "GPT-5.2 Codex",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.3-codex", id: "gpt-5.3-codex", label: "GPT-5.3 Codex",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.4", id: "gpt-5.4", label: "GPT-5.4",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.4-mini", id: "gpt-5.4-mini", label: "GPT-5.4 Mini",
+        config: { store: false, supports_web_search: false } },
+    ],
+  },
+  // ── GitHub Copilot (device flow) ──
+  // Single top-level provider dispatching internally to /v1/messages (Claude via
+  // AWS Bedrock) or /responses (GPT) depending on model id. Auth via GitHub
+  // device flow; token refresh managed by CopilotProvider + copilotTokenManager.
+  //
+  // Copilot's gateway rejects server-side web search on both paths (Anthropic
+  // `web_search_20250305` and OpenAI `web_search_preview`), and its /responses
+  // endpoint is stateless (`store: true` is rejected) — the same shape as the
+  // Codex backend, so reasoning round-trip requires `include: reasoning.encrypted_content`.
+  {
+    id: "copilot", name: "GitHub Copilot", envVar: "_COPILOT_OAUTH",
+    models: [
+      { key: "claude-opus-4.6", id: "claude-opus-4.6",
+        label: "Claude Opus 4.6", optionNote: "3× premium",
+        config: { supports_web_search: false } },
+      { key: "claude-opus-4.6-fast", id: "claude-opus-4.6-fast",
+        label: "Claude Opus 4.6 Fast", optionNote: "30× premium",
+        config: { supports_web_search: false } },
+      { key: "claude-sonnet-4.6", id: "claude-sonnet-4.6",
+        label: "Claude Sonnet 4.6", optionNote: "1× premium",
+        config: { supports_web_search: false } },
+      { key: "gpt-5.2", id: "gpt-5.2",
+        label: "GPT-5.2", optionNote: "1× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.2-codex", id: "gpt-5.2-codex",
+        label: "GPT-5.2 Codex", optionNote: "1× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.3-codex", id: "gpt-5.3-codex",
+        label: "GPT-5.3 Codex", optionNote: "1× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.4", id: "gpt-5.4",
+        label: "GPT-5.4", optionNote: "1× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5.4-mini", id: "gpt-5.4-mini",
+        label: "GPT-5.4 Mini", optionNote: "0.33× premium",
+        config: { store: false, supports_web_search: false } },
+      { key: "gpt-5-mini", id: "gpt-5-mini",
+        label: "GPT-5 Mini", optionNote: "free",
+        config: { store: false, supports_web_search: false } },
+    ],
+  },
+  // ── Moonshot (Kimi) — three-level: group → region/plan → model ──
+  {
+    id: "kimi", name: "Moonshot (Kimi) Global", envVar: getManagedCredentialEnvVar("kimi")!,
+    group: "kimi", groupLabel: "Moonshot (Kimi)", subLabel: "Kimi-Global",
+    models: KIMI_MODELS,
+  },
+  {
+    id: "kimi-cn", name: "Moonshot (Kimi) China", envVar: getManagedCredentialEnvVar("kimi-cn")!,
+    group: "kimi", groupLabel: "Moonshot (Kimi)", subLabel: "Kimi-China",
+    models: KIMI_MODELS,
+  },
+  {
+    id: "kimi-code", name: "Kimi Code (Coding Plan)", envVar: getManagedCredentialEnvVar("kimi-code")!,
+    group: "kimi", groupLabel: "Moonshot (Kimi)", subLabel: "Kimi-Code",
+    models: KIMI_MODELS,
+  },
+  // ── MiniMax — three-level ──
+  {
+    id: "minimax", name: "MiniMax (Global)", envVar: getManagedCredentialEnvVar("minimax")!,
+    group: "minimax", groupLabel: "MiniMax", subLabel: "MiniMax-Global",
+    models: MINIMAX_MODELS,
+  },
+  {
+    id: "minimax-cn", name: "MiniMax (China)", envVar: getManagedCredentialEnvVar("minimax-cn")!,
+    group: "minimax", groupLabel: "MiniMax", subLabel: "MiniMax-China",
+    models: MINIMAX_MODELS,
+  },
+  // ── z.ai (GLM/Zhipu) — three-level ──
+  {
+    id: "glm", name: "GLM / Zhipu (China)", envVar: getManagedCredentialEnvVar("glm")!,
+    group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-China",
+    models: GLM_MODELS,
+  },
+  {
+    id: "glm-intl", name: "GLM / Zhipu (Global)", envVar: getManagedCredentialEnvVar("glm-intl")!,
+    group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-Global",
+    models: GLM_MODELS,
+  },
+  {
+    id: "glm-code", name: "GLM / Zhipu (China Coding)", envVar: getManagedCredentialEnvVar("glm-code")!,
+    group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-China-Code",
+    models: GLM_MODELS,
+  },
+  {
+    id: "glm-intl-code", name: "GLM / Zhipu (Global Coding)", envVar: getManagedCredentialEnvVar("glm-intl-code")!,
+    group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-Global-Code",
+    models: GLM_MODELS,
+  },
+  // ── Local inference servers ──
+  {
+    id: "ollama", name: "Ollama (Local)", envVar: "_OLLAMA_LOCAL",
+    localServer: true, defaultBaseUrl: "http://localhost:11434/v1",
+    models: [],
+  },
+  {
+    id: "omlx", name: "oMLX (Local)", envVar: "_OMLX_LOCAL",
+    localServer: true, defaultBaseUrl: "http://localhost:8000/v1",
+    models: [],
+  },
+  {
+    id: "lmstudio", name: "LM Studio (Local)", envVar: "_LMSTUDIO_LOCAL",
+    localServer: true, defaultBaseUrl: "http://localhost:1234/v1",
+    models: [],
+  },
+  // ── OpenRouter (no group field; sub-grouped by vendor prefix in the picker) ──
+  {
+    id: "openrouter", name: "OpenRouter", envVar: "OPENROUTER_API_KEY",
+    models: [
+      // Anthropic
+      {
+        key: "anthropic/claude-haiku-4.5",
+        id: "anthropic/claude-haiku-4.5",
+        label: "Claude Haiku 4.5",
+        aliases: ["anthropic/claude-haiku-4-5"],
+      },
+      {
+        key: "anthropic/claude-sonnet-4.6",
+        id: "anthropic/claude-sonnet-4.6",
+        label: "Claude Sonnet 4.6",
+        optionNote: "1M context",
+        aliases: ["anthropic/claude-sonnet-4-6"],
+        config: { context_length: 1_000_000 },
+      },
+      {
+        key: "anthropic/claude-opus-4.6",
+        id: "anthropic/claude-opus-4.6",
+        label: "Claude Opus 4.6",
+        optionNote: "1M context",
+        aliases: ["anthropic/claude-opus-4-6"],
+        config: { context_length: 1_000_000 },
+      },
+      // OpenAI
+      { key: "openai/gpt-5.2", id: "openai/gpt-5.2", label: "GPT-5.2" },
+      { key: "openai/gpt-5.2-codex", id: "openai/gpt-5.2-codex", label: "GPT-5.2 Codex" },
+      { key: "openai/gpt-5.3-codex", id: "openai/gpt-5.3-codex", label: "GPT-5.3 Codex" },
+      { key: "openai/gpt-5.4", id: "openai/gpt-5.4", label: "GPT-5.4" },
+      // Kimi / Moonshot
+      { key: "moonshotai/kimi-k2.5", id: "moonshotai/kimi-k2.5", label: "Kimi K2.5" },
+      // MiniMax
+      { key: "minimax/minimax-m2.1", id: "minimax/minimax-m2.1", label: "MiniMax M2.1" },
+      { key: "minimax/minimax-m2.5", id: "minimax/minimax-m2.5", label: "MiniMax M2.5" },
+      { key: "minimax/minimax-m2.7", id: "minimax/minimax-m2.7", label: "MiniMax M2.7" },
+      // GLM / Zhipu (Z.ai)
+      { key: "z-ai/glm-5", id: "z-ai/glm-5", label: "GLM-5" },
+      { key: "z-ai/glm-5-turbo", id: "z-ai/glm-5-turbo", label: "GLM-5 Turbo" },
+      { key: "z-ai/glm-5v-turbo", id: "z-ai/glm-5v-turbo", label: "GLM-5V Turbo" },
+      { key: "z-ai/glm-4.7", id: "z-ai/glm-4.7", label: "GLM-4.7" },
+    ],
+  },
+];
+
+export function findProviderPreset(providerId: string): ProviderPreset | undefined {
+  return PROVIDER_PRESETS.find((preset) => preset.id === providerId);
+}
+
+export function findProviderPresetModel(
+  providerId: string,
+  selection: string,
+): ProviderPresetModel | undefined {
+  const preset = findProviderPreset(providerId);
+  if (!preset) return undefined;
+  return preset.models.find((model) =>
+    model.key === selection
+      || model.id === selection
+      || Boolean(model.aliases?.includes(selection))
+  );
+}
+
+export function buildProviderPresetRawConfig(
+  providerId: string,
+  model: ProviderPresetModel,
+  apiKey: string,
+): Record<string, unknown> {
+  return {
+    provider: providerId,
+    model: model.id,
+    api_key: apiKey,
+    ...(model.config ?? {}),
+  };
+}

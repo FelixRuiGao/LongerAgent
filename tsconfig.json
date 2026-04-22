@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "baseUrl": ".",
+    "paths": {
+      "opentui-jsx/jsx-runtime": ["./opentui-src/jsx-runtime.ts"],
+      "opentui-jsx/jsx-dev-runtime": ["./opentui-src/jsx-dev-runtime.ts"]
+    }
+  },
+  "include": ["src/**/*", "opentui-src/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist", "tests"]
+}

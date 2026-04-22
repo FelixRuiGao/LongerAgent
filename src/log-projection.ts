@@ -1,0 +1,967 @@
+/**
+ * Log projection functions — derive TUI entries and API messages from the log.
+ *
+ * Both real-time conversation and resume use the same projection logic,
+ * guaranteeing 100% consistency.
+ */
+
+import type { LogEntry, TuiDisplayKind } from "./log-entry.js";
+import type { ConversationEntry, ConversationEntryKind } from "./ui/contracts.js";
+import { mergeConsecutiveSameRole } from "./context-rendering.js";
+import { truncateDistillContent } from "./summarize-context.js";
+
+// ------------------------------------------------------------------
+// TuiDisplayKind → ConversationEntryKind mapping
+// ------------------------------------------------------------------
+
+const DISPLAY_KIND_TO_ENTRY_KIND: Record<TuiDisplayKind, ConversationEntryKind> = {
+  user: "user",
+  agent_result: "agent_result",
+  assistant: "assistant",
+  reasoning: "reasoning",
+  progress: "progress",
+  tool_call: "tool_call",
+  status: "status",
+  error: "error",
+  compact_mark: "compact_mark",
+  tool_result: "tool_result",
+};
+
+// ------------------------------------------------------------------
+// TUI Projection
+// ------------------------------------------------------------------
+
+export interface TuiProjectionOptions {
+  /** Override the compact fold threshold (default: 3). */
+  compactFoldThreshold?: number;
+}
+
+const INTERRUPTED_MARKER_TEXT = "[Interrupted here.]";
+const INTERRUPTED_MARKER_SUFFIX = ` ${INTERRUPTED_MARKER_TEXT}`;
+
+const PRIMARY_ROUND_ENTRY_TYPES = new Set<LogEntry["type"]>([
+  "assistant_text",
+  "reasoning",
+  "tool_call",
+  "tool_result",
+]);
+
+function isProjectableTuiEntry(entry: LogEntry): boolean {
+  if (entry.discarded) return false;
+  if (!entry.tuiVisible) return false;
+  if (entry.type === "summary") return false;
+  if (
+    entry.type === "sub_agent_start" ||
+    entry.type === "sub_agent_tool_call" ||
+    entry.type === "sub_agent_end"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function toConversationEntry(
+  entry: LogEntry,
+  toolElapsedMap?: Map<string, number>,
+): ConversationEntry {
+  if (entry.type === "turn_end") {
+    const meta = entry.meta as Record<string, unknown>;
+    const status = meta.status as string;
+    const elapsedMs = typeof meta.elapsedMs === "number" ? meta.elapsedMs : 0;
+    const interruptHints = Array.isArray(meta.interruptHints) ? meta.interruptHints as string[] : [];
+    return {
+      kind: "status",
+      text: "",
+      id: entry.id,
+      elapsedMs,
+      meta: { turnEndStatus: status, interruptHints },
+    };
+  }
+
+  if (entry.type === "sub_agent_end") {
+    const subAgentId = entry.meta["subAgentId"];
+    const subAgentName = entry.meta["subAgentName"];
+    const elapsed = entry.meta["elapsed"];
+    const label = [
+      typeof subAgentId === "number" ? `#${subAgentId}` : "#?",
+      typeof subAgentName === "string" ? subAgentName : "sub-agent",
+    ].join(" ");
+    const elapsedStr = typeof elapsed === "number" ? elapsed.toFixed(1) : "?";
+    return {
+      kind: "sub_agent_done",
+      text: `[${label}] [done] (${elapsedStr}s)`,
+      id: entry.id,
+    };
+  }
+
+  if (entry.type === "agent_result") {
+    return {
+      kind: "agent_result",
+      text: "",
+      id: entry.id,
+      meta: { ...(entry.meta as Record<string, unknown>) },
+    };
+  }
+
+  const kind = entry.displayKind
+    ? DISPLAY_KIND_TO_ENTRY_KIND[entry.displayKind]
+    : "status";
+
+  const ce: ConversationEntry = {
+    kind,
+    text: entry.display,
+    id: entry.id,
+  };
+  if (entry.meta["tuiDim"]) ce.dim = true;
+  if (entry.type === "status" && entry.meta["statusType"]) {
+    ce.meta ??= {};
+    ce.meta.statusType = entry.meta["statusType"];
+  }
+
+  // Attach timing info and meta for tool_call entries
+  if (entry.type === "tool_call") {
+    ce.startedAt = entry.timestamp;
+    const toolCallId = entry.meta["toolCallId"];
+    if (typeof toolCallId === "string" && toolElapsedMap?.has(toolCallId)) {
+      ce.elapsedMs = toolElapsedMap.get(toolCallId);
+    }
+    const toolName = entry.meta["toolName"];
+    const content = entry.content as {
+      arguments?: Record<string, unknown>;
+      parseError?: string | null;
+      rawArguments?: string;
+    } | undefined;
+    const toolArgs = content?.arguments;
+    if (toolName || toolArgs) {
+      ce.meta = {};
+      if (typeof toolName === "string") ce.meta.toolName = toolName;
+      if (toolArgs && typeof toolArgs === "object") ce.meta.toolArgs = toolArgs;
+      const streamSections = entry.meta["toolStreamSections"];
+      if (Array.isArray(streamSections)) ce.meta.toolStreamSections = streamSections;
+      const streamState = entry.meta["toolStreamState"];
+      if (typeof streamState === "string") ce.meta.toolStreamState = streamState;
+      const execState = entry.meta["toolExecState"];
+      if (typeof execState === "string") ce.meta.toolExecState = execState;
+      const parseError = content?.parseError;
+      if (typeof parseError === "string") ce.meta.toolParseError = parseError;
+      const rawArguments = content?.rawArguments;
+      if (typeof rawArguments === "string") ce.meta.rawArguments = rawArguments;
+      const streamLanguage = entry.meta["toolStreamLanguage"];
+      if (typeof streamLanguage === "string") ce.meta.toolStreamLanguage = streamLanguage;
+      const streamMode = entry.meta["toolStreamMode"];
+      if (typeof streamMode === "string") ce.meta.toolStreamMode = streamMode;
+      const fmd = entry.meta["fileModifyData"];
+      if (fmd && typeof fmd === "object") ce.meta.fileModifyData = fmd;
+    }
+  }
+
+  // Forward reasoningComplete for reasoning entries (needed by TUI active entry tracker)
+  if (entry.type === "reasoning") {
+    const rc = entry.meta["reasoningComplete"];
+    if (rc !== undefined) {
+      ce.meta ??= {};
+      ce.meta.reasoningComplete = rc;
+    }
+  }
+
+  if (entry.type === "tool_result") {
+    const resultContent = entry.content as { content?: string } | undefined;
+    if (resultContent?.content) {
+      ce.fullText = resultContent.content;
+    }
+    const toolName = entry.meta["toolName"];
+    const toolMetadata = entry.meta["toolMetadata"];
+    if (toolName || (toolMetadata && typeof toolMetadata === "object")) {
+      ce.meta ??= {};
+      if (typeof toolName === "string") ce.meta.toolName = toolName;
+      if (toolMetadata && typeof toolMetadata === "object") ce.meta.toolMetadata = toolMetadata;
+    }
+    const isError = entry.meta["isError"];
+    if (typeof isError === "boolean") {
+      ce.meta ??= {};
+      ce.meta.isError = isError;
+    }
+    // Forward fileModifyData from tool result metadata
+    if (toolMetadata && typeof toolMetadata === "object") {
+      const fmd = (toolMetadata as Record<string, unknown>)["fileModifyData"];
+      if (fmd && typeof fmd === "object") {
+        ce.meta ??= {};
+        ce.meta.fileModifyData = fmd;
+      }
+    }
+  }
+
+  return ce;
+}
+
+function toConversationEntries(
+  entry: LogEntry,
+  toolElapsedMap?: Map<string, number>,
+): ConversationEntry[] {
+  const ce = toConversationEntry(entry, toolElapsedMap);
+
+  if (ce.kind !== "assistant") {
+    return [ce];
+  }
+
+  if (ce.text === INTERRUPTED_MARKER_TEXT) {
+    return [
+      {
+        kind: "interrupted_marker",
+        text: INTERRUPTED_MARKER_TEXT,
+        id: ce.id,
+      },
+    ];
+  }
+
+  if (!ce.text.endsWith(INTERRUPTED_MARKER_SUFFIX)) {
+    return [ce];
+  }
+
+  const assistantText = ce.text.slice(0, -INTERRUPTED_MARKER_SUFFIX.length);
+  const entries: ConversationEntry[] = [];
+
+  if (assistantText.trim().length > 0) {
+    entries.push({
+      ...ce,
+      text: assistantText,
+    });
+  }
+
+  entries.push({
+    kind: "interrupted_marker",
+    text: INTERRUPTED_MARKER_TEXT,
+    id: ce.id ? `${ce.id}:interrupt` : undefined,
+  });
+
+  return entries;
+}
+
+function isPrimaryRoundEntry(entry: LogEntry): boolean {
+  return (
+    isProjectableTuiEntry(entry) &&
+    entry.roundIndex !== undefined &&
+    PRIMARY_ROUND_ENTRY_TYPES.has(entry.type)
+  );
+}
+
+function buildSubAgentRollup(entries: LogEntry[]): ConversationEntry | null {
+  if (entries.length === 0) return null;
+  const lastFive = entries.slice(-5);
+  const omitted = entries.length - lastFive.length;
+  const noun = lastFive.length === 1 ? "tool call" : "tool calls";
+  const header = omitted > 0
+    ? `${omitted} earlier ${noun} omitted, last ${lastFive.length}:`
+    : `Last ${lastFive.length} sub-agent ${noun}:`;
+  return {
+    kind: "sub_agent_rollup",
+    id: `subrollup-${entries[0].id}`,
+    text: [header, ...lastFive.map((entry) => entry.display)].join("\n"),
+  };
+}
+
+/**
+ * Build a map of toolCallId → elapsed time (ms) by pairing
+ * tool_call and tool_result entries.
+ *
+ * Prefers execStartMs (actual tool execution start) from tool_result metadata
+ * over the tool_call entry timestamp, which for parallel calls all share
+ * roughly the same value (when they were logged, not when they ran).
+ */
+function buildToolElapsedMap(entries: LogEntry[]): Map<string, number> {
+  const callTimestamps = new Map<string, number>();
+  const elapsed = new Map<string, number>();
+
+  for (const entry of entries) {
+    if (entry.type === "tool_call") {
+      const id = entry.meta["toolCallId"];
+      if (typeof id === "string") {
+        callTimestamps.set(id, entry.timestamp);
+      }
+    } else if (entry.type === "tool_result") {
+      const id = entry.meta["toolCallId"];
+      if (typeof id === "string") {
+        const execStart = entry.meta["execStartMs"];
+        const startMs = typeof execStart === "number"
+          ? execStart
+          : callTimestamps.get(id);
+        if (startMs !== undefined) {
+          elapsed.set(id, entry.timestamp - startMs);
+        }
+      }
+    }
+  }
+
+  return elapsed;
+}
+
+function projectTuiWindow(entries: LogEntry[]): ConversationEntry[] {
+  const result: ConversationEntry[] = [];
+  const pendingSubAgentCalls: LogEntry[] = [];
+  const toolElapsedMap = buildToolElapsedMap(entries);
+
+  const flushPendingSubAgentCalls = (): void => {
+    const rollup = buildSubAgentRollup(pendingSubAgentCalls);
+    pendingSubAgentCalls.length = 0;
+    if (rollup) result.push(rollup);
+  };
+
+  let i = 0;
+  while (i < entries.length) {
+    const entry = entries[i];
+
+    if (!isProjectableTuiEntry(entry)) {
+      i++;
+      continue;
+    }
+
+    if (entry.type === "sub_agent_tool_call") {
+      pendingSubAgentCalls.push(entry);
+      i++;
+      continue;
+    }
+
+    if (isPrimaryRoundEntry(entry)) {
+      if (pendingSubAgentCalls.length > 0) {
+        flushPendingSubAgentCalls();
+      }
+
+      const turnIndex = entry.turnIndex;
+      const roundIndex = entry.roundIndex;
+
+      // Collect all entries in this round first, then reorder so that each
+      // tool_result appears right after its corresponding tool_call.
+      const roundEntries: LogEntry[] = [];
+
+      while (i < entries.length) {
+        const candidate = entries[i];
+
+        if (!isProjectableTuiEntry(candidate)) {
+          i++;
+          continue;
+        }
+
+        if (candidate.type === "sub_agent_tool_call") {
+          pendingSubAgentCalls.push(candidate);
+          i++;
+          continue;
+        }
+
+        if (
+          candidate.turnIndex === turnIndex &&
+          candidate.roundIndex === roundIndex &&
+          PRIMARY_ROUND_ENTRY_TYPES.has(candidate.type)
+        ) {
+          roundEntries.push(candidate);
+          i++;
+          continue;
+        }
+
+        break;
+      }
+
+      // Pair tool_call entries with their matching tool_result entries.
+      // Non-tool entries (assistant_text, reasoning) go first in their
+      // original order, then each tool_call is immediately followed by
+      // its tool_result (if visible).
+      const nonToolEntries: LogEntry[] = [];
+      const toolCalls: LogEntry[] = [];
+      const toolResultByCallId = new Map<string, LogEntry>();
+
+      for (const re of roundEntries) {
+        if (re.type === "tool_call") {
+          toolCalls.push(re);
+        } else if (re.type === "tool_result") {
+          const callId = re.meta["toolCallId"];
+          if (typeof callId === "string") {
+            toolResultByCallId.set(callId, re);
+          } else {
+            // Orphan result — append after all paired entries
+            nonToolEntries.push(re);
+          }
+        } else {
+          nonToolEntries.push(re);
+        }
+      }
+
+      for (const ne of nonToolEntries) {
+        result.push(...toConversationEntries(ne, toolElapsedMap));
+      }
+      for (const tc of toolCalls) {
+        result.push(...toConversationEntries(tc, toolElapsedMap));
+        const callId = tc.meta["toolCallId"];
+        if (typeof callId === "string") {
+          const tr = toolResultByCallId.get(callId);
+          if (tr) {
+            result.push(...toConversationEntries(tr, toolElapsedMap));
+            toolResultByCallId.delete(callId);
+          }
+        }
+      }
+      // Flush any unmatched tool_results (shouldn't happen, but be safe)
+      for (const tr of toolResultByCallId.values()) {
+        result.push(...toConversationEntries(tr, toolElapsedMap));
+      }
+
+      if (pendingSubAgentCalls.length > 0) {
+        flushPendingSubAgentCalls();
+      }
+      continue;
+    }
+
+    if (pendingSubAgentCalls.length > 0) {
+      flushPendingSubAgentCalls();
+    }
+
+    result.push(...toConversationEntries(entry, toolElapsedMap));
+    i++;
+  }
+
+  if (pendingSubAgentCalls.length > 0) {
+    flushPendingSubAgentCalls();
+  }
+
+  return result;
+}
+
+/**
+ * Project log entries into ConversationEntry[] for TUI rendering.
+ *
+ * Rules:
+ *  1. Determine fold boundary based on compact markers
+ *  2. Skip: folded entries, tuiVisible===false, discarded, summary entries
+ *  3. Map (displayKind, display) → ConversationEntry
+ */
+export function projectToTuiEntries(
+  entries: LogEntry[],
+  options?: TuiProjectionOptions,
+): ConversationEntry[] {
+  const threshold = options?.compactFoldThreshold ?? 3;
+
+  // Find all compact_marker indices
+  const compactMarkerIndices: number[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i].type === "compact_marker" && !entries[i].discarded) {
+      compactMarkerIndices.push(i);
+    }
+  }
+
+  // Determine fold boundary: if N >= threshold, fold entries before the (N - threshold + 1)th marker
+  let foldEndIdx = -1; // entries at index <= foldEndIdx are folded
+  let foldedCount = 0;
+  let foldedCompactCount = 0;
+  if (compactMarkerIndices.length >= threshold) {
+    const foldUpToMarker = compactMarkerIndices[compactMarkerIndices.length - threshold];
+    foldEndIdx = foldUpToMarker;
+    foldedCount = projectTuiWindow(entries.slice(0, foldEndIdx + 1)).length;
+    foldedCompactCount = compactMarkerIndices.length - threshold + 1;
+  }
+
+  const result: ConversationEntry[] = [];
+
+  // Add fold placeholder if needed
+  if (foldEndIdx >= 0 && foldedCount > 0) {
+    result.push({
+      kind: "status",
+      text: `\u25b8 ${foldedCount} earlier entries (${foldedCompactCount} compacts)`,
+    });
+  }
+
+  result.push(...projectTuiWindow(entries.slice(foldEndIdx + 1)));
+
+  return result;
+}
+
+// ------------------------------------------------------------------
+// API Projection
+// ------------------------------------------------------------------
+
+/**
+ * Internal message format consumed by provider adapters.
+ * This is the output of the API projection layer.
+ */
+export type InternalMessage = Record<string, unknown>;
+
+export interface ApiProjectionOptions {
+  /**
+   * Dynamically assembled system prompt (re-assembled each API call).
+   * If not provided, the system_prompt log entry's content is used as fallback.
+   */
+  systemPrompt?: string;
+  /** Legacy support for important log injection. Runtime no longer uses this. */
+  importantLog?: string;
+  /**
+   * Resolve an image_ref path to base64 data for API consumption.
+   * If not provided, image_ref blocks are passed through as-is.
+   */
+  resolveImageRef?: (refPath: string) => { data: string; media_type: string } | null;
+  /** Merge consecutive same-role messages for providers that require alternation. */
+  requiresAlternatingRoles?: boolean;
+  /** Truncate distill_context tool-call content before provider submission. */
+  truncateDistillToolArgs?: boolean;
+  /**
+   * show_context annotations: Map from contextId → annotation text.
+   * When provided, §{id}§ + annotation is prepended to user message and
+   * first tool_result content for each context group.
+   */
+  showContextAnnotations?: Map<string, string>;
+}
+
+const USER_MESSAGE_HEADER = "[User Message]";
+
+/**
+ * Project log entries into InternalMessage[] for provider consumption.
+ *
+ * Algorithm:
+ *  1. Re-render system prompt (or use log's)
+ *  2. Find last compact_marker → API window start
+ *  3. Insert compact_context if present
+ *  4. Iterate entries, skip: apiRole===null, summarized, discarded, archived with null content
+ *  5. Group by roundIndex to build assistant messages
+ */
+export function projectToApiMessages(
+  entries: LogEntry[],
+  options?: ApiProjectionOptions,
+): InternalMessage[] {
+  // Step 1: Find system prompt
+  let systemPromptContent: unknown = "";
+  for (const e of entries) {
+    if (e.type === "system_prompt" && !e.discarded) {
+      systemPromptContent = options?.systemPrompt ?? e.content;
+      break;
+    }
+  }
+
+  // Step 2: Find last compact_marker → window start
+  let windowStartIdx = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].type === "compact_marker" && !entries[i].discarded) {
+      windowStartIdx = i + 1;
+      break;
+    }
+  }
+
+  // Step 3: Find compact_context for the current window
+  let compactContextContent: unknown = null;
+  let compactContextId: string | undefined;
+  for (let i = windowStartIdx; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.type === "compact_context" && !e.discarded && !e.summarized) {
+      compactContextContent = e.content;
+      const ctxId = (e.meta as Record<string, unknown>)["contextId"];
+      compactContextId = ctxId !== undefined && ctxId !== null ? String(ctxId) : undefined;
+      break;
+    }
+  }
+  // Also check just before the window start (compact_context may be right after compact_marker)
+  if (!compactContextContent && windowStartIdx > 0) {
+    for (let i = windowStartIdx; i < entries.length && i < windowStartIdx + 5; i++) {
+      const e = entries[i];
+      if (e.type === "compact_context" && !e.discarded && !e.summarized) {
+        compactContextContent = e.content;
+        const ctxId = (e.meta as Record<string, unknown>)["contextId"];
+        compactContextId = ctxId !== undefined && ctxId !== null ? String(ctxId) : undefined;
+        break;
+      }
+    }
+  }
+
+  // Copy annotations map so we can delete entries after first injection per group
+  const annotations = options?.showContextAnnotations
+    ? new Map(options.showContextAnnotations)
+    : null;
+
+  // Build messages
+  const messages: InternalMessage[] = [];
+
+  // System prompt
+  if (systemPromptContent) {
+    messages.push({ role: "system", content: systemPromptContent });
+  }
+
+  // Compact context (as user message)
+  if (compactContextContent) {
+    let content = compactContextContent as string | Array<Record<string, unknown>>;
+    if (compactContextId !== undefined && annotations?.has(compactContextId)) {
+      content = prependAnnotation(
+        content,
+        annotations.get(compactContextId)!,
+      ) as string | Array<Record<string, unknown>>;
+      annotations.delete(compactContextId);
+    }
+    const compactMsg: InternalMessage = { role: "user", content };
+    if (compactContextId !== undefined) compactMsg["_context_id"] = compactContextId;
+    messages.push(compactMsg);
+  }
+
+  // Step 4-5: Collect window entries and group by round
+  const windowEntries = entries.slice(windowStartIdx).filter((e) => {
+    if (e.summarized) return false;
+    if (e.discarded) return false;
+    if (e.archived && e.content === null) return false;
+    if (e.type === "system_prompt") return false; // already handled
+    if (e.type === "compact_context") return false; // already handled
+    // reasoning has apiRole=null but is grouped with assistant entries
+    if (e.type === "reasoning") return true;
+    if (e.apiRole === null) return false;
+    return true;
+  });
+
+  // Group entries by (turnIndex, roundIndex) into well-formed rounds:
+  //   1. One assistant message (reasoning + assistant_text + tool_call entries)
+  //   2. All corresponding tool_result messages (ordered by tool_call order)
+  //
+  // In the log, tool_call and tool_result entries may be interleaved within
+  // the same round because tool execution starts immediately during streaming.
+  // This loop collects ALL entries of the same round before emitting them.
+
+  const emitToolResult = (entry: LogEntry): void => {
+    const resultContent = entry.content as {
+      toolCallId: string;
+      toolName: string;
+      content: string;
+      toolSummary: string;
+    };
+    let trContent = resultContent.content;
+    const trCtxId = (entry.meta as Record<string, unknown>)["contextId"];
+    if (trCtxId !== undefined && annotations?.has(String(trCtxId))) {
+      trContent = `${annotations.get(String(trCtxId))!}\n\n${trContent}`;
+      annotations.delete(String(trCtxId));
+    }
+    const toolMeta = (entry.meta as Record<string, unknown>)["toolMetadata"] as Record<string, unknown> | undefined;
+    const contentBlocks = toolMeta?.["_contentBlocks"] as Array<Record<string, unknown>> | undefined;
+
+    const trMsg: InternalMessage = {
+      role: "tool_result",
+      tool_call_id: entry.meta.toolCallId,
+      tool_name: entry.meta.toolName,
+      content: contentBlocks ?? trContent,
+      tool_summary: resultContent.toolSummary,
+    };
+    if (trCtxId !== undefined) trMsg["_context_id"] = trCtxId;
+    messages.push(trMsg);
+  };
+
+  let i = 0;
+  while (i < windowEntries.length) {
+    const entry = windowEntries[i];
+
+    if (
+      (entry.apiRole === "assistant" || entry.type === "reasoning") &&
+      entry.roundIndex !== undefined
+    ) {
+      // Collect ALL entries in this round, regardless of role interleaving.
+      const roundIdx = entry.roundIndex;
+      const turnIdx = entry.turnIndex;
+      const assistantEntries: LogEntry[] = [];
+      const toolResultEntries: LogEntry[] = [];
+
+      while (i < windowEntries.length) {
+        const candidate = windowEntries[i];
+        if (candidate.turnIndex !== turnIdx || candidate.roundIndex !== roundIdx) break;
+        if (candidate.apiRole === "assistant" || candidate.type === "reasoning") {
+          assistantEntries.push(candidate);
+        } else if (candidate.apiRole === "tool_result") {
+          toolResultEntries.push(candidate);
+        }
+        // Skip any other entry types within this round (e.g. token_update
+        // entries are already filtered out, but be defensive)
+        i++;
+      }
+
+      messages.push(buildAssistantMessage(assistantEntries, entries));
+
+      // Reorder tool_results to match tool_call declaration order.
+      const toolCallOrder = new Map<string, number>();
+      let orderIdx = 0;
+      for (const ae of assistantEntries) {
+        if (ae.type === "tool_call") {
+          const tcId = ae.meta["toolCallId"];
+          if (typeof tcId === "string") toolCallOrder.set(tcId, orderIdx++);
+        }
+      }
+      if (toolCallOrder.size > 0 && toolResultEntries.length > 1) {
+        toolResultEntries.sort((a, b) => {
+          const aOrder = toolCallOrder.get(a.meta["toolCallId"] as string) ?? Infinity;
+          const bOrder = toolCallOrder.get(b.meta["toolCallId"] as string) ?? Infinity;
+          return aOrder - bOrder;
+        });
+      }
+
+      for (const trEntry of toolResultEntries) {
+        emitToolResult(trEntry);
+      }
+    } else if (entry.apiRole === "user") {
+      let content = resolveImageRefs(entry.content, options?.resolveImageRef);
+      const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
+      if (ctxId !== undefined && annotations?.has(String(ctxId))) {
+        content = prependAnnotation(content, annotations.get(String(ctxId))!);
+      }
+      const userMsg: InternalMessage = { role: "user", content };
+      if (ctxId !== undefined) userMsg["_context_id"] = ctxId;
+      if (entry.type === "summary") {
+        userMsg["_is_summary"] = true;
+        userMsg["_summary_depth"] = (entry.meta as Record<string, unknown>)["summaryDepth"] ?? 1;
+        userMsg["_summarized_ids"] = (entry.meta as Record<string, unknown>)["summarizedEntryIds"] ?? [];
+      }
+      messages.push(userMsg);
+      i++;
+    } else if (entry.apiRole === "tool_result") {
+      // Standalone tool_result not part of a round group (e.g. orphaned
+      // after interrupt). Emit as-is.
+      emitToolResult(entry);
+      i++;
+    } else {
+      messages.push({ role: entry.apiRole, content: entry.content });
+      i++;
+    }
+  }
+
+  const importantLog = options?.importantLog?.trim();
+  if (importantLog) {
+    injectLabeledUserContext(
+      messages,
+      "[IMPORTANT LOG]\nThe following is your persistent engineering notebook:\n\n",
+      importantLog,
+    );
+  }
+
+  let projected = options?.truncateDistillToolArgs === false
+    ? messages
+    : truncateDistillToolArgs(messages);
+
+  if (options?.requiresAlternatingRoles) {
+    projected = mergeConsecutiveSameRole(projected);
+  }
+
+  return projected;
+}
+
+// ------------------------------------------------------------------
+// show_context annotation injection
+// ------------------------------------------------------------------
+
+/**
+ * Prepend a show_context annotation to message content.
+ * Handles both string content and array content blocks.
+ */
+function prependAnnotation(content: unknown, annotation: string): unknown {
+  if (typeof content === "string") {
+    return `${annotation}\n\n${content}`;
+  }
+  if (Array.isArray(content)) {
+    const copy = (content as Array<Record<string, unknown>>).map((b) => ({ ...b }));
+    // Prepend annotation as a text block
+    copy.unshift({ type: "text", text: `${annotation}\n\n` });
+    return copy;
+  }
+  return content;
+}
+
+// ------------------------------------------------------------------
+// Image ref resolution
+// ------------------------------------------------------------------
+
+/**
+ * Resolve image_ref blocks in content to inline base64 for API consumption.
+ * If content is a string or resolver is not provided, returns as-is.
+ */
+function resolveImageRefs(
+  content: unknown,
+  resolver?: (refPath: string) => { data: string; media_type: string } | null,
+): unknown {
+  if (!resolver || !Array.isArray(content)) return content;
+  let hasRef = false;
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as Record<string, unknown>)["type"] === "image_ref"
+    ) {
+      hasRef = true;
+      break;
+    }
+  }
+  if (!hasRef) return content;
+
+  return (content as Array<Record<string, unknown>>).map((block) => {
+    if (block["type"] !== "image_ref") return block;
+    const resolved = resolver(block["path"] as string);
+    if (!resolved) return block; // fallback: pass through
+    return {
+      type: "image",
+      data: resolved.data,
+      media_type: resolved.media_type,
+    };
+  });
+}
+
+// ------------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------------
+
+/**
+ * Build a single assistant API message from grouped round entries.
+ */
+function buildAssistantMessage(
+  roundEntries: LogEntry[],
+  _allEntries: LogEntry[],
+): InternalMessage {
+  const msg: InternalMessage = { role: "assistant" };
+
+  // Extract reasoning
+  const reasoning = roundEntries.find((e) => e.type === "reasoning");
+  if (reasoning) {
+    msg.reasoning_content = reasoning.content;
+    if (reasoning.meta.reasoningState !== undefined) {
+      msg._reasoning_state = reasoning.meta.reasoningState;
+    }
+  }
+
+  // Extract assistant_text
+  const text = roundEntries.find((e) => e.type === "assistant_text");
+
+  // Extract tool_calls
+  const toolCalls = roundEntries
+    .filter((e) => e.type === "tool_call")
+    .map((e) => {
+      const tc = e.content as {
+        id?: string;
+        name?: string;
+        arguments?: Record<string, unknown>;
+      } | null;
+      return {
+        id: String(tc?.id ?? ""),
+        name: String(tc?.name ?? ""),
+        arguments: tc?.arguments ?? {},
+      };
+    });
+
+  // Extract no_reply
+  const noReply = roundEntries.find((e) => e.type === "no_reply");
+
+  if (toolCalls.length > 0) {
+    msg.tool_calls = toolCalls;
+    if (text) {
+      msg.text = text.content;
+    }
+  } else if (noReply) {
+    msg.content = noReply.content;
+  } else if (text) {
+    msg.content = text.content;
+  }
+
+  // Preserve _context_id from the first entry with one
+  for (const e of roundEntries) {
+    const ctxId = (e.meta as Record<string, unknown>)["contextId"];
+    if (ctxId !== undefined) {
+      msg["_context_id"] = ctxId;
+      break;
+    }
+  }
+
+  return msg;
+}
+
+function injectLabeledUserContext(
+  messages: InternalMessage[],
+  header: string,
+  content: string,
+): void {
+  const fullContent = header + content;
+
+  // Find position after system prompt(s)
+  let insertIdx = 0;
+  while (insertIdx < messages.length && messages[insertIdx].role === "system") {
+    insertIdx++;
+  }
+
+  if (insertIdx < messages.length && messages[insertIdx].role === "user") {
+    // Merge into first user message
+    const first = messages[insertIdx];
+    messages[insertIdx] = {
+      ...first,
+      content: mergeMessageContent(fullContent, first.content, { ensureUserBoundary: true }),
+    };
+  } else {
+    // Insert standalone user message
+    messages.splice(insertIdx, 0, { role: "user", content: fullContent });
+  }
+}
+
+function truncateDistillToolArgs(
+  messages: InternalMessage[],
+): InternalMessage[] {
+  return messages.map((msg) => {
+    const toolCalls = msg["tool_calls"] as Array<Record<string, unknown>> | undefined;
+    if (!toolCalls?.length) return msg;
+
+    let modified = false;
+    const nextToolCalls = toolCalls.map((tc) => {
+      if ((tc["name"] as string) !== "distill_context") return tc;
+
+      const args = tc["arguments"] as Record<string, unknown> | undefined;
+      const operations = args?.["operations"] as Array<Record<string, unknown>> | undefined;
+      if (!args || !operations?.length) return tc;
+
+      let opsModified = false;
+      const nextOperations = operations.map((op) => {
+        const content = op["content"] as string | undefined;
+        const resultCtxId = op["_result_context_id"] as string | number | undefined;
+        if (!content || content.length <= 100) {
+          if (resultCtxId === undefined) return op;
+          opsModified = true;
+          const { _result_context_id: _removed, ...rest } = op;
+          return rest;
+        }
+
+        opsModified = true;
+        const { _result_context_id: _removed, ...rest } = op;
+        return {
+          ...rest,
+          content: truncateDistillContent(content, resultCtxId),
+        };
+      });
+
+      if (!opsModified) return tc;
+      modified = true;
+      return {
+        ...tc,
+        arguments: {
+          ...args,
+          operations: nextOperations,
+        },
+      };
+    });
+
+    if (!modified) return msg;
+    return { ...msg, tool_calls: nextToolCalls };
+  });
+}
+
+function mergeMessageContent(
+  prefix: string,
+  existing: unknown,
+  opts?: { ensureUserBoundary?: boolean },
+): string | Array<Record<string, unknown>> {
+  const appendBoundary = (text: string): string => {
+    if (opts?.ensureUserBoundary !== true) return text;
+    const startsWithBoundary = text.startsWith(`${USER_MESSAGE_HEADER}\n`);
+    return startsWithBoundary ? text : `${USER_MESSAGE_HEADER}\n${text}`;
+  };
+
+  if (typeof existing === "string") {
+    return `${prefix}\n\n${appendBoundary(existing)}`;
+  }
+  if (Array.isArray(existing)) {
+    const blocks: Array<Record<string, unknown>> = [{ type: "text", text: prefix }];
+    if (opts?.ensureUserBoundary === true) {
+      blocks.push({ type: "text", text: `${USER_MESSAGE_HEADER}\n` });
+    }
+    return [
+      ...blocks,
+      ...existing as Array<Record<string, unknown>>,
+    ];
+  }
+  return `${prefix}\n\n${appendBoundary(String(existing ?? ""))}`;
+}

@@ -1,0 +1,689 @@
+/**
+ * OpenAI Responses API provider adapter.
+ *
+ * Uses `client.responses.create()` for o1/o3 and GPT-5 models.
+ * Supports native reasoning items and web_search_preview.
+ */
+
+import OpenAI from "openai";
+import { getExtendedCacheSupport, type ModelConfig } from "../config.js";
+import {
+  BaseProvider,
+  Citation,
+  finalizeToolCall,
+  ProviderResponse,
+  ToolCall,
+  Usage,
+  type Message,
+  type SendMessageOptions,
+  type ToolDef,
+} from "./base.js";
+
+// Models that don't support `temperature` on OpenAI Responses API.
+const O_SERIES_RE = /^o\d/;
+const GPT5_SERIES_RE = /^gpt-5(?:$|[.-])/;
+
+function normalizeModelId(model: string): string {
+  const idx = model.lastIndexOf("/");
+  return idx >= 0 ? model.slice(idx + 1) : model;
+}
+
+function supportsTemperature(model: string): boolean {
+  const normalized = normalizeModelId(model).toLowerCase();
+  return !(
+    O_SERIES_RE.test(normalized)
+    || GPT5_SERIES_RE.test(normalized)
+  );
+}
+
+export class OpenAIResponsesProvider extends BaseProvider {
+  /**
+   * GPT-5 series uses independent input/output limits (input ≤272K, output ≤128K).
+   * The contextLength stores the input limit; compact check should compare against
+   * it directly without subtracting maxOutputTokens.
+   */
+  override readonly budgetCalcMode = "full_context" as const;
+
+  protected _config: ModelConfig;
+  protected _client: OpenAI;
+
+  constructor(config: ModelConfig) {
+    super();
+    this._config = config;
+    const opts: ConstructorParameters<typeof OpenAI>[0] = {
+      apiKey: config.apiKey,
+    };
+    if (config.baseUrl) {
+      opts.baseURL = config.baseUrl;
+    }
+    this._client = new OpenAI(opts);
+  }
+
+  private _isCodexProvider(): boolean {
+    return this._config.provider === "openai-codex";
+  }
+
+  /**
+   * Stateless Responses backends that require `include: reasoning.encrypted_content`
+   * and sanitized reasoning round-trip items (type + summary + encrypted_content only).
+   *
+   * Includes:
+   *   - openai-codex (chatgpt.com/backend-api/codex) — rejects store=true
+   *   - copilot (api.individual.githubcopilot.com/responses) — rejects store=true
+   *
+   * Both backends drop echoed reasoning items that lack encrypted_content, producing
+   * 400 invalid_request_body on the follow-up turn. Verified by experiments under
+   * `experiments/copilot-probe/`.
+   */
+  private _isStatelessResponsesBackend(): boolean {
+    const p = this._config.provider;
+    return p === "openai-codex" || p === "copilot";
+  }
+
+  private _buildRequestOptions(
+    signal?: AbortSignal,
+    promptCacheKey?: string,
+  ): Record<string, unknown> | undefined {
+    const requestOptions: Record<string, unknown> = {};
+
+    if (signal) {
+      requestOptions["signal"] = signal;
+    }
+
+    if (this._isCodexProvider() && promptCacheKey) {
+      requestOptions["headers"] = {
+        conversation_id: promptCacheKey,
+        session_id: promptCacheKey,
+      };
+    }
+
+    return Object.keys(requestOptions).length > 0 ? requestOptions : undefined;
+  }
+
+  private _ensureStatelessInclude(kwargs: Record<string, unknown>): void {
+    if (!this._isStatelessResponsesBackend()) return;
+
+    const existing = Array.isArray(kwargs["include"])
+      ? (kwargs["include"] as unknown[]).filter((v): v is string => typeof v === "string")
+      : [];
+
+    if (!existing.includes("reasoning.encrypted_content")) {
+      existing.push("reasoning.encrypted_content");
+    }
+
+    kwargs["include"] = existing;
+  }
+
+  private _sanitizeStatelessRoundtripItems(items: unknown): Record<string, unknown>[] {
+    if (!Array.isArray(items)) return [];
+
+    const sanitized: Record<string, unknown>[] = [];
+
+    for (const raw of items) {
+      if (!raw || typeof raw !== "object") continue;
+      const item = raw as Record<string, unknown>;
+      const itemType = item["type"] as string;
+
+      if (itemType === "reasoning") {
+        const next: Record<string, unknown> = { type: "reasoning" };
+        if (Array.isArray(item["summary"])) {
+          next["summary"] = item["summary"];
+        }
+        if ("encrypted_content" in item) {
+          next["encrypted_content"] = item["encrypted_content"];
+        }
+        sanitized.push(next);
+        continue;
+      }
+
+      if (itemType === "function_call") {
+        const next: Record<string, unknown> = { type: "function_call" };
+        if (typeof item["call_id"] === "string") {
+          next["call_id"] = item["call_id"];
+        }
+        if (typeof item["name"] === "string") {
+          next["name"] = item["name"];
+        }
+        const args = item["arguments"];
+        if (typeof args === "string") {
+          next["arguments"] = args;
+        } else if (args !== undefined) {
+          next["arguments"] = JSON.stringify(args);
+        }
+        sanitized.push(next);
+      }
+    }
+
+    return sanitized;
+  }
+
+  // ------------------------------------------------------------------
+  // Tool conversion
+  // ------------------------------------------------------------------
+
+  private _convertTools(
+    tools: ToolDef[],
+  ): { toolsList: Record<string, unknown>[]; hasNativeWebSearch: boolean } {
+    const result: Record<string, unknown>[] = [];
+    let hasWebSearch = false;
+    for (const t of tools) {
+      if (t.name === "web_search") {
+        if (this._config.supportsWebSearch) {
+          hasWebSearch = true;
+        }
+        continue;
+      }
+      result.push({
+        type: "function",
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      });
+    }
+    return { toolsList: result, hasNativeWebSearch: hasWebSearch };
+  }
+
+  // ------------------------------------------------------------------
+  // Input conversion
+  // ------------------------------------------------------------------
+
+  private _buildInput(messages: Message[]): Record<string, unknown>[] {
+    const items: Record<string, unknown>[] = [];
+
+    for (const msg of messages) {
+      const m = msg as Record<string, unknown>;
+      const role = m["role"] as string;
+
+      if (role === "system") {
+        items.push({ role: "developer", content: m["content"] });
+      } else if (role === "user") {
+        const content = m["content"];
+        if (Array.isArray(content)) {
+          const parts: Record<string, unknown>[] = [];
+          for (const block of content as Record<string, unknown>[]) {
+            if (block["type"] === "text") {
+              parts.push({ type: "input_text", text: block["text"] });
+            } else if (block["type"] === "image") {
+              const dataUri = `data:${block["media_type"]};base64,${block["data"]}`;
+              parts.push({ type: "input_image", image_url: dataUri });
+            }
+          }
+          items.push({ role: "user", content: parts });
+        } else {
+          items.push({ role: "user", content });
+        }
+      } else if (role === "assistant") {
+        const reasoningBlocks = m["_reasoning_state"];
+
+        if (reasoningBlocks && Array.isArray(reasoningBlocks)) {
+          const roundtripItems = this._isStatelessResponsesBackend()
+            ? this._sanitizeStatelessRoundtripItems(reasoningBlocks)
+            : (reasoningBlocks as Record<string, unknown>[]);
+          items.push(...roundtripItems);
+          const text = (m["content"] as string) || (m["text"] as string) || "";
+          if (text) {
+            items.push({
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text }],
+            });
+          }
+        } else if (m["tool_calls"]) {
+          const text = (m["content"] as string) || (m["text"] as string) || "";
+          if (text) {
+            items.push({
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text }],
+            });
+          }
+          for (const tc of m["tool_calls"] as Record<string, unknown>[]) {
+            const args = tc["arguments"];
+            items.push({
+              type: "function_call",
+              call_id: tc["id"],
+              name: tc["name"],
+              arguments:
+                typeof args === "object" && args !== null
+                  ? JSON.stringify(args)
+                  : args,
+            });
+          }
+        } else {
+          const text = (m["content"] as string) || (m["text"] as string) || "";
+          if (text) {
+            items.push({
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text }],
+            });
+          }
+        }
+      } else if (role === "tool_result") {
+        // OpenAI Responses API only accepts string output;
+        // extract text from multimodal content blocks if present.
+        const rawOutput = m["content"];
+        const textOutput = Array.isArray(rawOutput)
+          ? (rawOutput as Array<Record<string, unknown>>)
+              .filter((b) => b["type"] === "text")
+              .map((b) => b["text"] as string)
+              .join("\n") || String(rawOutput)
+          : rawOutput;
+        items.push({
+          type: "function_call_output",
+          call_id: m["tool_call_id"],
+          output: textOutput,
+        });
+      }
+    }
+
+    return items;
+  }
+
+  // ------------------------------------------------------------------
+  // Response parsing
+  // ------------------------------------------------------------------
+
+  private _parseResponse(response: Record<string, unknown>): ProviderResponse {
+    const textParts: string[] = [];
+    const toolCalls: ToolCall[] = [];
+    const reasoningTextParts: string[] = [];
+    const reasoningItems: unknown[] = [];
+    const citations: Citation[] = [];
+
+    const output = (response["output"] as Record<string, unknown>[]) || [];
+    for (const item of output) {
+      const itemType = item["type"] as string;
+
+      if (itemType === "reasoning") {
+        reasoningItems.push(item);
+        const summary = item["summary"] as Record<string, unknown>[] | undefined;
+        if (summary) {
+          for (const s of summary) {
+            const text = (s["text"] as string) || "";
+            if (text) reasoningTextParts.push(text);
+          }
+        }
+      } else if (itemType === "message") {
+        const content =
+          (item["content"] as Record<string, unknown>[]) || [];
+        for (const part of content) {
+          const partType = part["type"] as string;
+          if (partType === "output_text") {
+            textParts.push((part["text"] as string) || "");
+            const annotations = part["annotations"] as Record<string, unknown>[] | undefined;
+            if (annotations) {
+              for (const ann of annotations) {
+                if ((ann["type"] as string) === "url_citation") {
+                  citations.push({
+                    url: (ann["url"] as string) || "",
+                    title: (ann["title"] as string) || "",
+                    citedText: (ann["cited_text"] as string) || "",
+                  });
+                } else {
+                  const nested = ann["url_citation"] as Record<string, unknown> | undefined;
+                  if (nested) {
+                    citations.push({
+                      url: (nested["url"] as string) || "",
+                      title: (nested["title"] as string) || "",
+                      citedText: (nested["cited_text"] as string) || "",
+                    });
+                  }
+                }
+              }
+            }
+          } else if (partType === "refusal") {
+            textParts.push(`[Refusal: ${(part["refusal"] as string) || ""}]`);
+          }
+        }
+      } else if (itemType === "function_call") {
+        const callId = (item["call_id"] as string) || "";
+        const name = (item["name"] as string) || "";
+        const argsStr = (item["arguments"] as string) || "{}";
+        if (typeof item["arguments"] === "string") {
+          toolCalls.push(finalizeToolCall(callId, name, argsStr, `${name} response`));
+        } else {
+          toolCalls.push({
+            id: callId,
+            name,
+            rawArguments: JSON.stringify((item["arguments"] as Record<string, unknown>) ?? {}),
+            arguments: (item["arguments"] as Record<string, unknown>) ?? {},
+            parseError: null,
+          });
+        }
+      }
+    }
+
+    // Usage
+    let usage = new Usage();
+    const respUsage = response["usage"] as Record<string, unknown> | undefined;
+    if (respUsage) {
+      const inputDetails = respUsage["input_tokens_details"] as Record<string, number> | undefined;
+      usage = new Usage(
+        (respUsage["input_tokens"] as number) || 0,
+        (respUsage["output_tokens"] as number) || 0,
+        0, // no cache creation for OpenAI
+        inputDetails?.["cached_tokens"] ?? 0,
+      );
+    }
+
+    const reasoningContent = reasoningTextParts.length > 0
+      ? reasoningTextParts.join("\n")
+      : "";
+
+    let reasoningState: unknown = null;
+    if (reasoningItems.length > 0) {
+      const outputItemsForRoundtrip: unknown[] = [];
+      for (const item of output) {
+        const itemType = (item as Record<string, unknown>)["type"] as string;
+        if (itemType === "reasoning" || itemType === "function_call") {
+          outputItemsForRoundtrip.push(item);
+        }
+      }
+      if (outputItemsForRoundtrip.length > 0) {
+        reasoningState = this._isStatelessResponsesBackend()
+          ? this._sanitizeStatelessRoundtripItems(outputItemsForRoundtrip)
+          : outputItemsForRoundtrip;
+      }
+    }
+
+    return new ProviderResponse({
+      text: textParts.join("\n"),
+      toolCalls,
+      usage,
+      raw: response,
+      reasoningContent,
+      reasoningState,
+      citations,
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Thinking / reasoning params
+  // ------------------------------------------------------------------
+
+  private _applyThinkingParams(kwargs: Record<string, unknown>, options?: SendMessageOptions): void {
+    if (!this._config.supportsThinking) return;
+
+    const level = options?.thinkingLevel;
+
+    if (level === "off" || level === "none") {
+      kwargs["reasoning"] = { effort: "none", summary: "auto" };
+      return;
+    }
+
+    let effort: string;
+    if (level && ["minimal", "low", "medium", "high", "xhigh"].includes(level)) {
+      effort = level;
+    } else {
+      // default: derive from budget
+      const budget = this._config.thinkingBudget;
+      if (budget > 0 && budget < 5_000) {
+        effort = "low";
+      } else if (budget >= 5_000 && budget < 10_000) {
+        effort = "medium";
+      } else {
+        effort = "high";
+      }
+    }
+    kwargs["reasoning"] = { effort, summary: "auto" };
+  }
+
+  // ------------------------------------------------------------------
+  // Core API call
+  // ------------------------------------------------------------------
+
+  async sendMessage(
+    messages: Message[],
+    tools?: ToolDef[],
+    options?: SendMessageOptions,
+  ): Promise<ProviderResponse> {
+    const inputItems = this._buildInput(messages);
+    const requestOptions = this._buildRequestOptions(
+      options?.signal,
+      options?.promptCacheKey,
+    );
+
+    const kwargs: Record<string, unknown> = {
+      model: this._config.model,
+      input: inputItems,
+    };
+
+    // Codex backend requires system prompt as top-level `instructions`,
+    // not as developer-role items in the input array.
+    if (this._config.provider === "openai-codex") {
+      const systemParts: string[] = [];
+      const filtered: Record<string, unknown>[] = [];
+      for (const item of inputItems) {
+        if ((item as { role?: string }).role === "developer") {
+          systemParts.push(String(item["content"] ?? ""));
+        } else {
+          filtered.push(item);
+        }
+      }
+      if (systemParts.length > 0) {
+        kwargs["instructions"] = systemParts.join("\n\n");
+        kwargs["input"] = filtered;
+      }
+    }
+
+    // Codex backend does not support temperature or max_output_tokens.
+    const isCodex = this._isCodexProvider();
+
+    // Temperature (skip for model families and Codex that reject this field).
+    if (!isCodex && supportsTemperature(this._config.model)) {
+      const temp =
+        options?.temperature !== undefined
+          ? options.temperature
+          : this._config.temperature;
+      if (temp !== undefined) {
+        kwargs["temperature"] = temp;
+      }
+    }
+
+    if (!isCodex && (options?.maxTokens || this._config.maxTokens)) {
+      kwargs["max_output_tokens"] = options?.maxTokens || this._config.maxTokens;
+    }
+
+    if (tools && tools.length > 0) {
+      const { toolsList, hasNativeWebSearch } = this._convertTools(tools);
+      if (hasNativeWebSearch) {
+        toolsList.push({ type: "web_search_preview" });
+      }
+      if (toolsList.length > 0) {
+        kwargs["tools"] = toolsList;
+      }
+    }
+
+    if (this._config.extra) {
+      Object.assign(kwargs, this._config.extra);
+    }
+    this._applyThinkingParams(kwargs, options);
+    this._ensureStatelessInclude(kwargs);
+
+    // Prompt cache optimization
+    if (options?.promptCacheKey) {
+      kwargs["prompt_cache_key"] = options.promptCacheKey;
+    }
+    // prompt_cache_retention: stateless backends (Codex, Copilot) reject it — they
+    // never persist responses in the first place. Other models gated by capability table.
+    if (!this._isStatelessResponsesBackend() && getExtendedCacheSupport(this._config.model)) {
+      kwargs["prompt_cache_retention"] = "24h";
+    }
+
+    // Codex backend requires stream=true for all requests.
+    if (options?.onTextChunk || options?.onReasoningChunk || options?.onToolCallPartial || this._config.provider === "openai-codex") {
+      return this._callStream(
+        kwargs,
+        requestOptions,
+        options?.onTextChunk,
+        options?.onReasoningChunk,
+        options?.onToolCallPartial,
+        options?.onToolCallClosed,
+      );
+    }
+
+    const response = await (this._client as unknown as { responses: { create: (params: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<Record<string, unknown>> } }).responses.create(kwargs, requestOptions);
+    return this._parseResponse(response);
+  }
+
+  // ------------------------------------------------------------------
+  // Streaming
+  // ------------------------------------------------------------------
+
+  private async _callStream(
+    kwargs: Record<string, unknown>,
+    requestOptions?: Record<string, unknown>,
+    onTextChunk?: (chunk: string) => void,
+    onReasoningChunk?: (chunk: string) => void,
+    onToolCallPartial?: (callId: string, name: string, rawArguments: string) => void,
+    onToolCallClosed?: (call: ToolCall) => void,
+  ): Promise<ProviderResponse> {
+    kwargs["stream"] = true;
+
+    const textParts: string[] = [];
+    const reasoningParts: string[] = [];
+    type StreamToolAcc = { name: string; rawArguments: string; closed: boolean };
+    const toolAcc: Map<string, StreamToolAcc> = new Map();
+    let activeFunctionCallId: string | null = null;
+    let finalResponse: Record<string, unknown> | null = null;
+
+    const emitToolPartial = (callId: string): void => {
+      const acc = toolAcc.get(callId);
+      if (!acc || !acc.name || !onToolCallPartial) return;
+      onToolCallPartial(callId, acc.name, acc.rawArguments);
+    };
+
+    const closeToolCall = (callId: string | null, argsOverride?: string): void => {
+      if (!callId) return;
+      const acc = toolAcc.get(callId);
+      if (!acc || acc.closed || !acc.name) return;
+      if (typeof argsOverride === "string") {
+        acc.rawArguments = argsOverride;
+      }
+      acc.closed = true;
+      if (activeFunctionCallId === callId) {
+        activeFunctionCallId = null;
+      }
+      onToolCallClosed?.(finalizeToolCall(callId, acc.name, acc.rawArguments, `${acc.name} stream`));
+    };
+
+    const responseStream = await (this._client as unknown as { responses: { create: (params: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<AsyncIterable<Record<string, unknown>>> } }).responses.create(kwargs, requestOptions);
+
+    for await (const event of responseStream) {
+      const eventType = event["type"] as string;
+
+      if (eventType === "response.output_text.delta") {
+        closeToolCall(activeFunctionCallId);
+        const delta = (event["delta"] as string) || "";
+        if (delta) {
+          textParts.push(delta);
+          if (onTextChunk) onTextChunk(delta);
+        }
+      } else if (eventType === "response.reasoning_summary_text.delta") {
+        closeToolCall(activeFunctionCallId);
+        const delta = (event["delta"] as string) || "";
+        if (delta) {
+          reasoningParts.push(delta);
+          if (onReasoningChunk) onReasoningChunk(delta);
+        }
+      } else if (eventType === "response.function_call_arguments.delta") {
+        const callId =
+          (event["call_id"] as string) || (event["item_id"] as string) || "";
+        const delta = (event["delta"] as string) || "";
+        if (!toolAcc.has(callId)) {
+          toolAcc.set(callId, { name: "", rawArguments: "", closed: false });
+        }
+        if (delta) {
+          const acc = toolAcc.get(callId)!;
+          acc.closed = false;
+          acc.rawArguments += delta;
+          emitToolPartial(callId);
+        }
+        activeFunctionCallId = callId || activeFunctionCallId;
+      } else if (eventType === "response.output_item.added") {
+        const item = event["item"] as Record<string, unknown> | undefined;
+        if (item && item["type"] !== "function_call") {
+          closeToolCall(activeFunctionCallId);
+        }
+        if (item && item["type"] === "function_call") {
+          const callId = (item["call_id"] as string) || "";
+          const name = (item["name"] as string) || "";
+          if (callId) {
+            if (activeFunctionCallId && activeFunctionCallId !== callId) {
+              closeToolCall(activeFunctionCallId);
+            }
+            if (!toolAcc.has(callId)) {
+              toolAcc.set(callId, { name, rawArguments: "", closed: false });
+            } else {
+              const acc = toolAcc.get(callId)!;
+              acc.name = name;
+              acc.closed = false;
+            }
+            emitToolPartial(callId);
+            activeFunctionCallId = callId;
+          }
+        }
+      } else if (
+        eventType === "response.output_item.done"
+        || eventType === "response.output_item.completed"
+      ) {
+        const item = event["item"] as Record<string, unknown> | undefined;
+        if (item?.["type"] === "function_call") {
+          const callId = (item["call_id"] as string) || (item["id"] as string) || "";
+          const argsStr = typeof item["arguments"] === "string"
+            ? item["arguments"] as string
+            : (callId ? (toolAcc.get(callId)?.rawArguments ?? "") : "");
+          closeToolCall(callId || activeFunctionCallId, argsStr);
+        }
+      } else if (
+        eventType === "response.function_call_arguments.done"
+        || eventType === "response.function_call.done"
+      ) {
+        const callId =
+          (event["call_id"] as string) || (event["item_id"] as string) || "";
+        const argsStr = typeof event["arguments"] === "string"
+          ? event["arguments"] as string
+          : (callId ? (toolAcc.get(callId)?.rawArguments ?? "") : "");
+        closeToolCall(callId || activeFunctionCallId, argsStr);
+      } else if (
+        eventType === "response.completed"
+        || eventType === "response.incomplete"
+        || eventType === "response.done"
+      ) {
+        closeToolCall(activeFunctionCallId);
+        finalResponse = (event["response"] as Record<string, unknown>) || null;
+      }
+    }
+
+    // If we got a final response, use the full parse
+    if (finalResponse) {
+      for (const [callId] of toolAcc) {
+        closeToolCall(callId);
+      }
+      const result = this._parseResponse(finalResponse);
+      if (textParts.length > 0 && !result.text) {
+        result.text = textParts.join("");
+      }
+      if (reasoningParts.length > 0 && !result.reasoningContent) {
+        result.reasoningContent = reasoningParts.join("");
+        if (!result.reasoningState) {
+          result.reasoningState = result.reasoningContent || null;
+        }
+      }
+      result.toolCalls = [];
+      return result;
+    }
+
+    const reasoningText = reasoningParts.join("");
+
+    return new ProviderResponse({
+      text: textParts.join(""),
+      toolCalls: [],
+      usage: new Usage(),
+      raw: null,
+      reasoningContent: reasoningText,
+      reasoningState: reasoningText || null,
+    });
+  }
+}

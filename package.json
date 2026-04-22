@@ -1,0 +1,98 @@
+{
+  "name": "vigil-code",
+  "version": "0.3.0",
+  "description": "A terminal AI coding agent built for long sessions — three-layer context management, persistent memory, and parallel sub-agents",
+  "type": "module",
+  "license": "MIT",
+  "author": "Felix Rui Gao",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FelixRuiGao/Vigil.git"
+  },
+  "homepage": "https://github.com/FelixRuiGao/Vigil",
+  "bugs": {
+    "url": "https://github.com/FelixRuiGao/Vigil/issues"
+  },
+  "main": "./src/cli.ts",
+  "bin": {
+    "vigil": "src/cli.ts"
+  },
+  "files": [
+    "src/",
+    "opentui-src/**/*.ts",
+    "opentui-src/**/*.tsx",
+    "opentui-src/**/*.json",
+    "opentui-src/**/*.scm",
+    "opentui-src/**/*.wasm",
+    "opentui-src/core/zig/lib/",
+    "opentui-src/jsx-types.d.ts",
+    "agent_templates/",
+    "prompts/",
+    "skills/",
+    "tsconfig.json",
+    "LICENSE",
+    "README.md",
+    "README.zh-CN.md"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "llm",
+    "coding-agent",
+    "multi-agent",
+    "context-management",
+    "summarization",
+    "terminal"
+  ],
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "dev": "bun run opentui-src/main.tsx",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build && bun run test"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.61.0",
+    "@inquirer/prompts": "^8.3.0",
+    "bun-ffi-structs": "^0.1.2",
+    "commander": "^12.0.0",
+    "diff": "^8.0.3",
+    "gpt-tokenizer": "^3.4.0",
+    "ink": "^6.8.0",
+    "jimp": "^1.6.0",
+    "js-yaml": "^4.1.0",
+    "marked": "^15.0.0",
+    "marked-terminal": "^7.0.0",
+    "markitdown-ts": "^0.0.10",
+    "openai": "^4.90.0",
+    "react": "^19.2.4",
+    "react-reconciler": "^0.32.0",
+    "shiki": "^4.0.2",
+    "string-width": "7.2.0",
+    "web-tree-sitter": "^0.26.7",
+    "yoga-layout": "^3.2.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-reconciler": "^0.32.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "optionalDependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  }
+}
