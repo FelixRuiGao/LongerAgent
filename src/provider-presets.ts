@@ -37,6 +37,7 @@ export interface ProviderPreset {
 }
 
 const KIMI_MODELS = [
+  { key: "kimi-k2.6", id: "kimi-k2.6", label: "Kimi K2.6" },
   { key: "kimi-k2.5", id: "kimi-k2.5", label: "Kimi K2.5" },
   { key: "kimi-k2-instruct", id: "kimi-k2-instruct", label: "Kimi K2 Instruct" },
 ] satisfies ProviderPresetModel[];

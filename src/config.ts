@@ -87,6 +87,7 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
   "claude-opus-4.6": 200_000,
   "claude-sonnet-4.6": 200_000,
   // Kimi
+  "kimi-k2.6": 256_000,
   "kimi-k2.5": 256_000,
   "kimi-k2-thinking": 256_000,
   "kimi-k2-instruct": 128_000,
@@ -124,6 +125,7 @@ export const KNOWN_MULTIMODAL_MODELS: Set<string> = new Set([
   // GLM (Zhipu AI) — vision
   "glm-5v-turbo",
   // Kimi
+  "kimi-k2.6",
   "kimi-k2.5",
 ]);
 
@@ -136,7 +138,7 @@ export const KNOWN_THINKING_MODELS: Set<string> = new Set([
   "claude-opus-4-5-20251101", "claude-opus-4-6", "claude-sonnet-4-6",
   "claude-haiku-4.5", "claude-opus-4.6", "claude-sonnet-4.6",
   // Kimi
-  "kimi-k2.5", "kimi-k2-thinking",
+  "kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking",
   // GLM
   "glm-5.1", "glm-5", "glm-5-turbo", "glm-5v-turbo", "glm-4.7", "glm-4.7-flash",
   // MiniMax
@@ -192,6 +194,7 @@ export const KNOWN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-opus-4.6": 128_000,
   "claude-sonnet-4.6": 64_000,
   // Kimi
+  "kimi-k2.6": 65_536,
   "kimi-k2.5": 65_536,
   "kimi-k2-thinking": 65_536,
   "kimi-k2-instruct": 65_536,
@@ -252,7 +255,7 @@ export const KNOWN_THINKING_LEVELS: Record<string, string[]> = {
   "glm-5.1": ["off", "on"], "glm-5": ["off", "on"], "glm-5-turbo": ["off", "on"], "glm-5v-turbo": ["off", "on"],
   "glm-4.7": ["off", "on"], "glm-4.7-flash": ["off", "on"],
   // Kimi
-  "kimi-k2.5": ["off", "on"], "kimi-k2-thinking": ["on"],
+  "kimi-k2.6": ["off", "on"], "kimi-k2.5": ["off", "on"], "kimi-k2-thinking": ["on"],
   // MiniMax (not configurable)
   "MiniMax-M2.1": ["on"], "MiniMax-M2.1-highspeed": ["on"],
   "MiniMax-M2.5": ["on"], "MiniMax-M2.5-highspeed": ["on"],
