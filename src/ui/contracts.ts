@@ -54,6 +54,9 @@ export interface Session {
   setStore(store: SessionStore | null): void;
   getPendingAsk(): PendingAskUi | null;
   resolveAgentQuestionAsk?(askId: string, decision: AgentQuestionDecision): void;
+  resolveApprovalAsk?(askId: string, choiceIndex: number): void;
+  permissionMode?: string;
+  getGlobalPreferences?(): any;
   resumePendingTurn?(options?: { signal?: AbortSignal }): Promise<string>;
   hasPendingTurnToResume?(): boolean;
   runManualSummarize?(instruction?: string, options?: { signal?: AbortSignal }): Promise<string>;

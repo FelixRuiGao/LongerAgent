@@ -54,6 +54,7 @@ export interface OpenTuiScreenProps {
   cacheReadTokens?: number;
   /** Pre-formatted usage line (e.g. "5h: 90% left | wk: 80% left" or "month: 300/300 left"); null to hide. */
   usageText?: string | null;
+  permissionMode?: string;
   presentationEntries: readonly PresentationEntry[];
   processing: boolean;
   markdownMode: "rendered" | "raw";
@@ -98,6 +99,7 @@ export interface OpenTuiScreenProps {
   keyBindings: readonly KeyBinding[];
   onSubmit: () => void;
   onModelClick: () => void;
+  onPermissionClick?: () => void;
   onAgentIndicatorClick?: () => void;
   runningAgentCount?: number;
   idleAgentCount?: number;
@@ -139,6 +141,7 @@ export function OpenTuiScreen({
   contextLimit,
   cacheReadTokens,
   usageText,
+  permissionMode,
   presentationEntries,
   processing,
   markdownMode,
@@ -183,6 +186,7 @@ export function OpenTuiScreen({
   keyBindings,
   onSubmit,
   onModelClick,
+  onPermissionClick,
   onAgentIndicatorClick,
   runningAgentCount,
   idleAgentCount,
@@ -247,6 +251,7 @@ export function OpenTuiScreen({
       modelColor={modelColor}
       elapsed={turnElapsed}
       cwd={shortenPath(process.cwd())}
+      permissionMode={permissionMode}
       hint={hint}
       contextTokens={contextTokens}
       contextLimit={contextLimit}
@@ -259,6 +264,7 @@ export function OpenTuiScreen({
       keyBindings={keyBindings}
       onSubmit={onSubmit}
       onModelClick={onModelClick}
+      onPermissionClick={onPermissionClick}
       onAgentIndicatorClick={onAgentIndicatorClick}
       runningAgentCount={runningAgentCount}
       idleAgentCount={idleAgentCount}

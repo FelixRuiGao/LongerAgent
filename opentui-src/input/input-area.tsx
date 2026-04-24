@@ -32,6 +32,7 @@ interface InputAreaProps {
   modelColor: string;
   elapsed: number;
   cwd: string;
+  permissionMode?: string;
   hint: string | null;
   contextTokens: number;
   contextLimit: number | undefined;
@@ -50,6 +51,7 @@ interface InputAreaProps {
   keyBindings: readonly KeyBinding[];
   onSubmit: () => void;
   onModelClick: () => void;
+  onPermissionClick?: () => void;
   onAgentIndicatorClick?: () => void;
   commandOverlayVisible: boolean;
   commandPicker: boolean;
@@ -139,6 +141,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
     modelColor,
     elapsed,
     cwd,
+    permissionMode,
     hint,
     contextTokens,
     contextLimit,
@@ -151,6 +154,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
     keyBindings,
     onSubmit,
     onModelClick,
+    onPermissionClick,
     commandOverlayVisible,
     commandPicker,
     checkboxPicker,
@@ -289,13 +293,21 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
       {/* Bottom row: cwd (left) + hint (middle) + usage + context (right) — hidden when overlays are open */}
       {!commandOverlayVisible && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !pendingAsk ? (
         <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
-          <text fg={colors.muted} content={cwd} flexShrink={0} />
+          <box
+            flexShrink={0}
+            onMouseDown={onPermissionClick ? (e: any) => { e.stopPropagation(); e.preventDefault(); onPermissionClick(); } : undefined}
+          >
+            <text
+              fg={permissionMode === "yolo" ? colors.green : permissionMode === "read_only" ? colors.yellow : colors.accent}
+              content={permissionMode === "yolo" ? "Auto-accept" : permissionMode === "read_only" ? "Read-only" : "Auto-edit"}
+            />
+          </box>
           {hint ? (
             <text fg={colors.dim} content={`  ${hint}`} truncate flexGrow={1} flexShrink={1} />
           ) : (
             <box flexGrow={1} />
           )}
-          {usageText && shouldShowUsage(contentWidth, cwd.length, usageText.length, contextText.length) ? (
+          {usageText && shouldShowUsage(contentWidth, 11, usageText.length, contextText.length) ? (
             <text fg={colors.dim} content={`  ${usageText}`} flexShrink={0} />
           ) : null}
           <text fg={colors.dim} content={`  ${contextText}`} flexShrink={0} />

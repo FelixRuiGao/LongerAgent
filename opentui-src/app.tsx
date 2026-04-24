@@ -343,6 +343,7 @@ export function OpenTuiApp({
 
   const [hint, setHint] = useState<string | null>(null);
   const [markdownMode, setMarkdownMode] = useState<"rendered" | "raw">("rendered");
+  const [permissionModeState, setPermissionModeState] = useState<string>(session.permissionMode ?? "reversible");
   const [pendingAsk, setPendingAsk] = useState<PendingAskUi | null>(
     typeof session.getPendingAsk === "function" ? session.getPendingAsk() : null,
   );
@@ -536,6 +537,21 @@ export function OpenTuiApp({
     }
   }, [autoSave, session]);
 
+  const cyclePermissionMode = useCallback(() => {
+    const modes = ["read_only", "reversible", "yolo"] as const;
+    const current = session.permissionMode ?? "reversible";
+    const idx = modes.indexOf(current as any);
+    const next = modes[(idx + 1) % modes.length];
+    session.permissionMode = next;
+    setPermissionModeState(next);
+    if (store && typeof session.getGlobalPreferences === "function") {
+      try {
+        store.saveGlobalPreferences(session.getGlobalPreferences());
+      } catch { /* ignore */ }
+    }
+    autoSave();
+  }, [autoSave, session, store]);
+
   const getAskQuestions = useCallback((): AgentQuestionItem[] => {
     if (!pendingAsk || pendingAsk.kind !== "agent_question") return [];
     return (pendingAsk.payload["questions"] as AgentQuestionItem[]) ?? [];
@@ -592,6 +608,21 @@ export function OpenTuiApp({
       setAskError(err instanceof Error ? err.message : String(err));
     }
   }, [autoSave, optionNotes, pendingAsk, questionAnswers, runPendingTurn, session]);
+
+  const resolveApproval = useCallback((choiceIndex: number) => {
+    if (!pendingAsk || pendingAsk.kind !== "approval") return;
+    try {
+      session.resolveApprovalAsk?.(pendingAsk.id, choiceIndex);
+      setPendingAsk(session.getPendingAsk?.() ?? null);
+      setAskError(null);
+      autoSave();
+      if (session.hasPendingTurnToResume?.()) {
+        void runPendingTurn();
+      }
+    } catch (err) {
+      setAskError(err instanceof Error ? err.message : String(err));
+    }
+  }, [autoSave, pendingAsk, runPendingTurn, session]);
 
   const confirmCurrentQuestion = useCallback((selectedIndex: number, extra?: { customText?: string }) => {
     const next = new Map(questionAnswers);
@@ -675,6 +706,7 @@ export function OpenTuiApp({
       // Archived children stay in _childSessions (Session instance alive), so they always
       // appear in snapshots. No need for frozenChildView protection here.
       setPendingAsk(session.getPendingAsk?.() ?? null);
+      setPermissionModeState(session.permissionMode ?? "reversible");
       if (session.lastInputTokens > 0) {
         setContextTokens(session.lastInputTokens);
         setCacheReadTokens(session.lastCacheReadTokens ?? 0);
@@ -1446,7 +1478,11 @@ export function OpenTuiApp({
     }
 
     if (pendingAsk) {
-      showHint("Ask resolution is not implemented in this prototype yet.");
+      if (pendingAsk.kind === "approval") {
+        resolveApproval(askSelectionIndex);
+      } else {
+        showHint("Ask resolution is not implemented in this prototype yet.");
+      }
       return;
     }
 
@@ -1518,9 +1554,11 @@ export function OpenTuiApp({
 
     await runTurn(input, inlineImages);
   }, [
+    askSelectionIndex,
     clearInput,
     pendingAsk,
     processing,
+    resolveApproval,
     session,
     commandRegistry,
     startCommandPicker,
@@ -1947,6 +1985,45 @@ export function OpenTuiApp({
       return;
     }
 
+    if (pendingAsk?.kind === "approval") {
+      if (event.name === "c" && event.ctrl) {
+        // Let Ctrl+C pass through to interrupt handler
+      } else {
+        const totalOptions = pendingAsk.options.length;
+        if (event.name === "up") {
+          setAskSelectionIndex((prev) => Math.max(0, prev - 1));
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (event.name === "down") {
+          setAskSelectionIndex((prev) => Math.min(totalOptions - 1, prev + 1));
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (event.name === "return") {
+          resolveApproval(askSelectionIndex);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        // Number keys for quick selection
+        if (/^[1-9]$/.test(event.name)) {
+          const idx = Number(event.name) - 1;
+          if (idx < totalOptions) {
+            resolveApproval(idx);
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
+
     if (pendingAsk?.kind === "agent_question") {
       if (!(event.name === "c" && event.ctrl)) {
         const questions = (pendingAsk.payload["questions"] as AgentQuestionItem[]) ?? [];
@@ -2160,6 +2237,14 @@ export function OpenTuiApp({
     if (event.name === "pageup") {
       scrollRef.current?.scrollBy(-(scrollRef.current.height / 2));
       setScrolledAway(true);
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    // Shift+Tab: cycle permission mode (when no overlay is active)
+    if (event.name === "tab" && event.shift && !shouldHandleInputOverlay) {
+      cyclePermissionMode();
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -2606,6 +2691,7 @@ export function OpenTuiApp({
       contextLimit={effectiveContextLimit}
       cacheReadTokens={effectiveCacheReadTokens}
       usageText={usageText}
+      permissionMode={permissionModeState}
       presentationEntries={effectiveEntries}
       processing={effectiveProcessing}
       markdownMode={markdownMode}
@@ -2656,6 +2742,7 @@ export function OpenTuiApp({
         void handleSubmit(getSerializedComposerInput());
       }}
       onModelClick={() => void handleSubmit("/model")}
+      onPermissionClick={cyclePermissionMode}
       onAgentIndicatorClick={openAgentList}
       runningAgentCount={runningAgentCount}
       idleAgentCount={idleAgentCount}

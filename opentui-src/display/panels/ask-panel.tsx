@@ -24,6 +24,30 @@ export function AskPanelView({
   onSubmit,
   theme,
 }: AskPanelProps & { theme: DisplayTheme }): React.ReactNode {
+  if (ask.kind === "approval") {
+    const options = ask.options ?? [];
+    const panelHeight = 2 + options.length + 1 + (error ? 1 : 0) + 2;
+    return (
+      <PanelSurface colors={theme.colors} spacing={theme.spacing} height={panelHeight}>
+        <text fg={theme.colors.yellow} content={`⚠ ${ask.summary}`} />
+        <text content="" />
+        {options.map((label, index) => {
+          const isSelected = index === selectedIndex;
+          const isDeny = label === "Deny";
+          return (
+            <text
+              key={`approval-opt-${index}`}
+              fg={isSelected ? (isDeny ? theme.colors.red : theme.colors.accent) : theme.colors.text}
+              content={`${isSelected ? "> " : "  "}${label}`}
+            />
+          );
+        })}
+        <text fg={theme.colors.dim} content="Use ↑/↓ to select, Enter to confirm." />
+        {error ? <text fg={theme.colors.red} content={error} /> : null}
+      </PanelSurface>
+    );
+  }
+
   if (ask.kind !== "agent_question") {
     return (
       <PanelSurface colors={theme.colors} spacing={theme.spacing}>

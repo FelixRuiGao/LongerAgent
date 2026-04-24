@@ -7,7 +7,6 @@
  */
 
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -18,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getVigilHomeDir } from "./home-path.js";
 import { join, dirname, resolve } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+// child_process — now only used by BackgroundShellManager
 import * as yaml from "js-yaml";
 import { countTokens as gptCountTokens, encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
 
@@ -56,7 +55,6 @@ import {
   BASH_BACKGROUND_TOOL,
   BASH_OUTPUT_TOOL,
   KILL_SHELL_TOOL,
-  buildBashEnv,
   executeTool,
 } from "./tools/basic.js";
 import { execSummarizeContextOnLog } from "./summarize-context.js";
@@ -71,6 +69,23 @@ import {
 import { SafePathError, safePath } from "./security/path.js";
 import { parsePlanFile, formatPlanSnapshot, PLAN_FILENAME, type PlanCheckpoint } from "./plan-state.js";
 import {
+  buildToolExecutors,
+  ensureCommTools,
+  ensureSkillTool,
+  buildSkillToolDef,
+  registerMcpTools,
+  ToolGate,
+  type GateAdvisor,
+} from "./tool-runtime.js";
+import { BackgroundShellManager } from "./background-shell-manager.js";
+import { PermissionAdvisor, PermissionRuleStore, classifyTool, type PermissionMode } from "./permissions/index.js";
+import {
+  argOptionalString,
+  argRequiredString,
+  argRequiredStringArray,
+  toolArgError,
+} from "./tools/arg-helpers.js";
+import {
   AskPendingError,
   ASK_CUSTOM_OPTION_LABEL,
   ASK_DISCUSS_FURTHER_GUIDANCE,
@@ -81,6 +96,7 @@ import {
   type AgentQuestionItem,
   type AgentQuestionAnswer,
   type AgentQuestionDecision,
+  type ApprovalRequest,
   type AskAuditRecord,
   type AskRequest,
   type PendingAskUi,
@@ -374,20 +390,7 @@ interface AgentTeam {
   members: Set<string>;
 }
 
-interface BackgroundShellEntry {
-  id: string;
-  process: ChildProcess;
-  command: string;
-  cwd: string;
-  logPath: string;
-  startTime: number;
-  status: "running" | "exited" | "failed" | "killed";
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  readOffset: number;
-  recentOutput: string[];
-  explicitKill: boolean;
-}
+// BackgroundShellEntry — moved to ./background-shell-manager.ts
 
 interface PreparedChildRestore {
   record: ChildSessionMetaRecord;
@@ -478,6 +481,13 @@ export class Session {
   private _mcpManager?: MCPClientManager;
   private _mcpConnected = false;
 
+  /** Tool permission gate — add advisors to control tool execution. */
+  readonly toolGate = new ToolGate();
+
+  /** Permission advisor — classifies tools and enforces permission mode. */
+  private _permissionAdvisor!: PermissionAdvisor;
+  private _permissionRuleStore!: PermissionRuleStore;
+
   _createdAt: string;
   private _title: string | undefined;
   private _cachedSummary: string | undefined;
@@ -536,8 +546,7 @@ export class Session {
   private _archivedChildren = new Map<string, ArchivedChildRecord>();
   private _teams = new Map<string, AgentTeam>();
   private _subAgentCounter = 0;
-  private _activeShells = new Map<string, BackgroundShellEntry>();
-  private _shellCounter = 0;
+  private _shellManager!: BackgroundShellManager;
 
   // Session capabilities / routing
   private _capabilities: SessionCapabilities = ROOT_SESSION_CAPABILITIES;
@@ -631,6 +640,22 @@ export class Session {
 
   get sessionPhase(): ChildSessionPhase {
     return this._selfPhase;
+  }
+
+  get permissionMode(): PermissionMode {
+    return this._permissionAdvisor.sessionMode;
+  }
+
+  set permissionMode(mode: PermissionMode) {
+    this._permissionAdvisor.sessionMode = mode;
+  }
+
+  get permissionRuleStore(): PermissionRuleStore {
+    return this._permissionRuleStore;
+  }
+
+  get permissionAdvisor(): PermissionAdvisor {
+    return this._permissionAdvisor;
   }
 
   get lifetimeToolCallCount(): number {
@@ -812,6 +837,8 @@ export class Session {
     deferQueuedMessageInjectionOnTurnExit?: boolean;
     /** Stable key for OpenAI prompt cache routing affinity. Auto-generated if omitted. */
     promptCacheKey?: string;
+    /** Permission mode for this session. Default: "reversible". */
+    permissionMode?: PermissionMode;
   }) {
     this.primaryAgent = opts.primaryAgent;
     this.config = opts.config;
@@ -841,6 +868,19 @@ export class Session {
     this._projectRoot = opts.projectRoot ?? process.cwd();
     this._sessionArtifactsOverride = opts.sessionArtifactsDir ?? "";
     this._systemData = "";
+    this._shellManager = new BackgroundShellManager({
+      projectRoot: this._projectRoot,
+      getSessionArtifactsDir: () => this._resolveSessionArtifacts(),
+      deliverMessage: (msg) => this._deliverMessage(msg),
+    });
+
+    // Permission system
+    this._permissionRuleStore = new PermissionRuleStore(this._projectRoot);
+    this._permissionAdvisor = new PermissionAdvisor({
+      ruleStore: this._permissionRuleStore,
+      sessionMode: opts.permissionMode ?? "reversible",
+    });
+    this.toolGate.addAdvisor(this._permissionAdvisor);
 
     this._createdAt = new Date().toISOString();
     this._promptCacheKey = opts.promptCacheKey ?? randomUUID();
@@ -1123,62 +1163,15 @@ export class Session {
   }
 
   private _hasTrackedShells(): boolean {
-    return this._activeShells.size > 0;
+    return this._shellManager.hasTrackedShells();
   }
 
   private _hasRunningShells(): boolean {
-    for (const entry of this._activeShells.values()) {
-      if (entry.status === "running") return true;
-    }
-    return false;
-  }
-
-  private _getShellsDir(): string {
-    const dir = join(this._resolveSessionArtifacts(), "shells");
-    mkdirSync(dir, { recursive: true });
-    return dir;
-  }
-
-  private _normalizeShellId(id: string): string | null {
-    const trimmed = id.trim();
-    if (!trimmed) return null;
-    return /^[A-Za-z0-9._-]+$/.test(trimmed) ? trimmed : null;
-  }
-
-  private _recordShellChunk(entry: BackgroundShellEntry, chunk: string): void {
-    if (!chunk) return;
-    appendFileSync(entry.logPath, chunk, "utf-8");
-    const lines = chunk
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    for (const line of lines) {
-      entry.recentOutput.push(line);
-      if (entry.recentOutput.length > 3) entry.recentOutput.shift();
-    }
+    return this._shellManager.hasRunningShells();
   }
 
   private _buildShellReport(): string {
-    if (this._activeShells.size === 0) {
-      return "No shells tracked.";
-    }
-
-    const lines: string[] = [];
-    for (const [id, entry] of this._activeShells) {
-      const elapsedSec = ((performance.now() - entry.startTime) / 1000).toFixed(1);
-      let line = `- [${id}] ${entry.status} (${elapsedSec}s)`;
-      if (entry.status === "exited" || entry.status === "failed") {
-        line += ` | exit=${entry.exitCode ?? "?"}`;
-      } else if (entry.status === "killed") {
-        line += ` | signal=${entry.signal ?? "TERM"}`;
-      }
-      line += ` | log: ${entry.logPath}`;
-      if (entry.recentOutput.length > 0) {
-        line += `\n    recent: ${entry.recentOutput.join(" → ")}`;
-      }
-      lines.push(line);
-    }
-    return lines.join("\n");
+    return this._shellManager.buildShellReport();
   }
 
   // ------------------------------------------------------------------
@@ -1374,7 +1367,7 @@ export class Session {
     if (this._childSessions.size > 0) {
       this._cascadeKillRunningChildren("user_mass_interrupt");
     }
-    if (this._activeShells.size > 0) {
+    if (this._shellManager.hasTrackedShells()) {
       this._forceKillAllShells();
     }
     return { accepted: true };
@@ -1403,11 +1396,11 @@ export class Session {
     if (this._childSessions.size > 0) {
       this._archiveAllChildSessions();
     }
-    if (this._activeShells.size > 0) {
+    if (this._shellManager.hasTrackedShells()) {
       this._forceKillAllShells();
     }
     this._subAgentCounter = 0;
-    this._shellCounter = 0;
+    this._shellManager.resetCounter();
     this._showContextRoundsRemaining = 0;
     this._showContextAnnotations = null;
   }
@@ -2102,96 +2095,39 @@ export class Session {
   }
 
   private _buildToolExecutors(): Record<string, ToolExecutor> {
-    const scopedBuiltin = (toolName: string): ToolExecutor =>
-      (args, rtCtx) => executeTool(toolName, args, {
-        projectRoot: this._projectRoot,
-        externalPathAllowlist: [this._resolveSessionArtifacts()],
-        sessionArtifactsDir: this._resolveSessionArtifacts(),
-        supportsMultimodal: this.primaryAgent.modelConfig.supportsMultimodal,
-        signal: rtCtx?.signal,
-      });
-
-    const writeFileWithReload: ToolExecutor = (args, rtCtx) => {
-      const result = scopedBuiltin("write_file")(args, rtCtx);
-      // Auto-reload prompt when AGENTS.md is modified
-      const filePath = String((args as Record<string, unknown>)["path"] ?? "");
-      if (filePath && this._isAgentsMdPath(filePath)) {
-        this._reloadPromptAndTools();
-      }
-      return result;
-    };
-
-    /** Wrap a file-mutating executor: refresh plan state when the target is plan.md. */
-    const withPlanHook = (inner: ToolExecutor): ToolExecutor => {
-      return (args, rtCtx) => {
-        const filePath = String((args as Record<string, unknown>)["path"] ?? "");
-        const isPlan = filePath && this._isPlanFilePath(filePath);
-        const result = inner(args, rtCtx);
-        if (!isPlan) return result;
-
-        // Tag result and refresh plan state AFTER the file write completes.
-        const finalize = (r: ToolResult | string): ToolResult => {
-          this._refreshPlanState();
-          if (r instanceof ToolResult) {
-            r.metadata.planFileOperation = true;
-            return r;
-          }
-          return new ToolResult({ content: String(r), metadata: { planFileOperation: true } });
-        };
-
-        if (result instanceof Promise) {
-          return result.then(finalize);
+    return buildToolExecutors({
+      projectRoot: this._projectRoot,
+      getSessionArtifactsDir: () => this._resolveSessionArtifacts(),
+      supportsMultimodal: this.primaryAgent.modelConfig.supportsMultimodal,
+      commExecutors: {
+        bash_background: (args) => this._shellManager.execBashBackground(args),
+        bash_output: (args) => this._shellManager.execBashOutput(args),
+        kill_shell: (args) => this._shellManager.execKillShell(args),
+        spawn: (args) => this._execSpawn(args),
+        spawn_file: (args) => this._execSpawnFile(args),
+        kill_agent: (args) => this._execKillAgent(args),
+        check_status: (args) => this._execCheckStatus(args),
+        wait: (args) => this._execWait(args),
+        show_context: (args) => this._execShowContext(args),
+        distill_context: (args) => this._execDistillContext(args),
+        ask: (args) => this._execAsk(args),
+        skill: (args) => this._execSkill(args),
+        send: (args) => this._execSend(args),
+        $web_search: (args) => toolBuiltinWebSearchPassthrough(args as Record<string, unknown>),
+      },
+      overrides: this._toolExecutorOverrides,
+      onFileWrite: (filePath) => {
+        if (this._isAgentsMdPath(filePath)) {
+          this._reloadPromptAndTools();
         }
-        return finalize(result as ToolResult | string);
-      };
-    };
-
-    return {
-      read_file: scopedBuiltin("read_file"),
-      list_dir: scopedBuiltin("list_dir"),
-      glob: scopedBuiltin("glob"),
-      grep: scopedBuiltin("grep"),
-      edit_file: withPlanHook(scopedBuiltin("edit_file")),
-      write_file: withPlanHook(writeFileWithReload),
-      web_fetch: (args, rtCtx) => executeTool("web_fetch", args, { signal: rtCtx?.signal }),
-      bash: (args, rtCtx) => executeTool("bash", args, {
-        projectRoot: this._projectRoot,
-        externalPathAllowlist: [this._resolveSessionArtifacts()],
-        signal: rtCtx?.signal,
-      }),
-      bash_background: (args) => this._execBashBackground(args),
-      bash_output: (args) => this._execBashOutput(args),
-      kill_shell: (args) => this._execKillShell(args),
-      spawn: (args) => this._execSpawn(args),
-      spawn_file: (args) => this._execSpawnFile(args),
-      kill_agent: (args) => this._execKillAgent(args),
-      check_status: (args) => this._execCheckStatus(args),
-      wait: (args) => this._execWait(args),
-      show_context: (args) => this._execShowContext(args),
-      distill_context: (args) => this._execDistillContext(args),
-      ask: (args) => this._execAsk(args),
-      skill: (args) => this._execSkill(args),
-      send: (args) => this._execSend(args),
-      $web_search: (args) => toolBuiltinWebSearchPassthrough(args as Record<string, unknown>),
-      ...this._toolExecutorOverrides,
-    };
+      },
+      isPlanFile: (filePath) => this._isPlanFilePath(filePath),
+      onPlanFileWrite: () => this._refreshPlanState(),
+    });
   }
 
   private _ensureCommTools(): void {
-    const existing = new Set(this.primaryAgent.tools.map((t) => t.name));
-    const wanted: ToolDef[] = [];
-    if (this._capabilities.includeSpawnTool) wanted.push(SPAWN_TOOL, SPAWN_FILE_TOOL);
-    if (this._capabilities.includeKillTool) wanted.push(KILL_AGENT_TOOL);
-    if (this._capabilities.includeCheckStatusTool) wanted.push(CHECK_STATUS_TOOL);
-    if (this._capabilities.includeWaitTool) wanted.push(WAIT_TOOL);
-    if (this._capabilities.includeShowContextTool) wanted.push(SHOW_CONTEXT_TOOL);
-    if (this._capabilities.includeDistillContextTool) wanted.push(DISTILL_CONTEXT_TOOL);
-    if (this._capabilities.includeAskTool) wanted.push(ASK_TOOL);
-    for (const toolDef of wanted) {
-      if (!existing.has(toolDef.name)) {
-        this.primaryAgent.tools.push(toolDef);
-      }
-    }
+    ensureCommTools(this.primaryAgent.tools, this._capabilities);
   }
 
   // ==================================================================
@@ -2280,60 +2216,12 @@ export class Session {
    * Build the `skill` tool definition dynamically from loaded skills.
    * Returns null if no skills are available for the agent.
    */
-  private _buildSkillToolDef(): ToolDef | null {
-    const available = [...this._skills.values()].filter(
-      (s) => !s.disableModelInvocation,
-    );
-    if (available.length === 0) return null;
-
-    const listing = available
-      .map((s) => `- ${s.name}: ${s.description}`)
-      .join("\n");
-
-    return {
-      name: "skill",
-      description:
-        "Invoke a skill by name. The skill's full instructions are returned for you to follow.\n\n" +
-        "Available skills:\n" +
-        listing,
-      parameters: {
-        type: "object",
-        properties: {
-          name: {
-            type: "string",
-            description: "The skill name to invoke.",
-          },
-          arguments: {
-            type: "string",
-            description:
-              "Arguments to pass to the skill (e.g. file path, module name). " +
-              "Referenced via $ARGUMENTS in the skill instructions.",
-          },
-        },
-        required: ["name"],
-      },
-      summaryTemplate: "{agent} is invoking skill {name}",
-      tuiPolicy: { partialReveal: { completeArgs: ["name"] } },
-    };
-  }
-
-  /** Add the `skill` tool to the primary agent. */
   private _ensureSkillTool(): void {
-    if (!this._capabilities.includeSkillTools) {
-      this.primaryAgent.tools = this.primaryAgent.tools.filter(
-        (t) => t.name !== "skill",
-      );
-      return;
-    }
-    // Remove old skill tool
-    this.primaryAgent.tools = this.primaryAgent.tools.filter(
-      (t) => t.name !== "skill",
+    this.primaryAgent.tools = ensureSkillTool(
+      this.primaryAgent.tools,
+      this._capabilities,
+      this._skills,
     );
-
-    const skillDef = this._buildSkillToolDef();
-    if (skillDef) {
-      this.primaryAgent.tools.push(skillDef);
-    }
   }
 
   /**
@@ -2532,6 +2420,11 @@ export class Session {
       this._disabledSkills = new Set(prefs.disabledSkills);
       this.reloadSkills();
     }
+
+    // Restore permission mode
+    if (prefs.permissionMode && ["read_only", "reversible", "yolo"].includes(prefs.permissionMode)) {
+      this._permissionAdvisor.sessionMode = prefs.permissionMode as PermissionMode;
+    }
   }
 
   /**
@@ -2565,6 +2458,7 @@ export class Session {
       disabledSkills: this._disabledSkills.size > 0
         ? [...this._disabledSkills]
         : undefined,
+      permissionMode: this._permissionAdvisor.sessionMode,
     });
   }
 
@@ -2867,10 +2761,45 @@ export class Session {
     });
   }
 
-  private _beforeToolExecute = (
-    _ctx: ToolPreflightContext,
-  ): ToolPreflightDecision | void => {
-    return;
+  private _beforeToolExecute = async (
+    ctx: ToolPreflightContext,
+  ): Promise<ToolPreflightDecision | void> => {
+    const decision = await this.toolGate.evaluate(ctx);
+    switch (decision.kind) {
+      case "allow":
+        return undefined;
+      case "deny":
+        return { kind: "deny", message: decision.message };
+      case "ask": {
+        const assessment = classifyTool(ctx.toolName, ctx.toolArgs);
+        const offers = this._permissionAdvisor["_buildOffers"](assessment);
+        const options = offers.map((o: any) => o.label);
+        options.push("Deny");
+
+        const ask: ApprovalRequest = {
+          id: `approval-${randomUUID().slice(0, 8)}`,
+          kind: "approval",
+          createdAt: new Date().toISOString(),
+          source: { agentId: ctx.agentName },
+          summary: decision.question,
+          roundIndex: undefined,
+          payload: {
+            toolCallId: ctx.toolCallId,
+            toolName: ctx.toolName,
+            toolSummary: ctx.summary,
+            permissionClass: assessment.permissionClass,
+            offers: offers.map((o: any) => ({
+              type: o.type,
+              label: o.label,
+              scope: o.scope,
+              rule: o.rule,
+            })),
+          },
+          options,
+        };
+        throw new AskPendingError(ask);
+      }
+    }
   };
 
 
@@ -3963,67 +3892,18 @@ export class Session {
   // Tool argument helpers
   // ==================================================================
 
+  // Arg-validation helpers — delegates to standalone functions in tools/arg-helpers.ts
   private _toolArgError(toolName: string, message: string): ToolResult {
-    return new ToolResult({ content: `Error: invalid arguments for ${toolName}: ${message}` });
+    return toolArgError(toolName, message);
   }
-
-  private _argOptionalString(
-    toolName: string,
-    args: Record<string, unknown>,
-    key: string,
-  ): string | undefined | ToolResult {
-    const value = args[key];
-    if (value == null) return undefined;
-    if (typeof value !== "string") {
-      return this._toolArgError(toolName, `'${key}' must be a string.`);
-    }
-    return value;
+  private _argOptionalString(toolName: string, args: Record<string, unknown>, key: string): string | undefined | ToolResult {
+    return argOptionalString(toolName, args, key);
   }
-
-  private _argRequiredString(
-    toolName: string,
-    args: Record<string, unknown>,
-    key: string,
-    opts?: { nonEmpty?: boolean },
-  ): string | ToolResult {
-    const value = args[key];
-    if (typeof value !== "string") {
-      return this._toolArgError(toolName, `'${key}' must be a string.`);
-    }
-    if (opts?.nonEmpty && !value.trim()) {
-      return this._toolArgError(toolName, `'${key}' must be a non-empty string.`);
-    }
-    return value;
+  private _argRequiredString(toolName: string, args: Record<string, unknown>, key: string, opts?: { nonEmpty?: boolean }): string | ToolResult {
+    return argRequiredString(toolName, args, key, opts);
   }
-
-  private _argRequiredStringArray(
-    toolName: string,
-    args: Record<string, unknown>,
-    key: string,
-  ): string[] | ToolResult {
-    const value = args[key];
-    if (!Array.isArray(value)) {
-      return this._toolArgError(toolName, `'${key}' must be an array of strings.`);
-    }
-    for (let i = 0; i < value.length; i++) {
-      if (typeof value[i] !== "string") {
-        return this._toolArgError(toolName, `'${key}[${i}]' must be a string.`);
-      }
-    }
-    return value as string[];
-  }
-
-  private _argOptionalInteger(
-    toolName: string,
-    args: Record<string, unknown>,
-    key: string,
-  ): number | undefined | ToolResult {
-    const value = args[key];
-    if (value == null) return undefined;
-    if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
-      return this._toolArgError(toolName, `'${key}' must be an integer.`);
-    }
-    return value;
+  private _argRequiredStringArray(toolName: string, args: Record<string, unknown>, key: string): string[] | ToolResult {
+    return argRequiredStringArray(toolName, args, key);
   }
 
   // ==================================================================
@@ -4224,6 +4104,75 @@ export class Session {
     this._activeAsk = null;
     this._emitAskResolvedProgress(askId, "answered", "agent_question");
     this._pendingTurnState = { stage: "activation" };
+
+    this.onSaveRequest?.();
+  }
+
+  /**
+   * Resolve a permission approval ask.
+   * @param askId  The ask ID to resolve.
+   * @param choiceIndex  Index into the ask's options array. Last option is always "Deny".
+   */
+  resolveApprovalAsk(askId: string, choiceIndex: number): void {
+    const ask = this._activeAsk;
+    if (!ask) throw new Error("No active ask to resolve.");
+    if (ask.id !== askId) throw new Error(`Ask id mismatch (active=${ask.id}, got=${askId}).`);
+    if (ask.kind !== "approval") throw new Error(`Ask kind mismatch (active=${ask.kind}, expected=approval).`);
+
+    const payload = ask.payload as ApprovalRequest["payload"];
+    const choiceLabel = ask.options[choiceIndex] ?? "Deny";
+    const isDeny = choiceLabel === "Deny";
+    const offer = !isDeny ? payload.offers[choiceIndex] : null;
+
+    // Log the resolution
+    this._appendEntry(createAskResolution(
+      this._nextLogId("ask_resolution"),
+      this._turnCount,
+      { choice: choiceLabel, toolName: payload.toolName },
+      askId,
+      "approval",
+    ), false);
+
+    if (isDeny) {
+      // Inject a deny tool_result so the model knows
+      const toolCallId = payload.toolCallId;
+      const contextId = this._findToolCallContextId(toolCallId, ask.roundIndex)
+        ?? this._allocateContextId();
+      this._appendEntry(createToolResultEntry(
+        this._nextLogId("tool_result"),
+        this._turnCount,
+        ask.roundIndex ?? this._computeNextRoundIndex(),
+        {
+          toolCallId,
+          toolName: payload.toolName,
+          content: `ERROR: Tool execution denied by user.`,
+          toolSummary: `${payload.toolName} denied`,
+        },
+        { isError: true, contextId },
+      ), false);
+    } else {
+      // Apply the offer
+      if (offer?.type === "tool_once") {
+        this._permissionAdvisor.grantAllowOnce(payload.toolCallId);
+      } else if (offer?.type === "tool_pattern" && offer.rule) {
+        this._permissionAdvisor.acceptOffer(offer as any);
+      }
+    }
+
+    this._askHistory.push({
+      askId: ask.id,
+      kind: "approval",
+      summary: ask.summary,
+      decidedAt: new Date().toISOString(),
+      decision: choiceLabel,
+      source: ask.source,
+    });
+
+    this._activeAsk = null;
+    this._emitAskResolvedProgress(askId, choiceLabel, "approval");
+    this._pendingTurnState = isDeny
+      ? { stage: "activation" }
+      : { stage: "activation" };
 
     this.onSaveRequest?.();
   }
@@ -4980,257 +4929,6 @@ export class Session {
       this._hintState = "level1_sent";
     }
     // ratio >= HINT_RESET_LEVEL1: keep current state (don't downgrade)
-  }
-
-  // ==================================================================
-  // Background shell tools
-  // ==================================================================
-
-  private _resolveShellCwd(toolName: string, requested?: string): string | ToolResult {
-    const trimmed = (requested ?? "").trim();
-    if (!trimmed) {
-      return this._projectRoot;
-    }
-
-    try {
-      return safePath({
-        baseDir: this._projectRoot,
-        requestedPath: trimmed,
-        cwd: this._projectRoot,
-        mustExist: true,
-        expectDirectory: true,
-        accessKind: "list",
-      }).safePath!;
-    } catch (err) {
-      if (!(err instanceof SafePathError)) throw err;
-      try {
-        return safePath({
-          baseDir: this._resolveSessionArtifacts(),
-          requestedPath: trimmed,
-          cwd: this._resolveSessionArtifacts(),
-          mustExist: true,
-          expectDirectory: true,
-          accessKind: "list",
-        }).safePath!;
-      } catch (inner) {
-        if (inner instanceof SafePathError) {
-          return new ToolResult({
-            content: `Error: invalid arguments for ${toolName}: cwd must stay within the project root or SESSION_ARTIFACTS.`,
-          });
-        }
-        throw inner;
-      }
-    }
-  }
-
-  private _execBashBackground(args: Record<string, unknown>): ToolResult {
-    const commandArg = this._argRequiredString("bash_background", args, "command", { nonEmpty: true });
-    if (commandArg instanceof ToolResult) return commandArg;
-    const cwdArg = this._argOptionalString("bash_background", args, "cwd");
-    if (cwdArg instanceof ToolResult) return cwdArg;
-    const idArg = this._argOptionalString("bash_background", args, "id");
-    if (idArg instanceof ToolResult) return idArg;
-
-    const shellId = idArg
-      ? this._normalizeShellId(idArg)
-      : `shell-${++this._shellCounter}`;
-    if (!shellId) {
-      return this._toolArgError("bash_background", "'id' must contain only letters, numbers, '.', '_' or '-'.");
-    }
-    if (this._activeShells.has(shellId)) {
-      return new ToolResult({ content: `Error: shell '${shellId}' is already tracked.` });
-    }
-
-    const cwd = this._resolveShellCwd("bash_background", cwdArg);
-    if (cwd instanceof ToolResult) return cwd;
-
-    const logPath = join(this._getShellsDir(), `${shellId}.log`);
-    writeFileSync(logPath, "", "utf-8");
-
-    let child: ChildProcess;
-    try {
-      child = spawn("sh", ["-lc", commandArg], {
-        cwd,
-        env: buildBashEnv(),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (e) {
-      return new ToolResult({ content: `Error: failed to start background shell: ${e}` });
-    }
-
-    const entry: BackgroundShellEntry = {
-      id: shellId,
-      process: child,
-      command: commandArg,
-      cwd,
-      logPath,
-      startTime: performance.now(),
-      status: "running",
-      exitCode: null,
-      signal: null,
-      readOffset: 0,
-      recentOutput: [],
-      explicitKill: false,
-    };
-    this._activeShells.set(shellId, entry);
-
-    child.stdout?.on("data", (chunk: Buffer | string) => {
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
-      this._recordShellChunk(entry, text);
-    });
-    child.stderr?.on("data", (chunk: Buffer | string) => {
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf-8");
-      this._recordShellChunk(entry, text);
-    });
-    child.on("error", (error) => {
-      entry.status = "failed";
-      entry.exitCode = 1;
-      entry.signal = null;
-      this._deliverMessage({
-        type: "system_notice", sender: "system", timestamp: Date.now(),
-        content: `Background shell '${shellId}' failed to start: ${error}. Use \`bash_output(id="${shellId}")\` to inspect ${logPath}.`,
-      });
-    });
-    child.on("close", (code, signal) => {
-      entry.exitCode = code;
-      entry.signal = signal;
-      if (entry.explicitKill) {
-        entry.status = "killed";
-      } else if (code === 0) {
-        entry.status = "exited";
-      } else {
-        entry.status = "failed";
-      }
-      // Skip notification for explicit kills — the kill_shell tool result
-      // already reports the outcome synchronously.
-      if (entry.explicitKill) return;
-      const statusText = entry.status === "exited"
-        ? "completed successfully"
-        : `failed (exit ${code ?? 1})`;
-      this._deliverMessage({
-        type: "system_notice", sender: "system", timestamp: Date.now(),
-        content: `Background shell '${shellId}' ${statusText}. Use \`bash_output(id="${shellId}")\` to inspect logs at ${logPath}.`,
-      });
-    });
-
-    return new ToolResult({
-      content:
-        `Started background shell '${shellId}'.\n` +
-        `cwd: ${cwd}\n` +
-        `log: ${logPath}\n` +
-        `Use \`bash_output(id="${shellId}")\` to inspect logs and \`wait(shell="${shellId}", seconds=60)\` to wait for exit.`,
-    });
-  }
-
-  private _execBashOutput(args: Record<string, unknown>): ToolResult {
-    const idArg = this._argRequiredString("bash_output", args, "id", { nonEmpty: true });
-    if (idArg instanceof ToolResult) return idArg;
-    const tailLinesArg = this._argOptionalInteger("bash_output", args, "tail_lines");
-    if (tailLinesArg instanceof ToolResult) return tailLinesArg;
-    const maxCharsArg = this._argOptionalInteger("bash_output", args, "max_chars");
-    if (maxCharsArg instanceof ToolResult) return maxCharsArg;
-
-    const entry = this._activeShells.get(idArg);
-    if (!entry) {
-      return new ToolResult({ content: `Error: shell '${idArg}' not found.` });
-    }
-
-    const maxChars = Math.max(500, Math.min(50_000, maxCharsArg ?? 8_000));
-    const fullText = existsSync(entry.logPath) ? readFileSync(entry.logPath, "utf-8") : "";
-    let body = "";
-
-    if (tailLinesArg !== undefined) {
-      const lines = fullText.split("\n");
-      body = lines.slice(-Math.max(1, tailLinesArg)).join("\n").trimEnd();
-    } else {
-      const fullBuffer = Buffer.from(fullText, "utf-8");
-      const unread = fullBuffer.subarray(entry.readOffset).toString("utf-8");
-      entry.readOffset = fullBuffer.length;
-      if (!unread.trim()) {
-        body = "(No new output since the last read.)";
-      } else if (unread.length > maxChars) {
-        const visible = unread.slice(0, maxChars);
-        const omittedChars = unread.length - visible.length;
-        const omittedLines = unread.slice(visible.length).split("\n").filter(Boolean).length;
-        body =
-          `${visible.trimEnd()}\n\n` +
-          `[Truncated here because unread output exceeded ${maxChars} chars; skipped ${omittedChars.toLocaleString()} chars` +
-          (omittedLines > 0 ? ` / ${omittedLines.toLocaleString()} lines` : "") +
-          `. Full log: ${entry.logPath}]`;
-      } else {
-        body = unread.trimEnd();
-      }
-    }
-
-    return new ToolResult({
-      content:
-        `# Shell Output\n` +
-        `id: ${entry.id}\n` +
-        `status: ${entry.status}\n` +
-        `log: ${entry.logPath}\n\n` +
-        `${body || "(No output yet.)"}`,
-    });
-  }
-
-  private async _execKillShell(args: Record<string, unknown>): Promise<ToolResult> {
-    const idsArg = this._argRequiredStringArray("kill_shell", args, "ids");
-    if (idsArg instanceof ToolResult) return idsArg;
-    const signalArg = this._argOptionalString("kill_shell", args, "signal");
-    if (signalArg instanceof ToolResult) return signalArg;
-    const rawSignal = (signalArg?.trim() || "SIGTERM").toUpperCase();
-    const signal = (rawSignal.startsWith("SIG") ? rawSignal : `SIG${rawSignal}`) as NodeJS.Signals;
-
-    const KILL_WAIT_MS = 3_000;
-    const parts: string[] = [];
-    const waitPromises: Promise<void>[] = [];
-
-    for (const id of idsArg) {
-      const entry = this._activeShells.get(id);
-      if (!entry) {
-        parts.push(`'${id}': not found.`);
-        continue;
-      }
-      if (entry.status !== "running") {
-        parts.push(`'${id}': already ${entry.status}.`);
-        continue;
-      }
-      entry.explicitKill = true;
-      try {
-        entry.process.kill(signal);
-      } catch (e) {
-        parts.push(`'${id}': failed to send ${signal} (${e}).`);
-        continue;
-      }
-      // Wait for exit or timeout, then SIGKILL if still alive.
-      const idx = parts.length;
-      parts.push(""); // placeholder
-      waitPromises.push(
-        new Promise<void>((resolve) => {
-          if (entry.status !== "running") {
-            parts[idx] = `'${id}': ${entry.status} (exit ${entry.exitCode ?? entry.signal ?? "?"}).`;
-            resolve();
-            return;
-          }
-          const onClose = () => { clearTimeout(timer); resolve(); };
-          const timer = setTimeout(() => {
-            entry.process.removeListener("close", onClose);
-            try { entry.process.kill("SIGKILL"); } catch { /* best effort */ }
-            parts[idx] = `'${id}': SIGKILL after ${KILL_WAIT_MS}ms timeout.`;
-            // Wait briefly for SIGKILL to take effect
-            entry.process.once("close", () => resolve());
-            setTimeout(resolve, 500); // fallback if close never fires
-          }, KILL_WAIT_MS);
-          entry.process.once("close", () => {
-            clearTimeout(timer);
-            parts[idx] = `'${id}': ${entry.status} (${entry.signal ?? `exit ${entry.exitCode}`}).`;
-            resolve();
-          });
-        }),
-      );
-    }
-
-    await Promise.all(waitPromises);
-    return new ToolResult({ content: parts.join(" ") || "No shells specified." });
   }
 
   // ==================================================================
@@ -6322,17 +6020,7 @@ export class Session {
   }
 
   private _forceKillAllShells(): void {
-    for (const entry of this._activeShells.values()) {
-      if (entry.status === "running") {
-        entry.explicitKill = true;
-        try {
-          entry.process.kill("SIGTERM");
-        } catch {
-          // Best-effort cleanup.
-        }
-      }
-    }
-    this._activeShells.clear();
+    this._shellManager.forceKillAll();
   }
 
   private _createSubAgentFromPredefined(templateName: string, taskId: string, modelLevel?: string): { agent: Agent; thinkingLevel?: string } {
@@ -6701,62 +6389,12 @@ export class Session {
 
   private async _ensureMcp(): Promise<void> {
     if (!this._mcpManager) return;
-
-    try {
-      await this._mcpManager.connectAll();
-      const mcpTools = this._mcpManager.getAllTools();
-
-      for (const tool of mcpTools) {
-        const toolName = tool.name;
-        if (toolName in this._toolExecutors) continue;
-
-        const capturedName = toolName;
-        this._toolExecutors[toolName] = async (args: Record<string, unknown>) => {
-          return this._mcpManager!.callTool(capturedName, args);
-        };
-      }
-
-      // Inject MCP tool defs into agents
-      const agentsToPatch: Agent[] = [
-        this.primaryAgent,
-        ...Object.values(this.agentTemplates),
-      ];
-      const seenAgents = new Set<Agent>();
-
-      for (const agent of agentsToPatch) {
-        if (seenAgents.has(agent)) continue;
-        seenAgents.add(agent);
-
-        const spec = (agent as any)._mcpToolsSpec;
-        if (!spec || spec === "none") continue;
-
-        let selectedTools: ToolDef[];
-        if (spec === "all") {
-          selectedTools = mcpTools;
-        } else if (Array.isArray(spec)) {
-          const prefixes = (spec as string[]).map((s) => `mcp__${s}__`);
-          selectedTools = mcpTools.filter((t) =>
-            prefixes.some((p) => t.name.startsWith(p)),
-          );
-        } else {
-          selectedTools = [];
-        }
-
-        if (!selectedTools.length) continue;
-
-        const existingToolNames = new Set(agent.tools.map((t) => t.name));
-        for (const tool of selectedTools) {
-          if (existingToolNames.has(tool.name)) continue;
-          agent.tools.push(tool);
-          existingToolNames.add(tool.name);
-        }
-      }
-
-      this._mcpConnected = mcpTools.length > 0;
-    } catch (e) {
-      this._mcpConnected = false;
-      console.error("Failed to connect MCP servers:", e);
-    }
+    const agents = [this.primaryAgent, ...Object.values(this.agentTemplates)];
+    this._mcpConnected = await registerMcpTools(
+      this._mcpManager,
+      this._toolExecutors,
+      agents,
+    );
   }
 
   // ==================================================================

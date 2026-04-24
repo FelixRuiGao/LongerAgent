@@ -662,6 +662,8 @@ export interface GlobalTuiPreferences {
   contextRatio?: number;
   /** Whether to show the Codex usage card in the sidebar. Default true. */
   showCodexUsage?: boolean;
+  /** Permission mode preference. Default "reversible". */
+  permissionMode?: string;
 }
 
 export function createGlobalTuiPreferences(

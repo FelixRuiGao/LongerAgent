@@ -1,4 +1,4 @@
-export type AskKind = "agent_question";
+export type AskKind = "agent_question" | "approval";
 
 export interface AskSource {
   agentId: string;
@@ -53,7 +53,24 @@ export interface AgentQuestion extends AskBase {
   options: string[];
 }
 
-export type AskRequest = AgentQuestion;
+export interface ApprovalRequest extends AskBase {
+  kind: "approval";
+  payload: {
+    toolCallId: string;
+    toolName: string;
+    toolSummary: string;
+    permissionClass: string;
+    offers: Array<{
+      type: string;
+      label: string;
+      scope?: string;
+      rule?: Record<string, unknown>;
+    }>;
+  };
+  options: string[];
+}
+
+export type AskRequest = AgentQuestion | ApprovalRequest;
 
 export interface PendingAskUi {
   id: string;

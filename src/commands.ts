@@ -1520,6 +1520,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/copilot", description: "GitHub Copilot login", handler: cmdCopilot, options: copilotOptions });
   registry.register({ name: "/raw", description: "Toggle markdown raw/rendered mode", handler: cmdRaw, aliases: ["/md"] });
   registry.register({ name: "/agents", description: "Show agent list", handler: cmdAgents });
+  registry.register({ name: "/permission", description: "Set permission mode", handler: cmdPermission, options: permissionOptions });
   return registry;
 }
 
@@ -1725,5 +1726,69 @@ async function cmdSidebar(ctx: CommandContext, args: string): Promise<void> {
   } else {
     // Toggle: cycle auto → open → close → auto
     ctx.showMessage("__sidebar_toggle__");
+  }
+}
+
+// ------------------------------------------------------------------
+// /permission — set permission mode
+// ------------------------------------------------------------------
+
+const PERMISSION_MODES = ["read_only", "reversible", "yolo"] as const;
+const PERMISSION_DESCRIPTIONS: Record<string, string> = {
+  read_only: "Only read tools auto-allowed. All writes require approval.",
+  reversible: "Read + reversible writes (edit_file, write_file) auto-allowed. Bash and other mutations require approval.",
+  yolo: "Everything auto-allowed except catastrophic commands.",
+};
+
+function permissionOptions(ctx: CommandOptionsContext): CommandOption[] {
+  const session = ctx.session;
+  const current = typeof session.permissionMode === "string" ? session.permissionMode : "reversible";
+  return PERMISSION_MODES.map((mode) => ({
+    label: `${mode}${mode === current ? " (current)" : ""} — ${PERMISSION_DESCRIPTIONS[mode]}`,
+    value: mode,
+  }));
+}
+
+async function cmdPermission(ctx: CommandContext, args: string): Promise<void> {
+  const session = ctx.session;
+  let mode = args.trim().toLowerCase();
+
+  if (!mode) {
+    if (ctx.promptCommandPicker) {
+      const picked = await ctx.promptCommandPicker(permissionOptions({ session, store: ctx.store }));
+      if (!picked) return;
+      mode = picked;
+    } else {
+      const current = session.permissionMode ?? "reversible";
+      ctx.showMessage(
+        `Current permission mode: ${current}\n\n` +
+        `Usage: /permission <mode>\n` +
+        PERMISSION_MODES.map((m) => `  ${m} — ${PERMISSION_DESCRIPTIONS[m]}`).join("\n"),
+      );
+      return;
+    }
+  }
+
+  if (!PERMISSION_MODES.includes(mode as any)) {
+    ctx.showMessage(`Unknown mode "${mode}". Valid: ${PERMISSION_MODES.join(", ")}`);
+    return;
+  }
+
+  session.permissionMode = mode;
+  persistPermissionMode(ctx);
+  ctx.showMessage(`Permission mode set to: ${mode}`);
+}
+
+function persistPermissionMode(ctx: CommandContext): void {
+  try {
+    if (!ctx.store) return;
+    const session = ctx.session;
+    const prefs = typeof session.getGlobalPreferences === "function"
+      ? session.getGlobalPreferences()
+      : undefined;
+    if (!prefs) return;
+    ctx.store.saveGlobalPreferences(prefs);
+  } catch {
+    // Ignore persistence failures.
   }
 }
