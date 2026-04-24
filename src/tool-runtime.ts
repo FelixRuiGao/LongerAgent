@@ -17,7 +17,6 @@ import type { ToolExecutor, ToolExecutorContext } from "./tools/executor-types.j
 import type { ToolPreflightContext, ToolPreflightDecision } from "./agents/tool-loop.js";
 import {
   SPAWN_TOOL,
-  SPAWN_FILE_TOOL,
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
   WAIT_TOOL,
@@ -110,7 +109,7 @@ export function ensureCommTools(
 ): void {
   const existing = new Set(tools.map((t) => t.name));
   const wanted: ToolDef[] = [];
-  if (capabilities.includeSpawnTool) wanted.push(SPAWN_TOOL, SPAWN_FILE_TOOL);
+  if (capabilities.includeSpawnTool) wanted.push(SPAWN_TOOL);
   if (capabilities.includeKillTool) wanted.push(KILL_AGENT_TOOL);
   if (capabilities.includeCheckStatusTool) wanted.push(CHECK_STATUS_TOOL);
   if (capabilities.includeWaitTool) wanted.push(WAIT_TOOL);

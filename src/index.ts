@@ -123,7 +123,6 @@ export {
 export { BASIC_TOOLS, BASIC_TOOLS_MAP, executeTool } from "./tools/basic.js";
 export {
   SPAWN_TOOL,
-  SPAWN_FILE_TOOL,
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
   WAIT_TOOL,

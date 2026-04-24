@@ -1521,6 +1521,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/raw", description: "Toggle markdown raw/rendered mode", handler: cmdRaw, aliases: ["/md"] });
   registry.register({ name: "/agents", description: "Show agent list", handler: cmdAgents });
   registry.register({ name: "/permission", description: "Set permission mode", handler: cmdPermission, options: permissionOptions });
+  registry.register({ name: "/rewind", description: "Rewind to a previous turn", handler: cmdRewind, options: rewindOptions, aliases: ["/undo"] });
   return registry;
 }
 
@@ -1791,4 +1792,60 @@ function persistPermissionMode(ctx: CommandContext): void {
   } catch {
     // Ignore persistence failures.
   }
+}
+
+// ------------------------------------------------------------------
+// /rewind — rewind to a previous turn
+// ------------------------------------------------------------------
+
+function rewindOptions(ctx: CommandOptionsContext): CommandOption[] {
+  const session = ctx.session;
+  const targets: Array<{ turnIndex: number; preview: string; timestamp: number }> =
+    session.getRewindTargets?.() ?? [];
+  if (targets.length === 0) {
+    return [{ label: "(no turns to rewind to)", value: "" }];
+  }
+  return targets.slice(0, 20).map((t) => {
+    const ago = Math.round((Date.now() - t.timestamp) / 1000);
+    const agoText = ago < 60 ? `${ago}s ago` : ago < 3600 ? `${Math.round(ago / 60)}m ago` : `${Math.round(ago / 3600)}h ago`;
+    return {
+      label: `Turn ${t.turnIndex} (${agoText}): ${t.preview}`,
+      value: String(t.turnIndex),
+    };
+  });
+}
+
+async function cmdRewind(ctx: CommandContext, args: string): Promise<void> {
+  const session = ctx.session;
+
+  let turnIndex: number | undefined;
+
+  if (args.trim()) {
+    turnIndex = parseInt(args.trim(), 10);
+    if (isNaN(turnIndex)) {
+      ctx.showMessage(`Invalid turn number: "${args.trim()}"`);
+      return;
+    }
+  } else if (ctx.promptCommandPicker) {
+    const picked = await ctx.promptCommandPicker(rewindOptions({ session, store: ctx.store }));
+    if (!picked) return;
+    turnIndex = parseInt(picked, 10);
+    if (isNaN(turnIndex)) return;
+  } else {
+    ctx.showMessage("Usage: /rewind <turn_number>");
+    return;
+  }
+
+  const result = session.rewind?.(turnIndex);
+  if (!result) {
+    ctx.showMessage("Rewind is not supported in this session.");
+    return;
+  }
+  if (result.error) {
+    ctx.showMessage(`Rewind failed: ${result.error}`);
+    return;
+  }
+
+  ctx.showMessage(`Rewound to turn ${turnIndex}. Removed ${result.removed} log entries.`);
+  ctx.autoSave();
 }

@@ -54,27 +54,6 @@ export const SPAWN_TOOL: ToolDef = {
   tuiPolicy: { partialReveal: { completeArgs: ["id"] } },
 };
 
-export const SPAWN_FILE_TOOL: ToolDef = {
-  name: "spawn_file",
-  description:
-    "Spawn multiple sub-agents or agent teams from a YAML call file. " +
-    "Use this when spawning 2+ agents in parallel or creating teams with send-based communication. " +
-    "For a single agent, prefer spawn instead.",
-  parameters: {
-    type: "object",
-    properties: {
-      file: {
-        type: "string",
-        description:
-          "Filename of the YAML call file (relative to {SESSION_ARTIFACTS}).",
-      },
-    },
-    required: ["file"],
-  },
-  summaryTemplate: "{agent} is spawning sub-agents from {file}",
-  tuiPolicy: { partialReveal: { completeArgs: ["file"] } },
-};
-
 export const KILL_AGENT_TOOL: ToolDef = {
   name: "kill_agent",
   description: "Kill one or more running sub-agents by ID.",
@@ -84,7 +63,7 @@ export const KILL_AGENT_TOOL: ToolDef = {
       ids: {
         type: "array",
         items: { type: "string" },
-        description: "IDs of the sub-agents to kill",
+        description: "IDs of the sub-agents to kill.",
       },
     },
     required: ["ids"],
@@ -224,17 +203,15 @@ export const WAIT_TOOL: ToolDef = {
 export const SEND_TOOL: ToolDef = {
   name: "send",
   description:
-    "Send a message to a teammate. " +
+    "Send a message to a persistent child agent by ID. " +
     "The message is delivered asynchronously — you get a confirmation, not a reply. " +
-    "The target auto-activates if idle. " +
-    "To communicate with the parent session, use your turn output instead.",
+    "The target auto-activates if idle.",
   parameters: {
     type: "object",
     properties: {
       to: {
         type: "string",
-        description:
-          "Target: teammate agent ID, or \"all\" (broadcast to all teammates).",
+        description: "Target child agent ID.",
       },
       content: {
         type: "string",

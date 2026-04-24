@@ -57,6 +57,8 @@ export interface Session {
   resolveApprovalAsk?(askId: string, choiceIndex: number): void;
   permissionMode?: string;
   getGlobalPreferences?(): any;
+  getRewindTargets?(): Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }>;
+  rewind?(toTurnIndex: number): { removed: number; error?: string };
   resumePendingTurn?(options?: { signal?: AbortSignal }): Promise<string>;
   hasPendingTurnToResume?(): boolean;
   runManualSummarize?(instruction?: string, options?: { signal?: AbortSignal }): Promise<string>;

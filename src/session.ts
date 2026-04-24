@@ -42,7 +42,7 @@ import { ToolResult } from "./providers/base.js";
 import type { ToolDef } from "./providers/base.js";
 import {
   SPAWN_TOOL,
-  SPAWN_FILE_TOOL,
+
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
   WAIT_TOOL,
@@ -309,7 +309,7 @@ const SYSTEM_PREFIXES = [
 ];
 
 const COMM_TOOL_NAMES = new Set([
-  "spawn", "spawn_file", "kill_agent", "check_status", "wait", "show_context", "distill_context", "ask", "skill",
+  "spawn", "kill_agent", "check_status", "wait", "show_context", "distill_context", "ask", "skill",
   "bash_background", "bash_output", "kill_shell", "send",
 ]);
 
@@ -326,7 +326,6 @@ const SAFE_INTERRUPT_TOOLS = new Set([
   "show_context",
   "skill",
   "spawn",
-  "spawn_file",
   "time",
   "wait",
   "web_fetch",
@@ -385,10 +384,6 @@ interface ChildSessionHandle {
   terminationCause?: "natural" | "parent_kill" | "user_targeted_kill" | "user_mass_interrupt";
 }
 
-interface AgentTeam {
-  id: string;
-  members: Set<string>;
-}
 
 // BackgroundShellEntry — moved to ./background-shell-manager.ts
 
@@ -544,7 +539,6 @@ export class Session {
   // Session tree / child sessions
   private _childSessions = new Map<string, ChildSessionHandle>();
   private _archivedChildren = new Map<string, ArchivedChildRecord>();
-  private _teams = new Map<string, AgentTeam>();
   private _subAgentCounter = 0;
   private _shellManager!: BackgroundShellManager;
 
@@ -1429,6 +1423,104 @@ export class Session {
     return () => { this._logListeners.delete(listener); };
   }
 
+  // ------------------------------------------------------------------
+  // Rewind
+  // ------------------------------------------------------------------
+
+  /**
+   * Get the list of turn boundaries available for rewind.
+   * Returns turns in reverse chronological order (most recent first).
+   */
+  getRewindTargets(): Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }> {
+    const targets: Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }> = [];
+    for (let i = 0; i < this._log.length; i++) {
+      const entry = this._log[i];
+      if (entry.type !== "turn_start") continue;
+      if (entry.discarded) continue;
+      // Find the user message for this turn
+      let preview = "";
+      for (let j = i + 1; j < this._log.length; j++) {
+        const next = this._log[j];
+        if (next.turnIndex !== entry.turnIndex) break;
+        if (next.type === "user_message" && !next.discarded) {
+          preview = (next.display || "").slice(0, 80).replace(/\n/g, " ");
+          break;
+        }
+      }
+      targets.push({
+        turnIndex: entry.turnIndex,
+        entryIndex: i,
+        preview: preview || `(turn ${entry.turnIndex})`,
+        timestamp: entry.timestamp,
+      });
+    }
+    return targets.reverse();
+  }
+
+  /**
+   * Rewind the session to the start of the given turn, discarding all entries
+   * from that turn onward. Cannot rewind while a turn is in progress.
+   *
+   * @returns The number of entries removed.
+   */
+  rewind(toTurnIndex: number): { removed: number; error?: string } {
+    if (this._turnInFlight) {
+      return { removed: 0, error: "Cannot rewind while a turn is in progress." };
+    }
+
+    // Find the first entry of the target turn
+    const cutoff = this._log.findIndex(
+      (e) => e.turnIndex >= toTurnIndex && e.type === "turn_start" && !e.discarded,
+    );
+    if (cutoff < 0) {
+      return { removed: 0, error: `Turn ${toTurnIndex} not found in log.` };
+    }
+
+    // Kill any active child sessions and shells
+    if (this._childSessions.size > 0) {
+      this._archiveAllChildSessions();
+    }
+    if (this._shellManager.hasTrackedShells()) {
+      this._forceKillAllShells();
+    }
+
+    // Truncate
+    const removed = this._log.length - cutoff;
+    this._log.length = cutoff;
+
+    // Reset counters from remaining log
+    this._turnCount = cutoff > 0 ? (this._log[cutoff - 1]?.turnIndex ?? 0) : 0;
+    this._idAllocator.restoreFrom(this._log);
+
+    // Reset transient state
+    this._compactInProgress = false;
+    this._hintState = "none";
+    this._agentState = "idle";
+    this._inbox = [];
+    this._activeAsk = null;
+    this._pendingTurnState = null;
+    this._showContextRoundsRemaining = 0;
+    this._showContextAnnotations = null;
+    this._activeLogEntryId = null;
+    this._lastTurnEndStatus = null;
+    this._cachedSummary = undefined;
+
+    // Rebuild used context IDs from remaining log
+    this._usedContextIds.clear();
+    for (const entry of this._log) {
+      const ctx = (entry.meta as Record<string, unknown>)?.["contextId"];
+      if (typeof ctx === "string") this._usedContextIds.add(ctx);
+    }
+
+    // Refresh plan state and notify
+    this._refreshPlanState();
+    this._bumpLogRevision();
+    this._notifyLogListeners();
+    this.onSaveRequest?.();
+
+    return { removed };
+  }
+
   /**
    * Restore session from a loaded log.
    */
@@ -1515,7 +1607,6 @@ export class Session {
 
     this._childSessions = new Map();
     this._archivedChildren = new Map();
-    this._teams = new Map();
     this._subAgentCounter = 0;
     warnings.push(...this._commitPreparedChildren(prepared.children));
 
@@ -1732,26 +1823,13 @@ export class Session {
 
     const warnings: string[] = [];
     for (const prepared of children) {
-      const teamId = prepared.record.teamId ?? null;
-      if (!teamId) continue;
-      // Only add to team if not archived
-      if (prepared.record.lifecycle === "archived") continue;
-      let team = this._teams.get(teamId);
-      if (!team) {
-        team = { id: teamId, members: new Set() };
-        this._teams.set(teamId, team);
-      }
-      team.members.add(prepared.record.id);
-    }
-
-    for (const prepared of children) {
       const { record, agent, loaded } = prepared;
       try {
         const handle = this._instantiateChildSession(
           record.id,
           record.template,
           record.mode,
-          record.teamId ?? null,
+          null,
           agent,
           { numericId: record.numericId, order: record.order },
         );
@@ -1763,19 +1841,13 @@ export class Session {
         handle.status =
           record.lifecycle === "archived"
             ? "terminated"
-            : record.lifecycle === "idle"
-              ? "idle"
-              : "idle";
+            : "idle";
 
-        // Restore inbox if persisted (migrate old format)
         if (record.inbox && record.inbox.length > 0) {
           (handle.session as Session)._inbox = record.inbox.map((m) => migrateMessageEnvelope(m as unknown as Record<string, unknown>));
         }
 
         this._childSessions.set(record.id, handle);
-        if (record.teamId && record.lifecycle !== "archived") {
-          this._teams.get(record.teamId)?.members.add(record.id);
-        }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         warnings.push(`Failed to restore child session '${record.id}': ${reason}`);
@@ -1928,17 +2000,13 @@ export class Session {
         continue;
       }
 
-      if (record.teamId && !this._teams.has(record.teamId)) {
-        this._teams.set(record.teamId, { id: record.teamId, members: new Set() });
-      }
-
       let handle: ChildSessionHandle;
       try {
         handle = this._instantiateChildSession(
           record.id,
           record.template,
           record.mode,
-          record.teamId ?? null,
+          null,
           agent,
           { numericId: record.numericId, order: record.order },
         );
@@ -1970,9 +2038,6 @@ export class Session {
       }
 
       this._childSessions.set(record.id, handle);
-      if (record.teamId) {
-        this._teams.get(record.teamId)?.members.add(record.id);
-      }
     }
   }
 
@@ -2087,7 +2152,6 @@ export class Session {
     // archived handles must not leak into the next root session's persisted meta.
     this._childSessions = new Map();
     this._archivedChildren = new Map();
-    this._teams = new Map();
 
     // 8. Re-init conversation LAST (fresh session state, storage may still be lazy)
     // _initConversation also resets _log and _idAllocator
@@ -2104,7 +2168,6 @@ export class Session {
         bash_output: (args) => this._shellManager.execBashOutput(args),
         kill_shell: (args) => this._shellManager.execKillShell(args),
         spawn: (args) => this._execSpawn(args),
-        spawn_file: (args) => this._execSpawnFile(args),
         kill_agent: (args) => this._execKillAgent(args),
         check_status: (args) => this._execCheckStatus(args),
         wait: (args) => this._execWait(args),
@@ -2444,6 +2507,11 @@ export class Session {
     if (settings.disabled_skills && settings.disabled_skills.length > 0) {
       this._disabledSkills = new Set(settings.disabled_skills);
       this.reloadSkills();
+    }
+
+    // Restore permission mode
+    if (settings.permission_mode && ["read_only", "reversible", "yolo"].includes(settings.permission_mode)) {
+      this._permissionAdvisor.sessionMode = settings.permission_mode as PermissionMode;
     }
   }
 
@@ -4367,9 +4435,6 @@ export class Session {
     if (toolName !== "edit_file" && toolName !== "write_file") {
       return undefined;
     }
-    if (toolArgs.intent === "spawn") {
-      return "hide";
-    }
     const filePath = typeof toolArgs.path === "string" ? toolArgs.path : "";
     if (filePath && this._isPlanFilePath(filePath)) {
       return "hide";
@@ -4948,59 +5013,6 @@ export class Session {
     }
   }
 
-  private _createChildSendExecutor(handle: ChildSessionHandle): ToolExecutor {
-    return (args: Record<string, unknown>) => {
-      const sendTo = ((args["to"] as string) ?? "").trim();
-      const sendContent = ((args["content"] as string) ?? "").trim();
-      if (!sendTo || !sendContent) {
-        return new ToolResult({ content: "Error: 'to' and 'content' are required." });
-      }
-      const team = handle.teamId ? this._teams.get(handle.teamId) : null;
-
-      // send to "main" — no longer allowed; turn output is the channel
-      if (sendTo === "main") {
-        return new ToolResult({
-          content: "Error: Cannot send to 'main'. Your turn output is automatically delivered to the parent session. Include what you want to say in your output text.",
-        });
-      }
-
-      // send to "all" — broadcast to all teammates
-      if (sendTo === "all") {
-        if (!team) {
-          return new ToolResult({ content: "Error: 'all' is only valid for team members." });
-        }
-        let count = 0;
-        for (const memberId of team.members) {
-          if (memberId === handle.id) continue;
-          this._sendMessageToChild(memberId, {
-            type: "peer_message",
-            sender: handle.id,
-            content: sendContent,
-            timestamp: Date.now(),
-          });
-          count++;
-        }
-        handle.lastActivityAt = Date.now();
-        handle.session._recordSessionEvent(`broadcast message to ${count} teammate(s)`);
-        return new ToolResult({ content: `Message broadcast to ${count} teammate(s).` });
-      }
-
-      // send to specific teammate
-      if (!team || !team.members.has(sendTo)) {
-        return new ToolResult({ content: `Agent '${sendTo}' is not in your team. You can only send to teammates.` });
-      }
-      this._sendMessageToChild(sendTo, {
-        type: "peer_message",
-        sender: handle.id,
-        content: sendContent,
-        timestamp: Date.now(),
-      });
-      handle.lastActivityAt = Date.now();
-      handle.session._recordSessionEvent(`sent message to ${sendTo}`);
-      return new ToolResult({ content: `Message sent to '${sendTo}'.` });
-    };
-  }
-
   private _instantiateChildSession(
     taskId: string,
     templateLabel: string,
@@ -5018,12 +5030,8 @@ export class Session {
     const fullSystemPrompt = this._buildSubAgentSystemPrompt(
       agent.systemPrompt,
       mode === "persistent",
-      teamId,
     );
     agent.systemPrompt = fullSystemPrompt;
-    if (teamId && !agent.tools.some((tool) => tool.name === "send")) {
-      agent.tools.push(SEND_TOOL);
-    }
 
     const handle: ChildSessionHandle = {
       id: taskId,
@@ -5063,7 +5071,7 @@ export class Session {
       capabilities: CHILD_SESSION_CAPABILITIES,
       statusSource: () => this.getChildSessionSnapshots(),
       onTurnOutput: (text: string) => this._handleChildTurnOutput(taskId, text),
-      toolExecutorOverrides: teamId ? { send: this._createChildSendExecutor(handle) } : {},
+      toolExecutorOverrides: {},
       deferQueuedMessageInjectionOnTurnExit: true,
       promptCacheKey: taskId,
     });
@@ -5250,14 +5258,6 @@ export class Session {
       artifactsDir: handle.artifactsDir,
     });
     this._childSessions.delete(handle.id);
-    // Remove from team roster
-    if (handle.teamId) {
-      const team = this._teams.get(handle.teamId);
-      if (team) {
-        team.members.delete(handle.id);
-        if (team.members.size === 0) this._teams.delete(handle.teamId);
-      }
-    }
   }
 
   private _sendMessageToChild(childId: string, msg: MessageEnvelope): ToolResult {
@@ -5334,94 +5334,15 @@ export class Session {
     if (args["idle"] === true) spec["idle"] = true;
     if (typeof args["model_level"] === "string") spec["model_level"] = args["model_level"];
 
-    return this._execSpawnFromSpecs([spec], null);
-  }
-
-  private async _execSpawnFile(args: Record<string, unknown>): Promise<ToolResult> {
-    const fileArg = this._argRequiredString("spawn_file", args, "file", { nonEmpty: true });
-    if (fileArg instanceof ToolResult) return fileArg;
-    const fileRel = fileArg.trim();
-
-    const artifactsDir = this._resolveSessionArtifacts();
-    let filePath: string;
-    try {
-      filePath = safePath({
-        baseDir: artifactsDir,
-        requestedPath: fileRel,
-        cwd: artifactsDir,
-        mustExist: true,
-        expectFile: true,
-        accessKind: "spawn_call_file",
-      }).safePath!;
-    } catch (e) {
-      if (e instanceof SafePathError) {
-        if (e.code === "PATH_OUTSIDE_SCOPE") {
-          return new ToolResult({
-            content:
-              "Error: call file path must be within SESSION_ARTIFACTS.\n" +
-              `The 'file' parameter is resolved relative to SESSION_ARTIFACTS (${artifactsDir}).`,
-          });
-        }
-        if (e.code === "PATH_SYMLINK_ESCAPES_SCOPE") {
-          return new ToolResult({
-            content:
-              "Error: call file path escapes SESSION_ARTIFACTS via a symbolic link.\n" +
-              `The 'file' parameter is resolved relative to SESSION_ARTIFACTS (${artifactsDir}).`,
-          });
-        }
-        if (e.code === "PATH_NOT_FOUND" || e.code === "PATH_NOT_FILE") {
-          const candidatePath = e.details.resolvedPath || join(artifactsDir, fileRel);
-          return new ToolResult({
-            content:
-              `Error: call file not found at ${candidatePath}\n` +
-              `The 'file' parameter is resolved relative to SESSION_ARTIFACTS (${artifactsDir}).\n` +
-              `Make sure you wrote the call file to this directory using write_file(path="${join(artifactsDir, fileRel)}").`,
-          });
-        }
-        return new ToolResult({ content: `Error: invalid call file path: ${e.message}` });
-      }
-      throw e;
-    }
-
-    let callFile: Record<string, unknown>;
-    try {
-      callFile = yaml.load(readFileSync(filePath, "utf-8")) as Record<string, unknown>;
-    } catch (e) {
-      return new ToolResult({ content: `Error: failed to parse call file: ${e}` });
-    }
-
-    if (!callFile || typeof callFile !== "object") {
-      return new ToolResult({ content: "Error: call file must be a YAML mapping." });
-    }
-
-    if (callFile["templates"]) {
-      console.warn(
-        "spawn_file: 'templates:' section in call files is deprecated. " +
-        "Use 'template:' (pre-defined) or 'template_path:' (custom) per task instead.",
-      );
-    }
-
-    const teamName = ((callFile["team"] as string) ?? "").trim() || null;
-    const tasksSpec = (callFile["agents"] ?? callFile["tasks"]) as Array<Record<string, unknown>> ?? [];
-    if (!tasksSpec.length) {
-      return new ToolResult({ content: "Error: call file has no 'agents' (or 'tasks') section." });
-    }
-
-    return this._execSpawnFromSpecs(tasksSpec, teamName);
+    return this._execSpawnFromSpecs([spec]);
   }
 
   private _execSpawnFromSpecs(
     tasksSpec: Array<Record<string, unknown>>,
-    teamName: string | null,
   ): ToolResult {
     const spawned: string[] = [];
     const spawnedInfo: Array<{ numericId: number; taskId: string; template: string; task: string }> = [];
     const errors: string[] = [];
-
-    // Create or look up team
-    if (teamName && !this._teams.has(teamName)) {
-      this._teams.set(teamName, { id: teamName, members: new Set() });
-    }
 
     for (const spec of tasksSpec) {
       const taskId = ((spec["id"] as string) ?? "").trim();
@@ -5449,23 +5370,11 @@ export class Session {
         continue;
       }
 
-      let mode: ChildSessionMode;
-      if (teamName) {
-        if (!modeRaw) {
-          mode = "persistent";
-        } else if (modeRaw === "persistent") {
-          mode = "persistent";
-        } else {
-          errors.push(`'${taskId}': team members cannot use mode '${modeRaw}'.`);
-          continue;
-        }
-      } else {
-        if (modeRaw !== "oneshot" && modeRaw !== "persistent") {
-          errors.push(`'${taskId}': non-team agents must set mode to 'oneshot' or 'persistent'.`);
-          continue;
-        }
-        mode = modeRaw;
+      if (modeRaw !== "oneshot" && modeRaw !== "persistent") {
+        errors.push(`'${taskId}': mode must be 'oneshot' or 'persistent'.`);
+        continue;
       }
+      const mode: ChildSessionMode = modeRaw;
 
       let agent: Agent;
       let tierThinkingLevel: string | undefined;
@@ -5488,14 +5397,7 @@ export class Session {
         this.primaryAgent.tools.push(SEND_TOOL);
       }
 
-      if (teamName) {
-        const team = this._teams.get(teamName)!;
-        team.members.add(taskId);
-        // NOTE: No per-member broadcast here — batch broadcast happens after the loop.
-      }
-
-      const handle = this._createChildSession(taskId, templateLabel, mode, teamName, agent);
-      // Apply tier-specific thinking level to the child session
+      const handle = this._createChildSession(taskId, templateLabel, mode, null, agent);
       if (tierThinkingLevel) {
         handle.session.thinkingLevel = tierThinkingLevel;
       }
@@ -5513,34 +5415,6 @@ export class Session {
 
       if (!startIdle) {
         this._startChildTurn(handle, taskDesc);
-      }
-
-    }
-
-    // Batch team broadcast: notify existing members about ALL new members at once
-    if (teamName && spawned.length > 0) {
-      const team = this._teams.get(teamName);
-      if (team) {
-        const existingMembers = [...team.members].filter((id) => !spawned.includes(id));
-        if (existingMembers.length > 0) {
-          const newList = spawnedInfo
-            .filter((info) => team.members.has(info.taskId))
-            .map((info) => `- ${info.taskId} (${info.template}): "${info.task.replace(/\s+/g, " ").slice(0, 120)}"`)
-            .join("\n");
-          const notice = `Team "${teamName}" — ${spawned.length} new member(s) joined:\n${newList}`;
-          for (const memberId of existingMembers) {
-            const mh = this._childSessions.get(memberId);
-            if (!mh) continue;
-            // Deliver but do NOT activate — broadcast is informational, not a task
-            mh.session._deliverMessage({
-              type: "system_notice",
-              sender: "system",
-              content: notice,
-              timestamp: Date.now(),
-            });
-            mh.session._recordSessionEvent(`team update: ${spawned.length} new member(s)`);
-          }
-        }
       }
     }
 
@@ -5578,18 +5452,7 @@ export class Session {
   private _execKillAgent(args: Record<string, unknown>): ToolResult {
     const idsArg = this._argRequiredStringArray("kill_agent", args, "ids");
     if (idsArg instanceof ToolResult) return idsArg;
-    let ids = idsArg;
-
-    // Support team: if first id matches a team name, expand to all members
-    const teamArg = ((args["team"] as string) ?? "").trim();
-    if (teamArg) {
-      const team = this._teams.get(teamArg);
-      if (team) {
-        ids = [...team.members];
-      } else {
-        return new ToolResult({ content: `Team '${teamArg}' not found.` });
-      }
-    }
+    const ids = idsArg;
 
     if (!ids.length) {
       return new ToolResult({ content: "No agent IDs specified." });
@@ -5602,7 +5465,6 @@ export class Session {
     for (const name of ids) {
       const handle = this._childSessions.get(name);
       if (!handle) {
-        // Already archived or never existed
         if (this._archivedChildren.has(name)) {
           alreadyArchived.push(name);
         } else {
@@ -5618,16 +5480,6 @@ export class Session {
       handle.lastActivityAt = Date.now();
       handle.session._recordSessionEvent("terminated by parent");
       this._saveChildSession(handle);
-      // Don't _archiveHandle here — keep in _childSessions so TUI can still read log.
-      // Actual move to _archivedChildren happens on close/reset.
-      // But do remove from team roster.
-      if (handle.teamId) {
-        const team = this._teams.get(handle.teamId);
-        if (team) {
-          team.members.delete(name);
-          if (team.members.size === 0) this._teams.delete(handle.teamId);
-        }
-      }
       killed.push(name);
 
       if (this._progress) {
@@ -5660,21 +5512,6 @@ export class Session {
     const content = ((args["content"] as string) ?? "").trim();
     if (!to || !content) {
       return new ToolResult({ content: "Error: 'to' and 'content' are required." });
-    }
-
-    // send to "all" — broadcast to running + idle persistent agents (does NOT revive archived)
-    if (to === "all") {
-      let count = 0;
-      for (const [childId, handle] of this._childSessions) {
-        if (handle.mode !== "persistent") continue;
-        if (handle.lifecycle !== "running" && handle.lifecycle !== "idle") continue;
-        this._sendMessageToChild(childId, { type: "user_input", sender: "main", content, timestamp: Date.now() });
-        count++;
-      }
-      if (count === 0) {
-        return new ToolResult({ content: "No active persistent agents to broadcast to." });
-      }
-      return new ToolResult({ content: `Message broadcast to ${count} agent(s).` });
     }
 
     // Direct send — may revive archived persistent agent
@@ -5727,16 +5564,6 @@ export class Session {
     // Move from archived to active
     this._childSessions.set(record.id, handle);
     this._archivedChildren.delete(record.id);
-
-    // Restore team membership if applicable
-    if (record.teamId) {
-      let team = this._teams.get(record.teamId);
-      if (!team) {
-        team = { id: record.teamId, members: new Set() };
-        this._teams.set(record.teamId, team);
-      }
-      team.members.add(record.id);
-    }
 
     // Deliver message and start turn
     handle.session._inbox.push({ type: "user_input", sender: "main", content: messageContent, timestamp: Date.now() });
@@ -6003,7 +5830,6 @@ export class Session {
       });
     }
     this._childSessions.clear();
-    this._teams.clear();
   }
 
   /** Wait for all running child turns to settle, with timeout. */
@@ -6156,7 +5982,6 @@ export class Session {
   private _buildSubAgentSystemPrompt(
     basePrompt: string,
     persistent: boolean,
-    teamId: string | null,
   ): string {
     const parts = [basePrompt];
 
@@ -6165,27 +5990,6 @@ export class Session {
       const modePrompt = this._readPromptFile(`sub-agent/${modeFile}`);
       if (modePrompt) parts.push(modePrompt);
     } catch { /* optional */ }
-
-    if (teamId) {
-      try {
-        let teamPrompt = this._readPromptFile("sub-agent/team.md");
-        if (teamPrompt) {
-          const team = this._teams.get(teamId);
-          const roster = team
-            ? [...team.members].map((memberId) => {
-                const entry = this._childSessions.get(memberId);
-                return entry
-                  ? `- **${memberId}** (${entry.template})`
-                  : `- **${memberId}**`;
-              }).join("\n")
-            : "(team roster unavailable)";
-          teamPrompt = teamPrompt
-            .replace("{TEAM_ID}", teamId)
-            .replace("{TEAM_ROSTER}", roster);
-          parts.push(teamPrompt);
-        }
-      } catch { /* optional */ }
-    }
 
     return parts.join("\n\n");
   }

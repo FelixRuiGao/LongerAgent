@@ -594,6 +594,10 @@ export interface VigilSettings {
   // -- Display --
   accent_color?: string;
 
+  // -- Permissions --
+  /** Default permission mode: "read_only" | "reversible" | "yolo". */
+  permission_mode?: string;
+
   // -- Skills --
   disabled_skills?: string[];
 
@@ -1297,6 +1301,7 @@ export function mergeSettings(global: VigilSettings, local: VigilSettings): Vigi
   if (local.thinking_level !== undefined) merged.thinking_level = local.thinking_level;
   if (local.context_ratio !== undefined) merged.context_ratio = local.context_ratio;
   if (local.accent_color !== undefined) merged.accent_color = local.accent_color;
+  if (local.permission_mode !== undefined) merged.permission_mode = local.permission_mode;
 
   // Arrays — local replaces
   if (local.disabled_skills !== undefined) merged.disabled_skills = local.disabled_skills;
