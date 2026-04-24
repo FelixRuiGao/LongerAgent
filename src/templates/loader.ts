@@ -1,5 +1,5 @@
 /**
- * Agent template loader with multi-file prompt assembly.
+ * Agent template loader.
  *
  * Provides `loadTemplate` / `loadTemplates` for agent templates.
  *
@@ -9,20 +9,20 @@
  *   +-- main/
  *   |   +-- agent.yaml          # required
  *   |   +-- system_prompt.md    # referenced by system_prompt_file
+ *   |   +-- tools.md            # referenced by tools_prompt_file
  *   |   +-- knowledge/          # optional -- files appended to system prompt
  *   |       +-- style_guide.md
- *   +-- executor/
- *       +-- agent.yaml
- *       +-- system_prompt.md
  *
- * Prompt assembly pipeline (per template):
+ * Prompt assembly (per template):
  *
- *   1. Read core system prompt from system_prompt.md
- *   2. Assemble tool prompts from prompts/tools/{name}.md
- *      (ordered by TOOL_PROMPT_ORDER, filtered by template's declared tools)
- *   3. Assemble section prompts from prompts/sections/{name}.md
- *      (controlled by template's prompt_sections field)
- *   4. Append knowledge/ files (existing mechanism)
+ *   agent.prompt = roleBody + toolPromptContent + knowledge
+ *
+ *   1. roleBody      — system_prompt_file (required)
+ *   2. toolPrompt    — tools_prompt_file (preferred) OR tier-default (fallback)
+ *   3. knowledge     — all files under knowledge/ (optional)
+ *
+ * Session-level layers (AGENTS.md memory, agent model pins, future hooks)
+ * are added separately by `src/prompt-assembler.ts` on top of agent.prompt.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -43,50 +43,6 @@ const AGENT_YAML = "agent.yaml";
 const REQUIRED_TEMPLATE_TYPE = "agent";
 const MIN_TEMPLATE_MAX_TOOL_ROUNDS = 100;
 
-/**
- * Canonical ordering for tool prompt assembly.
- * Tools not in this list are appended alphabetically after these.
- */
-export const TOOL_PROMPT_ORDER: string[] = [
-  // File I/O
-  "read_file",
-  "write_file",
-  "edit_file",
-  "list_dir",
-  "glob",
-  "grep",
-  // Shell
-  "bash",
-  "bash_background",
-  "bash_output",
-  "kill_shell",
-  "time",
-  // Web
-  "web_search",
-  "web_fetch",
-  // Orchestration
-  "spawn",
-  "spawn_file",
-  "wait",
-  "kill_agent",
-  "check_status",
-  // Context
-  "show_context",
-  "distill_context",
-  // Interaction
-  "ask",
-  "skill",
-];
-
-/**
- * Paired tool dependencies.
- * If a tool (key) is in the list, all its required companions (value) must also be present.
- */
-export const TOOL_REQUIRES: Record<string, string[]> = {
-  bash_output: ["bash_background"],
-  kill_shell: ["bash_background"],
-  bash_background: ["bash_output"],
-};
 
 /**
  * Tool packs — named groups of related tools.
@@ -100,16 +56,40 @@ export const TOOL_PACKS: Record<string, string[]> = {
   util:  ["time", "web_search", "web_fetch"],
 };
 
+
+// ------------------------------------------------------------------
+// Tool tiers (Fermi-style)
+// ------------------------------------------------------------------
+
+export type ToolTier = "read_only" | "reversible" | "all";
+
+/** Map tool_tier to the tool names that tier exposes. */
+export const TOOL_TIER_TOOLS: Record<ToolTier, string[]> = {
+  read_only: [...TOOL_PACKS.read, ...TOOL_PACKS.util],
+  reversible: [...TOOL_PACKS.read, ...TOOL_PACKS.edit, ...TOOL_PACKS.shell, ...TOOL_PACKS.util],
+  all: "all" as unknown as string[], // sentinel — handled specially
+};
+
 /**
- * Default tools for custom templates that omit `tools` in agent.yaml.
- * Same set as the executor template — all packs.
+ * Resolve tool_tier from an agent spec. Throws on invalid values.
+ * Returns null if not specified (caller should fall back to the `tools` list).
  */
-export const EXECUTOR_DEFAULT_TOOLS: string[] = [
-  ...TOOL_PACKS.read,
-  ...TOOL_PACKS.edit,
-  ...TOOL_PACKS.shell,
-  ...TOOL_PACKS.util,
-];
+export function resolveToolTier(spec: Record<string, unknown>): ToolTier | null {
+  const raw = spec["tool_tier"];
+  if (raw === undefined) return null;
+  if (raw === "read_only" || raw === "reversible" || raw === "all") return raw;
+  throw new Error(
+    `Invalid tool_tier '${String(raw)}'. Must be one of: ${Object.keys(TOOL_TIER_TOOLS).join(", ")}`,
+  );
+}
+
+/** Resolve a tier-default tool prompt. Returns null if no bundled prompt exists. */
+function resolveTierDefaultPrompt(_spec: Record<string, unknown>): string | null {
+  // Tier default prompts are a future extension point.
+  // Currently all bundled templates declare tools_prompt_file, so this
+  // only fires for custom templates that omit it. Return null to skip.
+  return null;
+}
 
 /**
  * Recipe for dynamic system prompt reassembly.
@@ -144,42 +124,29 @@ export interface PromptRecipe {
  * software updates, etc.).
  */
 export function assembleSystemPrompt(recipe: PromptRecipe): string {
-  const { templateDir, spec, promptsDirs } = recipe;
+  const { templateDir, spec } = recipe;
 
-  // --- 1. Resolve core system prompt ---
+  // --- 1. Role body (core system prompt) ---
   let systemPrompt = resolveSystemPrompt(spec, templateDir);
 
-  // --- 2. Assemble tool prompts ---
+  // --- 2. Tool prompt (custom file > tier default) ---
   const toolsPromptFile = spec["tools_prompt_file"] as string | undefined;
   if (toolsPromptFile) {
-    // Per-agent unified tools file — preferred path
     const toolsPath = join(templateDir, toolsPromptFile);
     if (existsSync(toolsPath)) {
       const toolsContent = readFileSync(toolsPath, "utf-8").trimEnd();
       if (toolsContent) {
-        systemPrompt = systemPrompt.trimEnd() + "\n\n---\n\n# Tools\n\n" + toolsContent;
+        systemPrompt = systemPrompt.trimEnd() + "\n\n" + toolsContent;
       }
     }
-  } else if (promptsDirs.length > 0) {
-    // Fallback: per-tool assembly for custom/legacy templates
-    const toolNames = resolveToolNames(spec);
-    validateToolDependencies(toolNames);
-    const toolPrompts = assembleToolPrompts(toolNames, promptsDirs);
-    if (toolPrompts) {
-      systemPrompt = systemPrompt.trimEnd() + "\n\n---\n\n# Tools\n\n" + toolPrompts;
+  } else {
+    const tierPrompt = resolveTierDefaultPrompt(spec);
+    if (tierPrompt) {
+      systemPrompt = systemPrompt.trimEnd() + "\n\n" + tierPrompt;
     }
   }
 
-  // --- 3. Assemble section prompts ---
-  if (promptsDirs.length > 0) {
-    const sections = resolveSections(spec);
-    const sectionPrompts = assembleSectionPrompts(sections, promptsDirs);
-    if (sectionPrompts) {
-      systemPrompt = systemPrompt.trimEnd() + "\n\n" + sectionPrompts;
-    }
-  }
-
-  // --- 4. Append knowledge files (if any) ---
+  // --- 3. Knowledge files (optional directory) ---
   const knowledgeDir = join(templateDir, "knowledge");
   if (existsSync(knowledgeDir) && statSync(knowledgeDir).isDirectory()) {
     const knowledgeParts: string[] = [];
@@ -377,6 +344,14 @@ export function validateTemplate(templateDir: string): string | null {
     }
   }
 
+  const tierSpec = spec["tool_tier"];
+  if (tierSpec !== undefined) {
+    if (typeof tierSpec !== "string" || !(tierSpec in TOOL_TIER_TOOLS)) {
+      const valid = Object.keys(TOOL_TIER_TOOLS).join(", ");
+      return `Invalid tool_tier '${String(tierSpec)}'. Must be one of: ${valid}`;
+    }
+  }
+
   const toolsSpec = spec["tools"];
   if (toolsSpec != null && toolsSpec !== "all" && !Array.isArray(toolsSpec)) {
     return `Invalid tools spec: must be "all", a list of tool/pack names, or omitted`;
@@ -390,6 +365,10 @@ export function validateTemplate(templateDir: string): string | null {
         return `Unknown tool or pack '${entry}'. Available tools: ${Object.keys(BASIC_TOOLS_MAP).join(", ")}; packs: ${Object.keys(TOOL_PACKS).join(", ")}`;
       }
     }
+  }
+
+  if (tierSpec === undefined && toolsSpec == null) {
+    return `agent.yaml must specify either 'tool_tier' (preferred) or 'tools'`;
   }
 
   const maxRoundsError = validateTemplateMaxToolRounds(spec);
@@ -426,14 +405,6 @@ export function resolvePromptsDir(templatesRoot: string): string | undefined {
  * Pack names and individual tool names can be mixed freely:
  *   tools: [read, bash, time]   →  read_file, list_dir, glob, grep, bash, time
  */
-export function resolveToolNames(spec: Record<string, unknown>): string[] {
-  const toolsSpec = spec["tools"];
-  if (toolsSpec == null) return [...EXECUTOR_DEFAULT_TOOLS];
-  if (toolsSpec === "all") return [...TOOL_PROMPT_ORDER];
-  if (Array.isArray(toolsSpec)) return expandToolSpecs(toolsSpec as string[]);
-  throw new Error(`Invalid tools spec: ${JSON.stringify(toolsSpec)}`);
-}
-
 /**
  * Expand an array of tool specs (pack names and/or individual tool names)
  * into a deduplicated list of individual tool names.
@@ -458,102 +429,6 @@ function expandToolSpecs(specs: string[]): string[] {
     }
   }
   return result;
-}
-
-/**
- * Validate that paired tool dependencies are satisfied.
- */
-export function validateToolDependencies(toolNames: string[]): void {
-  const nameSet = new Set(toolNames);
-  for (const [tool, requires] of Object.entries(TOOL_REQUIRES)) {
-    if (!nameSet.has(tool)) continue;
-    for (const req of requires) {
-      if (!nameSet.has(req)) {
-        throw new Error(
-          `Tool '${tool}' requires '${req}' to be included in the tools list.`,
-        );
-      }
-    }
-  }
-}
-
-/**
- * Read and concatenate tool prompt files in canonical order.
- * For each tool, the first matching file across `promptsDirs` is used (user override first).
- * Tools without a corresponding prompt file are silently skipped.
- */
-export function assembleToolPrompts(
-  toolNames: string[],
-  promptsDirs: string[],
-): string {
-  // Sort by TOOL_PROMPT_ORDER, unknowns go to the end alphabetically
-  const orderIndex = new Map(TOOL_PROMPT_ORDER.map((n, i) => [n, i]));
-  const sorted = [...toolNames].sort((a, b) => {
-    const ia = orderIndex.get(a) ?? Infinity;
-    const ib = orderIndex.get(b) ?? Infinity;
-    if (ia !== ib) return ia - ib;
-    return a.localeCompare(b);
-  });
-
-  const parts: string[] = [];
-  for (const name of sorted) {
-    const filePath = resolveLayeredFile(promptsDirs, "tools", `${name}.md`);
-    if (!filePath) continue;
-    try {
-      parts.push(readFileSync(filePath, "utf-8").trimEnd());
-    } catch {
-      // Skip unreadable files
-    }
-  }
-
-  return parts.join("\n\n");
-}
-
-/**
- * Resolve prompt_sections from the spec.
- * Defaults to [] if omitted.
- */
-function resolveSections(spec: Record<string, unknown>): string[] {
-  const sections = spec["prompt_sections"];
-  if (sections == null) return [];
-  if (Array.isArray(sections)) return sections as string[];
-  return [];
-}
-
-/**
- * Read and concatenate section prompt files.
- * For each section, the first matching file across `promptsDirs` is used.
- */
-export function assembleSectionPrompts(
-  sections: string[],
-  promptsDirs: string[],
-): string {
-  if (sections.length === 0) return "";
-
-  const parts: string[] = [];
-  for (const name of sections) {
-    const filePath = resolveLayeredFile(promptsDirs, "sections", `${name}.md`);
-    if (!filePath) continue;
-    try {
-      parts.push(readFileSync(filePath, "utf-8").trimEnd());
-    } catch {
-      // Skip unreadable files
-    }
-  }
-
-  return parts.join("\n\n");
-}
-
-/**
- * Resolve a file across multiple directories, returning the first match.
- * Directories are checked in order (user override first, bundled second).
- */
-function resolveLayeredFile(dirs: string[], subdir: string, filename: string): string | null {
-  for (const dir of dirs) {
-    const filePath = join(dir, subdir, filename);
-    if (existsSync(filePath)) return filePath;
-  }
-  return null;
 }
 
 // ------------------------------------------------------------------
@@ -610,12 +485,23 @@ function validateTemplateMaxToolRounds(spec: Record<string, unknown>): string | 
  * - Absent / null => empty list (custom templates get defaults via resolveToolNames)
  */
 function resolveTools(spec: Record<string, unknown>): ToolDef[] {
+  // Primary: tool_tier (Fermi-style). Throws on invalid values.
+  const tier = resolveToolTier(spec);
+  if (tier !== null) {
+    if (tier === "all") return [...BASIC_TOOLS];
+    const resolved: ToolDef[] = [];
+    for (const name of TOOL_TIER_TOOLS[tier]) {
+      const tool = BASIC_TOOLS_MAP[name];
+      if (tool) resolved.push(tool);
+    }
+    return resolved;
+  }
+
+  // Fallback: explicit tools list (backward compat for custom templates)
   const toolsSpec = spec["tools"];
   if (toolsSpec == null) return [];
 
   if (toolsSpec === "all") {
-    // BASIC_TOOLS includes all basic tools.
-    // Comm tools (spawn, spawn_file, wait, etc.) are injected by Session at runtime.
     return [...BASIC_TOOLS];
   }
 

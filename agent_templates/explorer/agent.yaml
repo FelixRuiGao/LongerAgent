@@ -2,7 +2,6 @@ type: agent
 name: explorer
 description: "Explores files and directories. Read-only."
 system_prompt_file: system_prompt.md
-tools: [read, util]
+tool_tier: read_only
 tools_prompt_file: tools.md
-prompt_sections: [agents_md]
 max_tool_rounds: 200

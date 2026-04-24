@@ -79,6 +79,7 @@ import {
 } from "./tool-runtime.js";
 import { BackgroundShellManager } from "./background-shell-manager.js";
 import { PermissionAdvisor, PermissionRuleStore, classifyTool, type PermissionMode } from "./permissions/index.js";
+import { assembleFullSystemPrompt } from "./prompt-assembler.js";
 import {
   argOptionalString,
   argRequiredString,
@@ -4442,42 +4443,6 @@ export class Session {
     return undefined;
   };
 
-  private _readAgentsMd(): string {
-    const parts: string[] = [];
-
-    // 1. Global: ~/.vigil/AGENTS.md
-    const globalPath = join(getVigilHomeDir(), "AGENTS.md");
-    if (existsSync(globalPath)) {
-      try {
-        const content = readFileSync(globalPath, "utf-8").trim();
-        parts.push(
-          content
-            ? `## Global Memory\n\n${content}`
-            : `## Global Memory\n\n(empty file)`,
-        );
-      } catch {
-        // Ignore read errors
-      }
-    }
-
-    // 2. Project: {PROJECT_ROOT}/AGENTS.md
-    const projectPath = join(this._projectRoot, "AGENTS.md");
-    if (existsSync(projectPath)) {
-      try {
-        const content = readFileSync(projectPath, "utf-8").trim();
-        parts.push(
-          content
-            ? `## Project Memory\n\n${content}`
-            : `## Project Memory\n\n(empty file)`,
-        );
-      } catch {
-        // Ignore read errors
-      }
-    }
-
-    return parts.join("\n\n---\n\n");
-  }
-
   private _countProjectedMessageTokens(content: unknown): number {
     if (typeof content === "string") {
       return gptEncode(content).length;
@@ -4650,34 +4615,23 @@ export class Session {
   }
 
   /**
-   * Assemble the full system prompt from disk (recipe + AGENTS.md + path rendering).
-   * This is the "compute" method — called by _reloadPromptAndTools(), not per-call.
+   * Assemble the full system prompt using the layered assembler.
+   * Called by _reloadPromptAndTools(), not per-call.
    */
   private _assembleSystemPrompt(): string {
     const recipe = this.primaryAgent.promptRecipe;
-    let prompt: string;
+    const agentPrompt = recipe
+      ? assembleSystemPrompt(recipe)
+      : this.primaryAgent.systemPrompt;
 
-    if (recipe) {
-      prompt = assembleSystemPrompt(recipe);
-    } else {
-      prompt = this.primaryAgent.systemPrompt;
-    }
-
-    // Append AGENTS.md as a system prompt section
-    const agentsMd = this._readAgentsMd();
-    if (agentsMd) {
-      prompt = prompt.trimEnd() +
-        "\n\n---\n\n# Persistent Memory (AGENTS.md)\n\n" +
-        agentsMd;
-    }
-
-    // Append agent model pins section (if any configured)
-    const agentModelsSection = this._buildAgentModelsPromptSection();
-    if (agentModelsSection) {
-      prompt = prompt.trimEnd() + "\n\n" + agentModelsSection;
-    }
-
-    return this._renderSystemPrompt(prompt);
+    return assembleFullSystemPrompt({
+      agentPrompt,
+      projectRoot: this._projectRoot,
+      sessionArtifacts: this._getPredictedArtifactsDirIfAvailable()
+        ?? this._resolveSessionArtifacts({ allowUnresolved: true }),
+      systemData: this._resolveSystemData({ allowUnresolved: true }),
+      agentModels: this.config.agentModels,
+    });
   }
 
   /**
@@ -4689,34 +4643,6 @@ export class Session {
       this._cachedSystemPrompt = this._assembleSystemPrompt();
     }
     return this._cachedSystemPrompt;
-  }
-
-  /**
-   * Build a prompt section listing agent model pins, if any are configured.
-   * Tells the main agent which templates have pinned models so it avoids
-   * specifying model_level for those.
-   */
-  private _buildAgentModelsPromptSection(): string | null {
-    const models = this.config.agentModels ?? {};
-    const entries = Object.entries(models);
-    if (entries.length === 0) return null;
-
-    const lines = entries.map(([name, entry]) => {
-      const label = `${entry.provider}/${entry.model_id}`;
-      const suffix = entry.thinking_level ? ` (thinking: ${entry.thinking_level})` : "";
-      return `- **${name}**: pinned to \`${label}\`` + suffix;
-    });
-
-    return [
-      "---",
-      "",
-      "# Agent Model Pins",
-      "",
-      "The following sub-agent templates have user-pinned models.",
-      "When spawning these agents, do NOT specify `model_level` — the pinned model will be used automatically:",
-      "",
-      ...lines,
-    ].join("\n");
   }
 
   /**

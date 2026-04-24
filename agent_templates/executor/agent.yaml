@@ -2,7 +2,6 @@ type: agent
 name: executor
 description: "Executes bounded tasks with file and shell access."
 system_prompt_file: system_prompt.md
-tools: [read, edit, shell, util]
+tool_tier: reversible
 tools_prompt_file: tools.md
-prompt_sections: [agents_md]
 max_tool_rounds: 200

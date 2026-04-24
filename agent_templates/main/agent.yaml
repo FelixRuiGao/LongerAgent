@@ -2,8 +2,7 @@ type: agent
 name: main
 description: "Primary agent — handles coding, review, debugging, exploration, and orchestration."
 system_prompt_file: system_prompt.md
-tools: all
+tool_tier: all
 tools_prompt_file: tools.md
 mcp_tools: all
-prompt_sections: [agents_md, system_mechanisms, plan]
 max_tool_rounds: 1000
