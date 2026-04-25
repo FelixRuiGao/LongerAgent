@@ -1,15 +1,15 @@
 /**
- * Initialization wizard for Vigil.
+ * Initialization wizard for Fermi.
  *
  * Provides an interactive first-run setup experience using @inquirer/prompts.
- * Saves provider configuration to ~/.vigil/settings.json + state/model-selection.json.
+ * Saves provider configuration to ~/.fermi/settings.json + state/model-selection.json.
  * Supports Ctrl+C / ESC to go back to the previous step.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { select, input, confirm } from "@inquirer/prompts";
-import { getVigilHomeDir } from "./home-path.js";
+import { getFermiHomeDir } from "./home-path.js";
 import {
   PROVIDER_PRESETS,
   buildProviderPresetRawConfig,
@@ -18,7 +18,7 @@ import {
 import { fetchModelsFromServer } from "./model-discovery.js";
 import { setDotenvKey } from "./dotenv.js";
 import {
-  type VigilSettings,
+  type FermiSettings,
   type ModelSelectionState,
   type ProviderEntry,
   type ModelTierEntry,
@@ -461,7 +461,7 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       return { providerId: provider.id, providerEntry: { api_key_env: result.envVar }, skipped: true };
     }
 
-    console.log(`  ✓ Saved to ~/.vigil/.env as ${result.envVar}\n`);
+    console.log(`  ✓ Saved to ~/.fermi/.env as ${result.envVar}\n`);
     return {
       providerId: provider.id,
       providerEntry: { api_key_env: result.envVar },
@@ -477,14 +477,14 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
       message: `${provider.name}: ${envVarName} detected in environment`,
       choices: [
         { name: "Use it", value: "use" },
-        { name: "Paste a different key for Vigil", value: "paste" },
+        { name: "Paste a different key for Fermi", value: "paste" },
       ],
     });
     if (choice === "paste") {
       const key = await input({ message: `${provider.name}: Paste API key` });
       if (key.trim()) {
         setDotenvKey(envVarName, key.trim());
-        console.log(`  ✓ Saved to ~/.vigil/.env\n`);
+        console.log(`  ✓ Saved to ~/.fermi/.env\n`);
       }
     }
   } else {
@@ -493,7 +493,7 @@ async function stepConfigureProvider(provider: ProviderPreset): Promise<Provider
     });
     if (key.trim()) {
       setDotenvKey(envVarName, key.trim());
-      console.log(`  ✓ Saved to ~/.vigil/.env\n`);
+      console.log(`  ✓ Saved to ~/.fermi/.env\n`);
     }
   }
 
@@ -648,7 +648,7 @@ const enum Step {
 }
 
 export async function runInitWizard(): Promise<WizardResult> {
-  const homeDir = getVigilHomeDir();
+  const homeDir = getFermiHomeDir();
 
   // Check if settings.json already exists with providers
   const existingSettings = loadGlobalSettings(homeDir);
@@ -658,7 +658,7 @@ export async function runInitWizard(): Promise<WizardResult> {
 
   console.log();
   console.log("  ╔══════════════════════════════════════╗");
-  console.log("  ║       Welcome to Vigil Setup!        ║");
+  console.log("  ║       Welcome to Fermi Setup!        ║");
   console.log("  ╚══════════════════════════════════════╝");
   console.log("  (Ctrl+C to go back, double Ctrl+C to quit)\n");
 
@@ -748,7 +748,7 @@ export async function runInitWizard(): Promise<WizardResult> {
     providers[id] = entry;
   });
 
-  const settings: VigilSettings = {
+  const settings: FermiSettings = {
     default_model: modelSelection?.configName,
     thinking_level: thinkingLevel && thinkingLevel !== "off" && thinkingLevel !== "none"
       ? thinkingLevel
@@ -813,7 +813,7 @@ export async function runInitWizard(): Promise<WizardResult> {
   });
 
   console.log();
-  console.log("  Run 'vigil' to start.");
+  console.log("  Run 'fermi' to start.");
   console.log();
 
   return { homeDir };

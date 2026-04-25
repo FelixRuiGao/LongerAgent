@@ -91,7 +91,7 @@ describe("P7 MCP env whitelist and URL validation", () => {
 
 describe("P7 MCP credential file permissions", () => {
   it("tightens credential file permissions to 0o600 on POSIX", () => {
-    const dir = makeTempDir("vigil-p7-mcp-creds-");
+    const dir = makeTempDir("fermi-p7-mcp-creds-");
     try {
       const credFile = join(dir, "gcp-creds.json");
       writeFileSync(credFile, "{\"k\":\"v\"}\n", "utf-8");
@@ -119,7 +119,7 @@ describe("P7 sensitive MCP tool approvals", () => {
   });
 
   it("keeps config-level sensitive_tools metadata without runtime gating", () => {
-    const root = makeTempDir("vigil-p7-mcp-pattern-");
+    const root = makeTempDir("fermi-p7-mcp-pattern-");
     try {
       const s = makeSessionLike(root, ["publish_*"]);
       expect(Array.isArray(s.config.mcpServerConfigs[0].sensitiveTools)).toBe(true);

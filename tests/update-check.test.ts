@@ -10,7 +10,7 @@ describe("checkForUpdates", () => {
   let tempHome: string;
 
   beforeEach(() => {
-    tempHome = mkdtempSync(join(tmpdir(), "vigil-update-check-"));
+    tempHome = mkdtempSync(join(tmpdir(), "fermi-update-check-"));
     process.env["HOME"] = tempHome;
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
@@ -31,7 +31,7 @@ describe("checkForUpdates", () => {
   });
 
   it("prints a cached notice synchronously when available", () => {
-    const cacheDir = join(tempHome, ".vigil");
+    const cacheDir = join(tempHome, ".fermi");
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(join(cacheDir, ".update-check.json"), JSON.stringify({
       lastCheck: Date.now(),

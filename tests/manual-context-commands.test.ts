@@ -56,7 +56,7 @@ function makeSession(projectRoot: string): Session {
 
 describe("manual summarize / compact commands", () => {
   it("runManualSummarize creates a shell user message, arms show_context, and appends user instruction", async () => {
-    const projectRoot = makeTempDir("vigil-manual-summarize-");
+    const projectRoot = makeTempDir("fermi-manual-summarize-");
     try {
       const session = makeSession(projectRoot) as any;
       session._ensureMcp = vi.fn(async () => {});
@@ -79,7 +79,7 @@ describe("manual summarize / compact commands", () => {
   });
 
   it("runManualCompact creates a new turn and passes prompt override into compact", async () => {
-    const projectRoot = makeTempDir("vigil-manual-compact-");
+    const projectRoot = makeTempDir("fermi-manual-compact-");
     try {
       const session = makeSession(projectRoot) as any;
       session._hintState = "level2_sent";
@@ -100,7 +100,7 @@ describe("manual summarize / compact commands", () => {
   });
 
   it("blocks manual commands while a background shell is still running", async () => {
-    const projectRoot = makeTempDir("vigil-manual-blocked-");
+    const projectRoot = makeTempDir("fermi-manual-blocked-");
     try {
       const session = makeSession(projectRoot) as any;
       session._activeShells.set("dev", {

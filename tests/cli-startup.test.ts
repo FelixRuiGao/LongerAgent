@@ -4,7 +4,7 @@ describe("CLI startup", () => {
   afterEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
-    delete process.env["VIGIL_TEST_KEY"];
+    delete process.env["FERMI_TEST_KEY"];
   });
 
   it("loads dotenv before dispatching the init subcommand", async () => {
@@ -13,19 +13,19 @@ describe("CLI startup", () => {
     vi.doMock("../src/dotenv.js", () => ({
       loadDotenv: () => {
         events.push("dotenv");
-        process.env["VIGIL_TEST_KEY"] = "loaded";
+        process.env["FERMI_TEST_KEY"] = "loaded";
       },
     }));
 
     vi.doMock("../src/init-wizard.js", () => ({
       runInitWizard: async () => {
-        events.push(`init:${process.env["VIGIL_TEST_KEY"] ?? "missing"}`);
-        return { homeDir: "/tmp/vigil-test" };
+        events.push(`init:${process.env["FERMI_TEST_KEY"] ?? "missing"}`);
+        return { homeDir: "/tmp/fermi-test" };
       },
     }));
 
     const { main } = await import("../src/cli.js");
-    await main(["node", "vigil", "init"]);
+    await main(["node", "fermi", "init"]);
 
     expect(events).toEqual(["dotenv", "init:loaded"]);
   });

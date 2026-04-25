@@ -12,7 +12,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { SessionStore, LocalProviderConfig, ModelSelectionState, VigilSettings, ProviderEntry, ModelTierEntry } from "./persistence.js";
+import type { SessionStore, LocalProviderConfig, ModelSelectionState, FermiSettings, ProviderEntry, ModelTierEntry } from "./persistence.js";
 import { loadLog, validateAndRepairLog, saveModelSelectionState, saveSettings, globalSettingsPath, loadGlobalSettings } from "./persistence.js";
 import { setDotenvKey } from "./dotenv.js";
 import { fetchModelsFromServer } from "./model-discovery.js";
@@ -455,7 +455,7 @@ function persistModelSelection(ctx: CommandContext): void {
  * Persist a partial settings update to global settings.json.
  * Reads existing settings, merges the patch, and writes back.
  */
-function persistSettingsPatch(patch: Partial<VigilSettings>): void {
+function persistSettingsPatch(patch: Partial<FermiSettings>): void {
   try {
     const existing = loadGlobalSettings();
     saveSettings({ ...existing, ...patch }, globalSettingsPath());
@@ -521,7 +521,7 @@ function parseModelArgs(args: string): { target: string } {
     throw new Error(
       "Inline API keys in `/model` are no longer supported.\n" +
       "Use `/model` to select the model and follow the prompt to import or paste a key,\n" +
-      "or run 'vigil init' to configure providers.",
+      "or run 'fermi init' to configure providers.",
     );
   }
   if (rest.length > 0) {
@@ -618,7 +618,7 @@ async function ensureModelSelectionReady(
     } else if (needsLogin) {
       throw new Error(
         "OpenAI OAuth token is missing or expired.\n" +
-        "Run 'vigil oauth' to log in.",
+        "Run 'fermi oauth' to log in.",
       );
     }
   }
@@ -630,7 +630,7 @@ async function ensureModelSelectionReady(
     } else {
       throw new Error(
         "Not logged in to GitHub Copilot.\n" +
-        "Run 'vigil oauth' to log in.",
+        "Run 'fermi oauth' to log in.",
       );
     }
   }
@@ -710,7 +710,7 @@ async function cmdModel(ctx: CommandContext, args: string): Promise<void> {
     ctx.showMessage(
       `Current model: ${current}\n` +
       "Use /model to select a new model.\n" +
-      "For models marked 'key missing', run 'vigil init' or select the model to import/paste a key.",
+      "For models marked 'key missing', run 'fermi init' or select the model to import/paste a key.",
     );
     return;
   }
@@ -1537,7 +1537,7 @@ async function cmdMcp(ctx: CommandContext): Promise<void> {
   if (!mcpManager) {
     ctx.showMessage(
       "No MCP servers configured.\n" +
-      "Add servers to ~/.vigil/mcp.json to enable MCP tools.",
+      "Add servers to ~/.fermi/mcp.json to enable MCP tools.",
     );
     return;
   }
@@ -1893,8 +1893,8 @@ async function cmdHooks(ctx: CommandContext): Promise<void> {
     ctx.showMessage(
       "No hooks registered.\n\n" +
       "To add hooks, create a hook.json in:\n" +
-      "  ~/.vigil/hooks/<name>/hook.json (global)\n" +
-      "  {project}/.vigil/hooks/<name>/hook.json (project)",
+      "  ~/.fermi/hooks/<name>/hook.json (global)\n" +
+      "  {project}/.fermi/hooks/<name>/hook.json (project)",
     );
     return;
   }

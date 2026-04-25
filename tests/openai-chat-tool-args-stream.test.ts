@@ -66,11 +66,11 @@ async function runStreamToolCall(
   argChunks: string[],
   mode?: "legacy" | "auto",
 ): Promise<ToolCall | null> {
-  const prev = process.env["VIGIL_TOOL_ARGS_MODE"];
+  const prev = process.env["FERMI_TOOL_ARGS_MODE"];
   if (mode) {
-    process.env["VIGIL_TOOL_ARGS_MODE"] = mode;
+    process.env["FERMI_TOOL_ARGS_MODE"] = mode;
   } else {
-    delete process.env["VIGIL_TOOL_ARGS_MODE"];
+    delete process.env["FERMI_TOOL_ARGS_MODE"];
   }
 
   try {
@@ -104,9 +104,9 @@ async function runStreamToolCall(
     return closedCall;
   } finally {
     if (prev === undefined) {
-      delete process.env["VIGIL_TOOL_ARGS_MODE"];
+      delete process.env["FERMI_TOOL_ARGS_MODE"];
     } else {
-      process.env["VIGIL_TOOL_ARGS_MODE"] = prev;
+      process.env["FERMI_TOOL_ARGS_MODE"] = prev;
     }
   }
 }

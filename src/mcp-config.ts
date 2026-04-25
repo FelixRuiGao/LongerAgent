@@ -2,7 +2,7 @@
  * MCP server configuration loader.
  *
  * Loads MCP server definitions from:
- *   1. ~/.vigil/mcp.json       (global)
+ *   1. ~/.fermi/mcp.json       (global)
  *   2. {project}/.mcp.json     (project — overrides global by server name)
  *
  * Project servers require approval via settings (mcp_approved_project_servers).

@@ -18,15 +18,15 @@ const MODEL_TEST_ENV_VARS = [
   "GLM_INTL_CODE_API_KEY",
   "MINIMAX_API_KEY",
   "MINIMAX_CN_API_KEY",
-  "VIGIL_KIMI_API_KEY",
-  "VIGIL_KIMI_CN_API_KEY",
-  "VIGIL_KIMI_CODE_API_KEY",
-  "VIGIL_GLM_API_KEY",
-  "VIGIL_GLM_INTL_API_KEY",
-  "VIGIL_GLM_CODE_API_KEY",
-  "VIGIL_GLM_INTL_CODE_API_KEY",
-  "VIGIL_MINIMAX_API_KEY",
-  "VIGIL_MINIMAX_CN_API_KEY",
+  "FERMI_KIMI_API_KEY",
+  "FERMI_KIMI_CN_API_KEY",
+  "FERMI_KIMI_CODE_API_KEY",
+  "FERMI_GLM_API_KEY",
+  "FERMI_GLM_INTL_API_KEY",
+  "FERMI_GLM_CODE_API_KEY",
+  "FERMI_GLM_INTL_CODE_API_KEY",
+  "FERMI_MINIMAX_API_KEY",
+  "FERMI_MINIMAX_CN_API_KEY",
 ];
 
 const savedModelTestEnv = new Map<string, string | undefined>();
@@ -103,7 +103,7 @@ describe("/model command", () => {
     expect(anthropic!.children?.some((c) => c.label.includes("Claude Sonnet 4.6  (current)"))).toBe(true);
     expect(anthropic!.children?.some((c) => c.label.includes("Claude Sonnet 4.6  (1M context beta)"))).toBe(true);
     expect(
-      openai!.children?.some((c) => c.label.includes("GPT-5.2  (key missing: run vigil init)")),
+      openai!.children?.some((c) => c.label.includes("GPT-5.2  (key missing: run fermi init)")),
     ).toBe(true);
     expect(openai!.children?.some((c) => c.label.includes("gpt-5.1"))).toBe(false);
     expect(openai!.children?.some((c) => c.label.includes("gpt-4o"))).toBe(false);
@@ -115,7 +115,7 @@ describe("/model command", () => {
   });
 
   it("tracks managed provider keys per exact endpoint instead of sharing them across a group", () => {
-    process.env["VIGIL_GLM_API_KEY"] = "glm-cn";
+    process.env["FERMI_GLM_API_KEY"] = "glm-cn";
 
     const registry = buildDefaultRegistry();
     const cmd = registry.lookup("/model");
@@ -239,8 +239,8 @@ describe("/model command", () => {
   it("prompts for a managed provider key during /model and switches after importing a detected key", async () => {
     process.env["GLM_CODE_API_KEY"] = "glm-code-detected";
     const previousHome = process.env["HOME"];
-    const tempHome = mkdtempSync(join(tmpdir(), "vigil-model-home-"));
-    mkdirSync(join(tempHome, ".vigil"), { recursive: true });
+    const tempHome = mkdtempSync(join(tmpdir(), "fermi-model-home-"));
+    mkdirSync(join(tempHome, ".fermi"), { recursive: true });
     process.env["HOME"] = tempHome;
 
     try {
@@ -291,13 +291,13 @@ describe("/model command", () => {
 
       expect(promptSelect).toHaveBeenCalledTimes(1);
       expect(promptSecret).not.toHaveBeenCalled();
-      expect(process.env["VIGIL_GLM_CODE_API_KEY"]).toBe("glm-code-detected");
+      expect(process.env["FERMI_GLM_CODE_API_KEY"]).toBe("glm-code-detected");
       expect(upsertModelRaw).toHaveBeenCalledWith(
         "runtime-glm-code-glm-5",
         expect.objectContaining({
           provider: "glm-code",
           model: "glm-5",
-          api_key: "${VIGIL_GLM_CODE_API_KEY}",
+          api_key: "${FERMI_GLM_CODE_API_KEY}",
         }),
       );
       expect(switchModel).toHaveBeenCalledWith("runtime-glm-code-glm-5");
@@ -363,12 +363,12 @@ describe("/model command", () => {
     const cmd = registry.lookup("/model");
     expect(cmd).toBeTruthy();
 
-    process.env["VIGIL_GLM_CODE_API_KEY"] = "glm-test-key";
+    process.env["FERMI_GLM_CODE_API_KEY"] = "glm-test-key";
     const previousHome = process.env["HOME"];
-    const tempHome = mkdtempSync(join(tmpdir(), "vigil-model-home-"));
-    const vigilHome = join(tempHome, ".vigil");
-    mkdirSync(join(vigilHome, "state"), { recursive: true });
-    writeFileSync(join(vigilHome, "settings.json"), JSON.stringify({
+    const tempHome = mkdtempSync(join(tmpdir(), "fermi-model-home-"));
+    const fermiHome = join(tempHome, ".fermi");
+    mkdirSync(join(fermiHome, "state"), { recursive: true });
+    writeFileSync(join(fermiHome, "settings.json"), JSON.stringify({
       providers: {
         glm: { api_key_env: "GLM_API_KEY" },
         lmstudio: {
@@ -431,7 +431,7 @@ describe("/model command", () => {
 
       await cmd!.handler(ctx, "glm-code:glm-5");
 
-      const persistedSettings = JSON.parse(readFileSync(join(vigilHome, "settings.json"), "utf-8"));
+      const persistedSettings = JSON.parse(readFileSync(join(fermiHome, "settings.json"), "utf-8"));
       expect(persistedSettings).toEqual({
         providers: {
           glm: { api_key_env: "GLM_API_KEY" },
@@ -445,7 +445,7 @@ describe("/model command", () => {
       });
 
       const persistedState = JSON.parse(
-        readFileSync(join(vigilHome, "state", "model-selection.json"), "utf-8"),
+        readFileSync(join(fermiHome, "state", "model-selection.json"), "utf-8"),
       );
       expect(persistedState).toEqual({
         config_name: "runtime-glm-code-glm-5",

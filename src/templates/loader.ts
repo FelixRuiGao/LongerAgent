@@ -223,17 +223,17 @@ export function loadTemplate(
  * Three-layer template loading with layered override:
  *
  * 1. **Bundled** — always loaded from the package.
- * 2. **User-global** (`~/.vigil/agent_templates/`) — adds new templates only;
+ * 2. **User-global** (`~/.fermi/agent_templates/`) — adds new templates only;
  *    cannot override bundled templates (their prompt assembly assumes a specific format).
- * 3. **Project-local** (`{project}/.vigil/agent_templates/`) — highest priority;
+ * 3. **Project-local** (`{project}/.fermi/agent_templates/`) — highest priority;
  *    CAN override both bundled and user-global templates.
  *
  * @param bundledRoot  Bundled templates root (always available from the package).
  * @param config       Global Config instance.
  * @param mcpManager   Optional MCP client manager.
  * @param promptsDirs  Ordered prompts directories (user first, bundled second).
- * @param userRoot     Optional user override templates root (~/.vigil/agent_templates/).
- * @param projectRoot  Optional project-local templates root ({project}/.vigil/agent_templates/).
+ * @param userRoot     Optional user override templates root (~/.fermi/agent_templates/).
+ * @param projectRoot  Optional project-local templates root ({project}/.fermi/agent_templates/).
  * @returns `{ name: agent }` record.
  */
 export function loadTemplates(

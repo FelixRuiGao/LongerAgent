@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * CLI entry point for Vigil.
+ * CLI entry point for Fermi.
  *
  * Usage:
  *
- *   vigil                       # auto-detect config
- *   vigil init                  # run initialization wizard
- *   vigil --templates ./tpls    # explicit templates path
- *   vigil --verbose             # enable debug logging
+ *   fermi                       # auto-detect config
+ *   fermi init                  # run initialization wizard
+ *   fermi --templates ./tpls    # explicit templates path
+ *   fermi --verbose             # enable debug logging
  */
 
 import { existsSync, realpathSync, statSync } from "node:fs";
@@ -31,7 +31,7 @@ import {
   settingsToConfigInputs,
 } from "./persistence.js";
 import { loadDotenv } from "./dotenv.js";
-import { getVigilHomeDir } from "./home-path.js";
+import { getFermiHomeDir } from "./home-path.js";
 import { checkForUpdates } from "./update-check.js";
 import { VERSION } from "./version.js";
 import {
@@ -76,7 +76,7 @@ function identifyPrimaryAgent(
 export async function main(argv: string[] = process.argv): Promise<void> {
   const program = new Command();
   program
-    .name("vigil")
+    .name("fermi")
     .version(VERSION, "-V, --version", "Output the current version")
     .description("A terminal AI coding agent built for long sessions")
     .option("--templates <path>", "Path to agent_templates directory")
@@ -86,7 +86,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   let ranSubcommand = false;
   program
     .command("init")
-    .description("Initialize Vigil configuration")
+    .description("Initialize Fermi configuration")
     .action(async () => {
       ranSubcommand = true;
       const { runInitWizard } = await import("./init-wizard.js");
@@ -130,9 +130,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   // when no subcommand is provided.
   program.action(() => {});
 
-  // Load ~/.vigil/.env before dispatching any subcommand so `init`
+  // Load ~/.fermi/.env before dispatching any subcommand so `init`
   // can detect previously saved keys and offer the expected reuse flow.
-  loadDotenv(getVigilHomeDir());
+  loadDotenv(getFermiHomeDir());
 
   await program.parseAsync(argv);
 
@@ -168,7 +168,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   }
 
   // ── Load settings (global + local merge) ──
-  const homeDir = getVigilHomeDir();
+  const homeDir = getFermiHomeDir();
   let globalSettings = loadGlobalSettings(homeDir);
   const localSettings = loadLocalSettings(process.cwd());
   let settings = mergeSettings(globalSettings, localSettings);
@@ -191,7 +191,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     } catch {
       console.error(
         "Error: no providers configured.\n" +
-        "  Run 'vigil init' to set up providers.",
+        "  Run 'fermi init' to set up providers.",
       );
       process.exit(1);
     }
@@ -225,7 +225,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       console.warn(
         `Warning: OAuth token refresh failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-      console.warn("Run 'vigil oauth' to re-authenticate.\n");
+      console.warn("Run 'fermi oauth' to re-authenticate.\n");
     }
   }
 
@@ -239,7 +239,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     );
     if (!hasGitHubTokens()) {
       console.warn("Warning: GitHub Copilot credentials missing.");
-      console.warn("Run 'vigil oauth' to log in.\n");
+      console.warn("Run 'fermi oauth' to log in.\n");
     }
   }
 

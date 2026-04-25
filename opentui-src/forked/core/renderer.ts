@@ -24,10 +24,10 @@ import { getObjectsInViewport } from "./lib/objects-in-viewport.js"
 import { KeyHandler, InternalKeyHandler } from "./lib/KeyHandler.js"
 import { env, registerEnvVar } from "./lib/env.js"
 import {
-  isVigilOpenTuiDiagEnabled,
+  isFermiOpenTuiDiagEnabled,
   previewLatin1Hex,
   previewLatin1Sequence,
-  writeVigilOpenTuiDiag,
+  writeFermiOpenTuiDiag,
 } from "./lib/diagnostic.js"
 import { getTreeSitterClient } from "./lib/tree-sitter/index.js"
 import {
@@ -493,7 +493,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private _debugModeEnabled: boolean = env.OTUI_DEBUG
 
   private handleError: (error: Error) => void = ((error: Error) => {
-    writeVigilOpenTuiDiag("renderer.error", {
+    writeFermiOpenTuiDiag("renderer.error", {
       error: { name: error.name, message: error.message, stack: error.stack },
     })
     console.error(error)
@@ -534,7 +534,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }).bind(this)
 
   private warningHandler: (warning: any) => void = ((warning: any) => {
-    writeVigilOpenTuiDiag("renderer.warning", {
+    writeFermiOpenTuiDiag("renderer.warning", {
       warning: warning instanceof Error ? { name: warning.name, message: warning.message, stack: warning.stack } : String(warning),
     })
     console.warn(JSON.stringify(warning.message, null, 2))
@@ -1111,7 +1111,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.stdinParser.push(data)
       this.drainStdinParser()
     } catch (error) {
-      writeVigilOpenTuiDiag("stdin.parser.throw", {
+      writeFermiOpenTuiDiag("stdin.parser.throw", {
         error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
         chunkLength: data.length,
         chunkHex: data.subarray(0, 64).toString("hex"),
@@ -1223,7 +1223,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         this._keyHandler.processParsedKey(event.key)
         return
       case "mouse":
-        writeVigilOpenTuiDiag("stdin.mouse", {
+        writeFermiOpenTuiDiag("stdin.mouse", {
           rawPreview: previewLatin1Sequence(event.raw),
           rawHex: previewLatin1Hex(event.raw),
           encoding: event.encoding,
@@ -1258,7 +1258,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }
 
   private handleStdinParserFailure(error: unknown): void {
-    writeVigilOpenTuiDiag("stdin.parser.failure", {
+    writeFermiOpenTuiDiag("stdin.parser.failure", {
       error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
     })
     if (!this.hasLoggedStdinParserError) {
@@ -1347,7 +1347,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }
 
   private maybeDumpDiagStateForScrollBurst(mouseEvent: RawMouseEvent): void {
-    if (!isVigilOpenTuiDiagEnabled()) return
+    if (!isFermiOpenTuiDiagEnabled()) return
     if (mouseEvent.type !== "scroll") return
 
     const now = this.clock.now()
@@ -1369,7 +1369,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     const timestamp = Date.now()
     this.dumpHitGrid()
     this.dumpBuffers(timestamp)
-    writeVigilOpenTuiDiag("renderer.diag_dump", {
+    writeFermiOpenTuiDiag("renderer.diag_dump", {
       reason: "scroll-burst",
       burstCount: this.diagScrollBurstCount,
       clockNow: now,
@@ -1439,7 +1439,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     if (mouseEvent.type === "scroll") {
       this.maybeDumpDiagStateForScrollBurst(mouseEvent)
       const scrollTarget = this.resolveScrollTarget(mouseEvent)
-      writeVigilOpenTuiDiag("renderer.mouse.scroll", {
+      writeFermiOpenTuiDiag("renderer.mouse.scroll", {
         pointer: { x: mouseEvent.x, y: mouseEvent.y },
         scroll: mouseEvent.scroll ?? null,
         cachedScrollTarget: this.describeRenderable(this.activeScrollTarget ?? null),
@@ -1461,7 +1461,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     this.lastOverRenderableNum = maybeRenderableId
     const maybeRenderable = Renderable.renderablesByNumber.get(maybeRenderableId)
     if (mouseEvent.type !== "move" || !sameElement) {
-      writeVigilOpenTuiDiag("renderer.mouse.pointer", {
+      writeFermiOpenTuiDiag("renderer.mouse.pointer", {
         type: mouseEvent.type,
         pointer: { x: mouseEvent.x, y: mouseEvent.y },
         hitId: maybeRenderableId,
@@ -1606,7 +1606,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.lastOverRenderableNum = hitId
       return
     }
-    writeVigilOpenTuiDiag("renderer.hover.recheck", {
+    writeFermiOpenTuiDiag("renderer.hover.recheck", {
       pointer: { x: this._latestPointer.x, y: this._latestPointer.y },
       previous: this.describeRenderable(lastOver),
       next: this.describeRenderable(hitRenderable),
@@ -2184,7 +2184,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
         // Check if hit grid changed and recheck hover state if needed
         if (this._useMouse && this.lib.getHitGridDirty(this.rendererPtr)) {
-          writeVigilOpenTuiDiag("renderer.hitgrid.dirty", {
+          writeFermiOpenTuiDiag("renderer.hitgrid.dirty", {
             pointer: this._hasPointer ? { x: this._latestPointer.x, y: this._latestPointer.y } : null,
             renderablesTracked: Renderable.renderablesByNumber.size,
           })

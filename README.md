@@ -1,4 +1,4 @@
-# Vigil
+# Fermi
 
 <p align="center">
   <strong>Do more with less context.</strong>
@@ -12,18 +12,18 @@
   <img alt="Author" src="https://img.shields.io/badge/author-Felix%20Rui%20Gao-4b4bf0?style=flat-square" />
 </p>
 
-Vigil is a terminal AI coding agent that tries to squeeze the most out of every model by using less context to do more work. It follows an **Explore → Plan → Execute → Review** workflow, supports communicating agent teams, and lets the agent summarize and distill context it deems no longer relevant — even a single tool result — so sessions stay productive longer.
+Fermi is a terminal AI coding agent that tries to squeeze the most out of every model by using less context to do more work. It follows an **Explore → Plan → Execute → Review** workflow, supports communicating agent teams, and lets the agent summarize and distill context it deems no longer relevant — even a single tool result — so sessions stay productive longer.
 
 The TUI is built on [OpenTUI](https://github.com/anomalyco/opentui).
 
-> **Platform:** macOS. **Safety:** Vigil does not sandbox shell commands or file edits. Run it in trusted environments and review what it does.
+> **Platform:** macOS. **Safety:** Fermi does not sandbox shell commands or file edits. Run it in trusted environments and review what it does.
 
 ## Install
 
 ```bash
-npm install -g vigil-code
-vigil init
-vigil
+npm install -g fermi-code
+fermi init
+fermi
 ```
 
 The setup wizard walks you through provider and model selection.
@@ -31,14 +31,14 @@ The setup wizard walks you through provider and model selection.
 ### CLI
 
 ```text
-vigil                       # Start with auto-detected config
-vigil init                  # Run setup wizard
-vigil oauth                 # Log in to OpenAI via OAuth (device code / browser)
-vigil oauth status          # Check OAuth login status
-vigil oauth logout          # Log out
-vigil --templates <path>    # Use a specific templates directory
-vigil --verbose             # Enable debug logging
-vigil --version             # Show the current version
+fermi                       # Start with auto-detected config
+fermi init                  # Run setup wizard
+fermi oauth                 # Log in to OpenAI via OAuth (device code / browser)
+fermi oauth status          # Check OAuth login status
+fermi oauth logout          # Log out
+fermi --templates <path>    # Use a specific templates directory
+fermi --verbose             # Enable debug logging
+fermi --version             # Show the current version
 ```
 
 ### Commands
@@ -65,7 +65,7 @@ vigil --version             # Show the current version
 
 ### Explore → Plan → Execute → Review
 
-Vigil structures work around four phases. The main agent explores the problem space, writes a plan (`plan.md` with checkpoints), spawns executor sub-agents to carry out the work, and spawns reviewers to verify results. Each phase feeds into the next, keeping the overall workflow focused and auditable.
+Fermi structures work around four phases. The main agent explores the problem space, writes a plan (`plan.md` with checkpoints), spawns executor sub-agents to carry out the work, and spawns reviewers to verify results. Each phase feeds into the next, keeping the overall workflow focused and auditable.
 
 ### Communicating Agent Teams
 
@@ -73,7 +73,7 @@ Sub-agents aren't isolated workers — they form a team that can communicate wit
 
 ### Context Management
 
-Vigil gives the agent tools to inspect its own context distribution (`show_context`) and distill what it chooses (`distill_context`). Each conversation segment is tagged with a unique ID and token-cost annotation, so the agent can make cost-benefit decisions about what to keep.
+Fermi gives the agent tools to inspect its own context distribution (`show_context`) and distill what it chooses (`distill_context`). Each conversation segment is tagged with a unique ID and token-cost annotation, so the agent can make cost-benefit decisions about what to keep.
 
 Three layers work together: hint compression nudges the agent early, agent-initiated summarization gives precise control, and auto-compact catches anything that slips through.
 
@@ -97,9 +97,9 @@ Two `AGENTS.md` files (global and project-level) survive across sessions and con
 | **Anthropic** | `ANTHROPIC_API_KEY` |
 | **OpenAI** | `OPENAI_API_KEY` or OAuth |
 | **GitHub Copilot** | `/copilot` login |
-| **Kimi / Moonshot** | Vigil-managed slots (`VIGIL_KIMI_*`) |
-| **MiniMax** | Vigil-managed slots (`VIGIL_MINIMAX_*`) |
-| **GLM / Zhipu** | Vigil-managed slots (`VIGIL_GLM_*`) |
+| **Kimi / Moonshot** | Fermi-managed slots (`FERMI_KIMI_*`) |
+| **MiniMax** | Fermi-managed slots (`FERMI_MINIMAX_*`) |
+| **GLM / Zhipu** | Fermi-managed slots (`FERMI_GLM_*`) |
 | **Ollama** | — |
 | **oMLX** | — |
 | **LM Studio** | — |
@@ -122,7 +122,7 @@ Two `AGENTS.md` files (global and project-level) survive across sessions and con
 ### Configuration
 
 ```text
-~/.vigil/
+~/.fermi/
 ├── tui-preferences.json   # Model selection, provider config, preferences
 ├── .env                   # API keys and managed provider slots (0600 perms)
 ├── mcp.json               # MCP server configurations (optional)
@@ -135,7 +135,7 @@ Two `AGENTS.md` files (global and project-level) survive across sessions and con
 
 ### Architecture
 
-Vigil is built around a **Session → Agent → Provider** pipeline:
+Fermi is built around a **Session → Agent → Provider** pipeline:
 
 - **Session** orchestrates the turn loop, message delivery, summarization, compaction, and sub-agent lifecycle
 - **Session Log** is the single source of truth — 20+ entry types capture every runtime event; the TUI display and provider input are both projections of the same data

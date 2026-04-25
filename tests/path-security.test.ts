@@ -32,7 +32,7 @@ function expectSafePathError(
 
 describe("safePath", () => {
   it("allows existing files within the base directory", () => {
-    const root = makeTempDir("vigil-safe-path-");
+    const root = makeTempDir("fermi-safe-path-");
     try {
       const file = join(root, "ok.txt");
       writeFileSync(file, "ok\n", "utf-8");
@@ -54,7 +54,7 @@ describe("safePath", () => {
   });
 
   it("allows creating a new file within the base directory", () => {
-    const root = makeTempDir("vigil-safe-create-");
+    const root = makeTempDir("fermi-safe-create-");
     try {
       mkdirSync(join(root, "nested"), { recursive: true });
 
@@ -75,7 +75,7 @@ describe("safePath", () => {
   });
 
   it("rejects lexical traversal outside the base directory", () => {
-    const root = makeTempDir("vigil-safe-traversal-");
+    const root = makeTempDir("fermi-safe-traversal-");
     try {
       expectSafePathError(
         () =>
@@ -94,8 +94,8 @@ describe("safePath", () => {
   });
 
   it("rejects absolute paths outside the base directory", () => {
-    const root = makeTempDir("vigil-safe-abs-");
-    const external = makeTempDir("vigil-safe-abs-ext-");
+    const root = makeTempDir("fermi-safe-abs-");
+    const external = makeTempDir("fermi-safe-abs-ext-");
     try {
       const outside = join(external, "secret.txt");
       expectSafePathError(
@@ -116,7 +116,7 @@ describe("safePath", () => {
   });
 
   it("rejects prefix-collision siblings (e.g. proj vs proj-other)", () => {
-    const parent = makeTempDir("vigil-safe-prefix-parent-");
+    const parent = makeTempDir("fermi-safe-prefix-parent-");
     const root = join(parent, "proj");
     const sibling = join(parent, "proj-other");
     mkdirSync(root, { recursive: true });
@@ -140,7 +140,7 @@ describe("safePath", () => {
   });
 
   it("rejects file/dir type mismatches", () => {
-    const root = makeTempDir("vigil-safe-type-");
+    const root = makeTempDir("fermi-safe-type-");
     try {
       const dir = join(root, "d");
       const file = join(root, "f.txt");
@@ -178,8 +178,8 @@ describe("safePath", () => {
   });
 
   it("rejects symlink escapes for existing files and create paths", () => {
-    const root = makeTempDir("vigil-safe-symlink-");
-    const external = makeTempDir("vigil-safe-symlink-ext-");
+    const root = makeTempDir("fermi-safe-symlink-");
+    const external = makeTempDir("fermi-safe-symlink-ext-");
     try {
       writeFileSync(join(external, "secret.txt"), "secret\n", "utf-8");
       const linkDir = join(root, "link");

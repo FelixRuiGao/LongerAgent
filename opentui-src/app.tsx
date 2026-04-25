@@ -55,10 +55,10 @@ import {
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import "./forked/patch-opentui-markdown.js";
 import {
-  getVigilAssistantRenderer,
-  isVigilMarkdownPatchDisabled,
-  isVigilOpenTuiDiagEnabled,
-  writeVigilOpenTuiDiag,
+  getFermiAssistantRenderer,
+  isFermiMarkdownPatchDisabled,
+  isFermiOpenTuiDiagEnabled,
+  writeFermiOpenTuiDiag,
 } from "./forked/core/lib/diagnostic.js";
 import { usePresentationEntries } from "./presentation/use-presentation.js";
 import { useTurnTimer } from "./presentation/use-turn-timer.js";
@@ -145,7 +145,7 @@ const GOODBYE_MESSAGES = [
   "Later, gator!",
 ] as const;
 
-const ASSISTANT_RENDERER_MODE = getVigilAssistantRenderer();
+const ASSISTANT_RENDERER_MODE = getFermiAssistantRenderer();
 
 const DISABLED_TEXTAREA_ACTION = "__disabled__" as unknown as KeyBinding["action"];
 
@@ -725,17 +725,17 @@ export function OpenTuiApp({
   }, [selectedChildId, session]);
 
   useEffect(() => {
-    if (!isVigilOpenTuiDiagEnabled()) return;
+    if (!isFermiOpenTuiDiagEnabled()) return;
     const assistantPEs = presentationEntries.filter((pe) => pe.kind === "assistant");
     const lastAssistant = assistantPEs.length > 0 ? assistantPEs[assistantPEs.length - 1] : null;
-    writeVigilOpenTuiDiag("app.entries", {
+    writeFermiOpenTuiDiag("app.entries", {
       totalEntries: presentationEntries.length,
       assistantEntries: assistantPEs.length,
       lastAssistantLength: lastAssistant?.assistantText?.length ?? 0,
       processing,
       markdownMode,
       assistantRenderer: ASSISTANT_RENDERER_MODE,
-      markdownPatchDisabled: isVigilMarkdownPatchDisabled(),
+      markdownPatchDisabled: isFermiMarkdownPatchDisabled(),
       activeAgents: childSessions.length,
     });
   }, [childSessions.length, presentationEntries, markdownMode, processing]);

@@ -11,8 +11,8 @@ import type { ColorInput, TextChunk } from "@opentui/core";
 import type { MarkedToken, Tokens } from "marked";
 import { execSync } from "node:child_process";
 import {
-  isVigilMarkdownPatchDisabled,
-  writeVigilOpenTuiDiag,
+  isFermiMarkdownPatchDisabled,
+  writeFermiOpenTuiDiag,
 } from "./core/lib/diagnostic.js";
 import { DEFAULT_DISPLAY_THEME } from "../display/theme/index.js";
 import { isShikiReady, shikiHighlightToChunks } from "./shiki-highlighter.js";
@@ -31,11 +31,11 @@ export function setUseShikiHighlighter(value: boolean): void {
   useShikiHighlighter = value;
 }
 
-const PATCH_FLAG = Symbol.for("vigil.opentui.markdown.patch.v4");
-const INNER_TEXT = Symbol.for("vigil.codeblock.text");
-const LABEL_REF = Symbol.for("vigil.codeblock.label");
-const COPY_REF = Symbol.for("vigil.codeblock.copy");
-const CODE_CONTENT = Symbol.for("vigil.codeblock.rawcontent");
+const PATCH_FLAG = Symbol.for("fermi.opentui.markdown.patch.v4");
+const INNER_TEXT = Symbol.for("fermi.codeblock.text");
+const LABEL_REF = Symbol.for("fermi.codeblock.label");
+const COPY_REF = Symbol.for("fermi.codeblock.copy");
+const CODE_CONTENT = Symbol.for("fermi.codeblock.rawcontent");
 
 const CODE_BORDER = DEFAULT_DISPLAY_THEME.markdown.codeBorder;
 const CODE_BORDER_HOVER = DEFAULT_DISPLAY_THEME.markdown.codeBorderHover;
@@ -179,14 +179,14 @@ type WrappedBox = InstanceType<typeof BoxRenderable> & {
 
 const proto = MarkdownRenderable.prototype as MarkdownRenderablePatched & Record<PropertyKey, unknown>;
 
-if (isVigilMarkdownPatchDisabled()) {
-  writeVigilOpenTuiDiag("markdown.patch", {
+if (isFermiMarkdownPatchDisabled()) {
+  writeFermiOpenTuiDiag("markdown.patch", {
     applied: false,
     reason: "disabled-by-env",
   });
 } else if (!proto[PATCH_FLAG]) {
   proto[PATCH_FLAG] = true;
-  writeVigilOpenTuiDiag("markdown.patch", {
+  writeFermiOpenTuiDiag("markdown.patch", {
     applied: true,
     version: "v4",
   });

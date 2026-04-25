@@ -23,7 +23,7 @@ function makeConfig(): Config {
 
 describe("template type validation", () => {
   it("rejects templates without type: agent", () => {
-    const dir = makeTempDir("vigil-template-type-missing-");
+    const dir = makeTempDir("fermi-template-type-missing-");
     try {
       writeFileSync(
         join(dir, "agent.yaml"),
@@ -43,7 +43,7 @@ describe("template type validation", () => {
   });
 
   it("rejects templates with non-agent type", () => {
-    const dir = makeTempDir("vigil-template-type-invalid-");
+    const dir = makeTempDir("fermi-template-type-invalid-");
     try {
       writeFileSync(
         join(dir, "agent.yaml"),
@@ -65,7 +65,7 @@ describe("template type validation", () => {
   });
 
   it("accepts valid type and can load the template", () => {
-    const dir = makeTempDir("vigil-template-type-valid-");
+    const dir = makeTempDir("fermi-template-type-valid-");
     try {
       writeFileSync(
         join(dir, "agent.yaml"),
@@ -88,7 +88,7 @@ describe("template type validation", () => {
   });
 
   it("rejects max_tool_rounds below 100", () => {
-    const dir = makeTempDir("vigil-template-rounds-low-");
+    const dir = makeTempDir("fermi-template-rounds-low-");
     try {
       writeFileSync(
         join(dir, "agent.yaml"),

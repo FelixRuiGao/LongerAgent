@@ -15,7 +15,7 @@ import {
   settingsToConfigInputs,
 } from "../src/persistence.js";
 import { loadDotenv } from "../src/dotenv.js";
-import { getVigilHomeDir } from "../src/home-path.js";
+import { getFermiHomeDir } from "../src/home-path.js";
 import {
   buildDefaultRegistry,
   registerSkillCommands,
@@ -54,7 +54,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   templates?: string;
   verbose?: boolean;
 }): Promise<OpenTuiRuntime> {
-  const homeDir = getVigilHomeDir();
+  const homeDir = getFermiHomeDir();
   loadDotenv(homeDir);
 
   const verbose = opts?.verbose ?? false;
@@ -75,7 +75,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
 
   if (!hasProviders) {
     throw new Error(
-      "No providers configured. Run `vigil init` first, then retry the OpenTUI prototype.",
+      "No providers configured. Run `fermi init` first, then retry the OpenTUI prototype.",
     );
   }
 
@@ -187,8 +187,8 @@ export async function bootstrapOpenTuiRuntime(opts?: {
     setAccent(settings.accent_color);
   }
 
-  // ── Shiki syntax highlighter (disable with VIGIL_SHIKI=0) ──
-  if (process.env.VIGIL_SHIKI !== "0") {
+  // ── Shiki syntax highlighter (disable with FERMI_SHIKI=0) ──
+  if (process.env.FERMI_SHIKI !== "0") {
     import("./forked/shiki-highlighter.js").then(async ({ initShikiHighlighter }) => {
       await initShikiHighlighter();
     }).catch(() => {

@@ -68,13 +68,13 @@ function modelCredentialInfo(providerId: string, providerHasKey: Map<string, boo
   if (providerId === "openai-codex") {
     return {
       credentialState: "oauth_missing",
-      credentialHint: "not logged in: run vigil oauth",
+      credentialHint: "not logged in: run fermi oauth",
     };
   }
   if (providerId === "copilot") {
     return {
       credentialState: "oauth_missing",
-      credentialHint: "not logged in: run vigil oauth",
+      credentialHint: "not logged in: run fermi oauth",
     };
   }
   if (isManagedProvider(providerId)) {
@@ -85,7 +85,7 @@ function modelCredentialInfo(providerId: string, providerHasKey: Map<string, boo
   }
   return {
     credentialState: "missing",
-    credentialHint: "key missing: run vigil init",
+    credentialHint: "key missing: run fermi init",
   };
 }
 

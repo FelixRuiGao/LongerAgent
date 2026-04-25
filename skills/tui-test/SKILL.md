@@ -1,6 +1,6 @@
 ---
 name: tui-test
-description: Interactively test the Vigil TUI via tmux. Use when you need to visually verify TUI rendering, test keyboard interactions, debug layout issues, or validate slash command behavior.
+description: Interactively test the Fermi TUI via tmux. Use when you need to visually verify TUI rendering, test keyboard interactions, debug layout issues, or validate slash command behavior.
 ---
 
 # TUI Interactive Testing via tmux
@@ -196,19 +196,19 @@ sleep 1 && tmux capture-pane -t la-tui -p
 
 ### Test dark/light mode switching
 
-**Important:** tmux does not relay macOS appearance changes to the TUI (OSC 11 queries return tmux's own fixed background). Use `VIGIL_THEME` env var to force theme mode, and `freeze --background` to match:
+**Important:** tmux does not relay macOS appearance changes to the TUI (OSC 11 queries return tmux's own fixed background). Use `FERMI_THEME` env var to force theme mode, and `freeze --background` to match:
 
 ```bash
 # Light mode — start a separate session
 tmux kill-session -t la-tui 2>/dev/null
 tmux new-session -d -s la-tui -x 120 -y 40
-tmux send-keys -t la-tui 'clear && VIGIL_THEME=light pnpm opentui:dev 2>&1' Enter
+tmux send-keys -t la-tui 'clear && FERMI_THEME=light pnpm opentui:dev 2>&1' Enter
 sleep 5 && tmux capture-pane -t la-tui -pe | freeze --background "#ffffff" -o /tmp/tui-light.png
 
 # Dark mode
 tmux kill-session -t la-tui 2>/dev/null
 tmux new-session -d -s la-tui -x 120 -y 40
-tmux send-keys -t la-tui 'clear && VIGIL_THEME=dark pnpm opentui:dev 2>&1' Enter
+tmux send-keys -t la-tui 'clear && FERMI_THEME=dark pnpm opentui:dev 2>&1' Enter
 sleep 5 && tmux capture-pane -t la-tui -pe | freeze -o /tmp/tui-dark.png
 ```
 

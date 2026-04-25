@@ -2,7 +2,7 @@
 
 Two persistent memory files are automatically loaded and injected into your context on every turn:
 
-1. **Global memory** (`~/.vigil/AGENTS.md`) — user-level preferences, conventions, and knowledge that apply across all projects.
+1. **Global memory** (`~/.fermi/AGENTS.md`) — user-level preferences, conventions, and knowledge that apply across all projects.
 2. **Project memory** (`{PROJECT_ROOT}/AGENTS.md`) — project-specific architecture decisions, patterns, key file paths, and accumulated insights.
 
 These files survive across sessions and context resets — they are always visible after the system prompt.

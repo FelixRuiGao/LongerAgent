@@ -65,7 +65,7 @@ export async function ensureManagedProviderCredential(
     }
 
     const existingChoice = await adapter.select({
-      message: `${label}: A Vigil-managed key is already saved`,
+      message: `${label}: A Fermi-managed key is already saved`,
       options: [
         {
           label: "Keep current key",
@@ -101,7 +101,7 @@ export async function ensureManagedProviderCredential(
   const choice = await adapter.select({
     message: candidates.length > 0
       ? `${label}: Choose how to configure the API key`
-      : `${label}: No saved Vigil key found`,
+      : `${label}: No saved Fermi key found`,
     options: [
       ...candidates.map((candidate) => ({
         label: `Import detected ${candidate.envVar}`,

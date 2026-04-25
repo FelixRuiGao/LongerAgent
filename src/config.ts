@@ -9,7 +9,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readOAuthAccessToken, hasOAuthTokens } from "./auth/openai-oauth.js";
 import { loadGitHubTokens, hasGitHubTokens } from "./auth/github-copilot-oauth.js";
-import { getVigilHomeDir } from "./home-path.js";
+import { getFermiHomeDir } from "./home-path.js";
 import {
   findProviderPreset,
   findProviderPresetModel,
@@ -22,7 +22,7 @@ import {
 import { resolveConfigNameForModelIdentity } from "./model-selection.js";
 import type { AgentModelEntry, LocalProviderConfig, ModelTierEntry } from "./persistence.js";
 
-export { VIGIL_HOME_DIR } from "./home-path.js";
+export { FERMI_HOME_DIR } from "./home-path.js";
 
 // ------------------------------------------------------------------
 // Data interfaces
@@ -445,10 +445,10 @@ function optionalConfigBooleanField(
 /**
  * Extension discovery paths across four layers (highest priority first):
  *
- *   workspace  — {cwd}/.vigil/         (checked into repo, shared with team)
- *   project    — ~/.vigil/projects/<hash>/.vigil/  (per-project, not in repo)
- *   global     — ~/.vigil/             (user-wide defaults)
- *   bundled    — package assets        (shipped with vigil)
+ *   workspace  — {cwd}/.fermi/         (checked into repo, shared with team)
+ *   project    — ~/.fermi/projects/<hash>/.fermi/  (per-project, not in repo)
+ *   global     — ~/.fermi/             (user-wide defaults)
+ *   bundled    — package assets        (shipped with fermi)
  */
 export interface ResolvedPaths {
   templatesPath: string | null;
@@ -457,11 +457,11 @@ export interface ResolvedPaths {
 
   // Four-layer extension discovery roots (each may be null if dir doesn't exist)
   extensions: {
-    /** {cwd}/.vigil/ — workspace layer (highest priority) */
+    /** {cwd}/.fermi/ — workspace layer (highest priority) */
     workspace: string | null;
-    /** ~/.vigil/projects/<hash>/.vigil/ — project layer */
+    /** ~/.fermi/projects/<hash>/.fermi/ — project layer */
     project: string | null;
-    /** ~/.vigil/ — global layer */
+    /** ~/.fermi/ — global layer */
     global: string;
     /** bundled assets dir — bundled layer (lowest priority) */
     bundled: string | null;
@@ -486,25 +486,25 @@ export interface ResolvedPaths {
  * Discover extension paths across four layers.
  *
  * Layer priority (highest first):
- *   workspace  — {cwd}/.vigil/
- *   project    — ~/.vigil/projects/<hash>/.vigil/
- *   global     — ~/.vigil/
+ *   workspace  — {cwd}/.fermi/
+ *   project    — ~/.fermi/projects/<hash>/.fermi/
+ *   global     — ~/.fermi/
  *   bundled    — package assets (resolved separately via getBundledAssetsDir)
  */
 export function resolveAssetPaths(opts?: {
   templatesFlag?: string;
   projectPath?: string;
 }): ResolvedPaths {
-  const home = getVigilHomeDir();
+  const home = getFermiHomeDir();
   const projectPath = opts?.projectPath ?? process.cwd();
 
-  // Compute project hash dir: ~/.vigil/projects/<name>_<hash>/
+  // Compute project hash dir: ~/.fermi/projects/<name>_<hash>/
   const slug = makeProjectSlug(projectPath);
   const projectStoreDir = join(home, "projects", slug);
 
   // Four extension layer roots
-  const workspaceRoot = join(projectPath, ".vigil");
-  const projectRoot = join(projectStoreDir, ".vigil");
+  const workspaceRoot = join(projectPath, ".fermi");
+  const projectRoot = join(projectStoreDir, ".fermi");
   const globalRoot = home;
 
   const extensions = {
@@ -546,7 +546,7 @@ export function resolveAssetPaths(opts?: {
   // bundled added by caller
   const globalSkills = join(globalRoot, "skills");
   if (isDir(globalSkills)) skillRoots.push(globalSkills);
-  const projectSkills = join(projectStoreDir, ".vigil", "skills");
+  const projectSkills = join(projectStoreDir, ".fermi", "skills");
   if (isDir(projectSkills)) skillRoots.push(projectSkills);
   const workspaceSkills = join(workspaceRoot, "skills");
   if (isDir(workspaceSkills)) skillRoots.push(workspaceSkills);
@@ -555,7 +555,7 @@ export function resolveAssetPaths(opts?: {
   const hookRoots: { dir: string; scope: "global" | "project" | "workspace" }[] = [];
   const globalHooks = join(globalRoot, "hooks");
   if (isDir(globalHooks)) hookRoots.push({ dir: globalHooks, scope: "global" });
-  const projectHooks = join(projectStoreDir, ".vigil", "hooks");
+  const projectHooks = join(projectStoreDir, ".fermi", "hooks");
   if (isDir(projectHooks)) hookRoots.push({ dir: projectHooks, scope: "project" });
   const workspaceHooks = join(workspaceRoot, "hooks");
   if (isDir(workspaceHooks)) hookRoots.push({ dir: workspaceHooks, scope: "workspace" });
@@ -564,7 +564,7 @@ export function resolveAssetPaths(opts?: {
   const templateRoots: string[] = [];
   // bundled added by caller
   if (templatesPath) templateRoots.push(templatesPath);
-  const projectTemplates = join(projectStoreDir, ".vigil", "agent_templates");
+  const projectTemplates = join(projectStoreDir, ".fermi", "agent_templates");
   if (isDir(projectTemplates)) templateRoots.push(projectTemplates);
   const workspaceTemplates = join(workspaceRoot, "agent_templates");
   if (isDir(workspaceTemplates)) templateRoots.push(workspaceTemplates);
@@ -709,7 +709,7 @@ export class Config {
       }
     }
 
-    // Managed cloud providers: resolve directly from fixed Vigil env slots.
+    // Managed cloud providers: resolve directly from fixed Fermi env slots.
     for (const spec of MANAGED_PROVIDER_CREDENTIAL_SPECS) {
       const raw = process.env[spec.internalEnvVar];
       if (typeof raw !== "string" || raw.trim() === "") continue;
@@ -755,7 +755,7 @@ export class Config {
           throw new Error(
             `Missing OAuth token for model config '${name}' (${provider}/${modelName}): ` +
             "no OpenAI OAuth credentials stored.\n" +
-            "Run 'vigil oauth' to log in with your ChatGPT account.",
+            "Run 'fermi oauth' to log in with your ChatGPT account.",
           );
         }
         return token;
@@ -770,7 +770,7 @@ export class Config {
           throw new Error(
             `Missing OAuth token for model config '${name}' (${provider}/${modelName}): ` +
             "no GitHub Copilot credentials stored.\n" +
-            "Run 'vigil oauth' to log in with your GitHub account.",
+            "Run 'fermi oauth' to log in with your GitHub account.",
           );
         }
         return gh.access_token;
@@ -783,7 +783,7 @@ export class Config {
       throw new Error(
         `Missing API key for model config '${name}' (${provider}/${modelName}): ` +
         `environment variable '${apiKeyEnv}' is not set.\n` +
-        "Run 'vigil init' to configure API keys, or export that variable and retry.",
+        "Run 'fermi init' to configure API keys, or export that variable and retry.",
       );
     })();
 

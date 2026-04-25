@@ -254,13 +254,13 @@ export function resolveModelSelection(
       if (parsed.provider === "openai-codex") {
         throw new Error(
           "Not logged in to OpenAI (ChatGPT).\n" +
-          "Run 'vigil oauth' to log in with your ChatGPT account.",
+          "Run 'fermi oauth' to log in with your ChatGPT account.",
         );
       }
       if (parsed.provider === "copilot") {
         throw new Error(
           "Not logged in to GitHub Copilot.\n" +
-          "Run 'vigil oauth' to log in with your GitHub account.",
+          "Run 'fermi oauth' to log in with your GitHub account.",
         );
       }
       const preset = findProviderPreset(parsed.provider);
@@ -270,7 +270,7 @@ export function resolveModelSelection(
       throw new Error(
         `Missing API key for provider '${parsed.provider}'${preset ? ` (${preset.name})` : ""}.` +
         envHint +
-        `\nOr run 'vigil init' to configure.` +
+        `\nOr run 'fermi init' to configure.` +
         `\nTip: select ${parsed.provider}:${parsed.model} in /model to import or paste a key.`,
       );
     }

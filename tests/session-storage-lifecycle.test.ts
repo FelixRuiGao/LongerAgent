@@ -133,8 +133,8 @@ function countMessageTokens(messages: Array<Record<string, unknown>>): number {
 
 describe("session storage lifecycle", () => {
   it("round-trips global TUI preferences through SessionStore", () => {
-    const baseDir = makeTempDir("vigil-prefs-base-");
-    const projectRoot = makeTempDir("vigil-prefs-project-");
+    const baseDir = makeTempDir("fermi-prefs-base-");
+    const projectRoot = makeTempDir("fermi-prefs-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       store.saveGlobalPreferences({
@@ -162,8 +162,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("constructs with a store that has no active session directory", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -180,8 +180,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("creates session storage on the first turn and hydrates system paths", async () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -203,8 +203,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("returns /new-style state to unbound storage and recreates on next turn", async () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -240,8 +240,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("uses global preference defaults when resetting for /new", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -265,8 +265,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("does not carry archived child session metadata into a /new session", async () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
@@ -321,8 +321,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("restores cache-read token counters from log", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -356,8 +356,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("restores model config before thinking/cache state from log", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store, {
@@ -414,8 +414,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("reconstructs runtime model configs from persisted model identity", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store, {
@@ -478,8 +478,8 @@ describe("session storage lifecycle", () => {
 
   it("estimates initial input tokens for a fresh session before the first user message", () => {
     const previousHome = process.env["HOME"];
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       process.env["HOME"] = baseDir;
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
@@ -502,8 +502,8 @@ describe("session storage lifecycle", () => {
 
   it("includes tool definitions in the initial input token estimate", async () => {
     const previousHome = process.env["HOME"];
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       process.env["HOME"] = baseDir;
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
@@ -538,8 +538,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("fails restore without mutating the current session when model config is invalid", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
@@ -576,8 +576,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("does not mutate the live session when staged restore preflight fails", () => {
-    const baseDir = makeTempDir("vigil-restore-preflight-base-");
-    const projectRoot = makeTempDir("vigil-restore-preflight-project-");
+    const baseDir = makeTempDir("fermi-restore-preflight-base-");
+    const projectRoot = makeTempDir("fermi-restore-preflight-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
@@ -622,8 +622,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("restores the latest tool summary from tool results instead of bare tool names", () => {
-    const baseDir = makeTempDir("vigil-restore-summary-base-");
-    const projectRoot = makeTempDir("vigil-restore-summary-project-");
+    const baseDir = makeTempDir("fermi-restore-summary-base-");
+    const projectRoot = makeTempDir("fermi-restore-summary-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       store.createSession();
@@ -678,8 +678,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("keeps the first user message as persisted session summary after summarize", () => {
-    const baseDir = makeTempDir("vigil-summary-base-");
-    const projectRoot = makeTempDir("vigil-summary-project-");
+    const baseDir = makeTempDir("fermi-summary-base-");
+    const projectRoot = makeTempDir("fermi-summary-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
@@ -705,8 +705,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("requestTurnInterrupt cascades to running children and drops pending state", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -814,8 +814,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("requestTurnInterrupt rejects interruption during compact phase", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -835,8 +835,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("interruption cleanup drops incomplete reasoning, marks partial text, and closes pending tool calls", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -915,8 +915,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("formats truncated sub-agent output with line-aware resume guidance", async () => {
-      const baseDir = makeTempDir("vigil-lifecycle-base-");
-      const projectRoot = makeTempDir("vigil-lifecycle-project-");
+      const baseDir = makeTempDir("fermi-lifecycle-base-");
+      const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
@@ -948,8 +948,8 @@ describe("session storage lifecycle", () => {
   });
 
   it("does not mark safe interrupted tools as having partial effects", () => {
-    const baseDir = makeTempDir("vigil-lifecycle-base-");
-    const projectRoot = makeTempDir("vigil-lifecycle-project-");
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);

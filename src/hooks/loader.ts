@@ -2,7 +2,7 @@
  * Hook discovery and loading.
  *
  * Hooks are defined as hook.json files inside hook directories.
- * Discovery order: project (.vigil/hooks/) > global (~/.vigil/hooks/).
+ * Discovery order: project (.fermi/hooks/) > global (~/.fermi/hooks/).
  * Same-name hooks in project scope override global.
  */
 

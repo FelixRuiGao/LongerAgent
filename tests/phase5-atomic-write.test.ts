@@ -27,7 +27,7 @@ describe("Phase 5 file write safety", () => {
   it("write_file preserves executable mode on overwrite and leaves no temp file", async () => {
     if (process.platform === "win32") return;
 
-    const root = makeTempDir("vigil-atomic-write-");
+    const root = makeTempDir("fermi-atomic-write-");
     try {
       const file = join(root, "script.sh");
       writeFileSync(file, "#!/bin/sh\necho old\n", "utf-8");
@@ -53,7 +53,7 @@ describe("Phase 5 file write safety", () => {
   it("edit_file preserves executable mode on atomic rewrite", async () => {
     if (process.platform === "win32") return;
 
-    const root = makeTempDir("vigil-atomic-edit-");
+    const root = makeTempDir("fermi-atomic-edit-");
     try {
       const file = join(root, "tool.sh");
       writeFileSync(file, "#!/bin/sh\necho hello\n", "utf-8");
@@ -74,7 +74,7 @@ describe("Phase 5 file write safety", () => {
   });
 
   it("rejects edit_file when expected_mtime_ms is stale", async () => {
-    const root = makeTempDir("vigil-atomic-mtime-edit-");
+    const root = makeTempDir("fermi-atomic-mtime-edit-");
     try {
       const file = join(root, "note.txt");
       writeFileSync(file, "hello\n", "utf-8");
@@ -106,7 +106,7 @@ describe("Phase 5 file write safety", () => {
   });
 
   it("rejects write_file overwrite when expected_mtime_ms is stale", async () => {
-    const root = makeTempDir("vigil-atomic-mtime-write-");
+    const root = makeTempDir("fermi-atomic-mtime-write-");
     try {
       const file = join(root, "data.txt");
       writeFileSync(file, "v1\n", "utf-8");
@@ -137,7 +137,7 @@ describe("Phase 5 file write safety", () => {
   });
 
   it("serializes concurrent writes to the same file with a process-local lock", async () => {
-    const root = makeTempDir("vigil-atomic-lock-");
+    const root = makeTempDir("fermi-atomic-lock-");
     const file = join(root, "same.txt");
     writeFileSync(file, "init\n", "utf-8");
 

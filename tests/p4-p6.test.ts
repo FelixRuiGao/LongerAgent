@@ -62,8 +62,8 @@ describe("P4 shell governance", () => {
   });
 
   it("enforces project-root boundary for bash cwd and supports approved external cwd allowlist", async () => {
-    const projectRoot = makeTempDir("vigil-p4-bash-proj-");
-    const externalRoot = makeTempDir("vigil-p4-bash-ext-");
+    const projectRoot = makeTempDir("fermi-p4-bash-proj-");
+    const externalRoot = makeTempDir("fermi-p4-bash-ext-");
     try {
       const denied = await executeTool(
         "bash",
@@ -87,8 +87,8 @@ describe("P4 shell governance", () => {
   });
 
   it("does not trigger ask preflight for external cwd", () => {
-    const projectRoot = makeTempDir("vigil-p4-preflight-proj-");
-    const externalRoot = makeTempDir("vigil-p4-preflight-ext-");
+    const projectRoot = makeTempDir("fermi-p4-preflight-proj-");
+    const externalRoot = makeTempDir("fermi-p4-preflight-ext-");
     try {
       const session = makeSession(projectRoot);
 
@@ -109,7 +109,7 @@ describe("P4 shell governance", () => {
 
 describe("P6 distill_context behavior", () => {
   it("distill_context succeeds and hint state is preserved until next API call", () => {
-    const projectRoot = makeTempDir("vigil-p6-distill-hint-");
+    const projectRoot = makeTempDir("fermi-p6-distill-hint-");
     try {
       const session = makeSession(projectRoot);
       (session as any)._hintState = "level1_sent";
@@ -137,7 +137,7 @@ describe("P6 distill_context behavior", () => {
   });
 
   it("retags text-only final rounds to the preceding user-side context", () => {
-    const projectRoot = makeTempDir("vigil-p6-round-retag-");
+    const projectRoot = makeTempDir("fermi-p6-round-retag-");
     try {
       const session = makeSession(projectRoot) as any;
       session._turnCount = 1;
@@ -159,7 +159,7 @@ describe("P6 distill_context behavior", () => {
   });
 
   it("persists show_context annotations across rounds until summarize or dismiss", async () => {
-    const projectRoot = makeTempDir("vigil-p6-show-context-round-");
+    const projectRoot = makeTempDir("fermi-p6-show-context-round-");
     try {
       const session = makeSession(projectRoot) as any;
       session._turnCount = 1;

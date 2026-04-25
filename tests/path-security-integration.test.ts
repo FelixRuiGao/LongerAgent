@@ -19,8 +19,8 @@ function makeTempDir(prefix: string): string {
 
 describe("path security integration", () => {
   it("enforces project-root boundary for file tools via executeTool context", async () => {
-    const projectRoot = makeTempDir("vigil-tool-root-");
-    const externalRoot = makeTempDir("vigil-tool-ext-");
+    const projectRoot = makeTempDir("fermi-tool-root-");
+    const externalRoot = makeTempDir("fermi-tool-ext-");
     try {
       const insideFile = join(projectRoot, "inside.txt");
       writeFileSync(insideFile, "hello\n", "utf-8");
@@ -54,7 +54,7 @@ describe("path security integration", () => {
   });
 
   it("rejects spawn_file call files outside SESSION_ARTIFACTS", async () => {
-    const artifactsDir = makeTempDir("vigil-artifacts-");
+    const artifactsDir = makeTempDir("fermi-artifacts-");
     try {
       const fakeSession = Object.create(Session.prototype) as any;
       fakeSession._resolveSessionArtifacts = () => artifactsDir;
@@ -93,8 +93,8 @@ describe("path security integration", () => {
   });
 
   it("enforces SESSION_ARTIFACTS boundary for template_path (including symlink escapes)", () => {
-    const artifactsDir = makeTempDir("vigil-template-artifacts-");
-    const externalDir = makeTempDir("vigil-template-ext-");
+    const artifactsDir = makeTempDir("fermi-template-artifacts-");
+    const externalDir = makeTempDir("fermi-template-ext-");
     try {
       const validTemplate = join(artifactsDir, "my-template");
       mkdirSync(validTemplate, { recursive: true });

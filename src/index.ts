@@ -1,9 +1,9 @@
 /**
- * Vigil -- Public barrel re-exports.
+ * Fermi -- Public barrel re-exports.
  *
  * Provides a single import point for all public APIs:
  *
- *   import { Session, Agent, Config, SessionStore } from "vigil";
+ *   import { Session, Agent, Config, SessionStore } from "fermi";
  *
  * @packageDocumentation
  */
@@ -20,7 +20,7 @@ export {
   getWebSearchSupport,
   resolveAssetPaths,
   getBundledAssetsDir,
-  VIGIL_HOME_DIR,
+  FERMI_HOME_DIR,
 } from "./config.js";
 
 // -- Dotenv ---------------------------------------------------------------

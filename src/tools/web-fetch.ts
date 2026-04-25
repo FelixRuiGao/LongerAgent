@@ -256,7 +256,7 @@ async function fetchViaJina(
 ): Promise<string | null> {
   const response = await fetchWithTimeout(JINA_READER_PREFIX + url, {
     headers: {
-      "User-Agent": "Vigil/1.0 (web_fetch tool)",
+      "User-Agent": "Fermi/1.0 (web_fetch tool)",
       Accept: "text/plain, text/markdown;q=0.9, */*;q=0.1",
     },
     redirect: "follow",
@@ -298,7 +298,7 @@ async function fetchLocally(
   try {
     response = await fetchWithTimeout(url, {
       headers: {
-        "User-Agent": "Vigil/1.0 (web_fetch tool)",
+        "User-Agent": "Fermi/1.0 (web_fetch tool)",
         Accept: "text/html, application/json, text/plain, */*",
       },
       redirect: "follow",

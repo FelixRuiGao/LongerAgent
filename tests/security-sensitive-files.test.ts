@@ -13,7 +13,7 @@ function makeTempDir(prefix: string): string {
 
 describe("sensitive file read guards", () => {
   it("blocks read_file for .env files", async () => {
-    const root = makeTempDir("vigil-sensitive-");
+    const root = makeTempDir("fermi-sensitive-");
     try {
       writeFileSync(join(root, ".env"), "API_KEY=secret\n", "utf-8");
 
@@ -30,7 +30,7 @@ describe("sensitive file read guards", () => {
   });
 
   it("skips sensitive files in grep with a notice", async () => {
-    const root = makeTempDir("vigil-sensitive-search-");
+    const root = makeTempDir("fermi-sensitive-search-");
     try {
       writeFileSync(join(root, "credentials.json"), "{\"password\":\"secret\"}\n", "utf-8");
       writeFileSync(join(root, "notes.txt"), "PASSWORD policy docs\n", "utf-8");
@@ -50,7 +50,7 @@ describe("sensitive file read guards", () => {
   });
 
   it("@file attachments block sensitive files and keep cleaned text", async () => {
-    const root = makeTempDir("vigil-sensitive-attach-");
+    const root = makeTempDir("fermi-sensitive-attach-");
     try {
       writeFileSync(join(root, ".env"), "TOKEN=supersecret\n", "utf-8");
       const result = await processFileAttachments("Inspect @.env please", root, false, root);

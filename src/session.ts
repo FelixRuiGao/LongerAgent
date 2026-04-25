@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { getVigilHomeDir } from "./home-path.js";
+import { getFermiHomeDir } from "./home-path.js";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 // child_process — now only used by BackgroundShellManager
 import * as yaml from "js-yaml";
@@ -137,7 +137,7 @@ import {
   type GlobalTuiPreferences,
   type LoadLogResult,
   type LogSessionMeta,
-  type VigilSettings,
+  type FermiSettings,
   type ModelSelectionState,
 } from "./persistence.js";
 import {
@@ -2505,10 +2505,10 @@ export class Session {
   }
 
   /**
-   * Apply settings from the new VigilSettings + ModelSelectionState system.
+   * Apply settings from the new FermiSettings + ModelSelectionState system.
    * This replaces applyGlobalPreferences for the new config architecture.
    */
-  applySettings(settings: VigilSettings, modelState: ModelSelectionState): void {
+  applySettings(settings: FermiSettings, modelState: ModelSelectionState): void {
     const thinkingLevel = modelState.thinking_level ?? settings.thinking_level ?? "";
     this._preferredThinkingLevel = thinkingLevel;
     this._preferredAccentColor = settings.accent_color;
@@ -4730,7 +4730,7 @@ export class Session {
    */
   private _isAgentsMdPath(filePath: string): boolean {
     const resolved = resolve(filePath);
-    const globalPath = join(getVigilHomeDir(), "AGENTS.md");
+    const globalPath = join(getFermiHomeDir(), "AGENTS.md");
     const projectPath = join(this._projectRoot, "AGENTS.md");
     return resolved === resolve(globalPath) || resolved === resolve(projectPath);
   }
@@ -4879,7 +4879,7 @@ export class Session {
     if (!artifacts) {
       throw new Error(
         "Session artifacts directory is unavailable after session initialization. " +
-        "Possible causes: (1) ~/.vigil/ is not writable, (2) disk is full, " +
+        "Possible causes: (1) ~/.fermi/ is not writable, (2) disk is full, " +
         "(3) permission issues creating the artifacts directory.",
       );
     }
@@ -4894,7 +4894,7 @@ export class Session {
       "Session artifacts directory is unavailable. " +
       "This usually means no active session directory exists yet, or session " +
       "persistence failed to initialize. " +
-      "Possible causes: (1) ~/.vigil/ is not writable, (2) disk is full, " +
+      "Possible causes: (1) ~/.fermi/ is not writable, (2) disk is full, " +
       "(3) SessionStore is missing or not ready.",
     );
   }

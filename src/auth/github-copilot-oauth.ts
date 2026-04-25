@@ -11,9 +11,9 @@
  * expiry or maintain a refresh loop; the token is used directly until GitHub
  * invalidates it (user revokes the app), at which point `copilotTokenManager`
  * sees a 401 from `/copilot_internal/v2/token` and the user is prompted to
- * re-authenticate via `vigil oauth login copilot`.
+ * re-authenticate via `fermi oauth login copilot`.
  *
- * Persistence in `~/.vigil/state/oauth.json` under the `github_copilot` field,
+ * Persistence in `~/.fermi/state/oauth.json` under the `github_copilot` field,
  * alongside `openai_codex`. Sync file I/O primitives are shared with
  * `openai-oauth.ts` via `loadAuthStore` / `saveAuthStore`.
  *
@@ -285,13 +285,13 @@ export async function deviceCodeLoginCLI(): Promise<GitHubOAuthTokens> {
  *
  * If GitHub later invalidates the token (user revokes the app), callers that
  * use it will see a 401 from Copilot's endpoints and should surface the
- * "Run `vigil oauth` to re-authenticate" hint.
+ * "Run `fermi oauth` to re-authenticate" hint.
  */
 export function getGitHubAccessToken(): string {
   const tokens = loadGitHubTokens();
   if (!tokens) {
     throw new Error(
-      "No GitHub Copilot credentials stored. Run 'vigil oauth' to log in.",
+      "No GitHub Copilot credentials stored. Run 'fermi oauth' to log in.",
     );
   }
   return tokens.access_token;

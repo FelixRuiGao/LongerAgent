@@ -1,11 +1,11 @@
 import { ensureOpenTuiWorkerPatch } from "./ensure-opentui-worker-patch.js";
 import {
-  getVigilAssistantRenderer,
-  getVigilOpenTuiDiagPath,
-  isVigilMarkdownPatchDisabled,
-  isVigilOpenTuiDiagEnabled,
-  resetVigilOpenTuiDiagLog,
-  writeVigilOpenTuiDiag,
+  getFermiAssistantRenderer,
+  getFermiOpenTuiDiagPath,
+  isFermiMarkdownPatchDisabled,
+  isFermiOpenTuiDiagEnabled,
+  resetFermiOpenTuiDiagLog,
+  writeFermiOpenTuiDiag,
 } from "./forked/core/lib/diagnostic.js";
 
 interface ParsedArgs {
@@ -16,11 +16,11 @@ interface ParsedArgs {
 const SESSION_CLOSE_TIMEOUT_MS = 150;
 
 function resolveRendererThreadSetting(): boolean {
-  const override = process.env.VIGIL_OPENTUI_USE_THREAD?.trim().toLowerCase();
+  const override = process.env.FERMI_OPENTUI_USE_THREAD?.trim().toLowerCase();
   if (override === "1" || override === "true") return true;
   if (override === "0" || override === "false") return false;
 
-  // Native render threading has been unstable on macOS in Vigil's
+  // Native render threading has been unstable on macOS in Fermi's
   // high-frequency streaming UI. Prefer the single-threaded renderer there
   // unless the user explicitly opts back in.
   return process.platform !== "darwin";
@@ -55,18 +55,18 @@ export async function launchTui(): Promise<void> {
 
   process.env.OPENTUI_FORCE_EXPLICIT_WIDTH = "false";
   const args = parseArgs(process.argv.slice(2));
-  if (isVigilOpenTuiDiagEnabled()) {
-    resetVigilOpenTuiDiagLog({
+  if (isFermiOpenTuiDiagEnabled()) {
+    resetFermiOpenTuiDiagLog({
       cwd: process.cwd(),
-      diagPath: getVigilOpenTuiDiagPath(),
+      diagPath: getFermiOpenTuiDiagPath(),
       platform: process.platform,
-      assistantRenderer: getVigilAssistantRenderer(),
-      markdownPatchDisabled: isVigilMarkdownPatchDisabled(),
+      assistantRenderer: getFermiAssistantRenderer(),
+      markdownPatchDisabled: isFermiMarkdownPatchDisabled(),
     });
   }
   const runtime = await bootstrapOpenTuiRuntime(args);
   const useThread = resolveRendererThreadSetting();
-  writeVigilOpenTuiDiag("main.bootstrap", {
+  writeFermiOpenTuiDiag("main.bootstrap", {
     verbose: args.verbose,
     templates: args.templates ?? null,
     useThread,
@@ -103,7 +103,7 @@ export async function launchTui(): Promise<void> {
   };
 
   const handleFatal = (err: unknown) => {
-    writeVigilOpenTuiDiag("main.fatal", {
+    writeFermiOpenTuiDiag("main.fatal", {
       error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
     });
     cleanupTerminalAfterFatal();
@@ -117,7 +117,7 @@ export async function launchTui(): Promise<void> {
   const exit = async (farewell?: string) => {
     if (exiting) return;
     exiting = true;
-    writeVigilOpenTuiDiag("main.exit", {
+    writeFermiOpenTuiDiag("main.exit", {
       farewell: farewell ?? null,
     });
 
@@ -194,7 +194,7 @@ function isDirectEntry(): boolean {
 
 if (isDirectEntry()) {
   launchTui().catch((err) => {
-    writeVigilOpenTuiDiag("main.catch", {
+    writeFermiOpenTuiDiag("main.catch", {
       error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
     });
     console.error("Fatal OpenTUI error:", err);

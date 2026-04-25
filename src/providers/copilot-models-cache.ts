@@ -13,7 +13,7 @@
  *
  * Cache semantics:
  * - In-memory cache lives for the process lifetime.
- * - On-disk cache at ~/.vigil/copilot-models.json persists across
+ * - On-disk cache at ~/.fermi/copilot-models.json persists across
  *   restarts so the picker doesn't wait on a network round-trip every launch.
  * - Cache is considered valid for 24 hours after fetch; older snapshots are
  *   still used (fail-safe) but a background refresh is triggered.
@@ -21,7 +21,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getVigilHomeDir } from "../home-path.js";
+import { getFermiHomeDir } from "../home-path.js";
 import { copilotTokenManager } from "../auth/github-copilot-token-manager.js";
 import { buildCopilotRequestHeaders } from "./copilot-headers.js";
 
@@ -55,7 +55,7 @@ interface CopilotModelsCacheData {
 // =============================================================================
 
 function cachePath(): string {
-  return join(getVigilHomeDir(), "state", CACHE_FILENAME);
+  return join(getFermiHomeDir(), "state", CACHE_FILENAME);
 }
 
 function loadCacheFromDisk(): CopilotModelsCacheData | null {
@@ -78,7 +78,7 @@ function loadCacheFromDisk(): CopilotModelsCacheData | null {
 
 function saveCacheToDisk(data: CopilotModelsCacheData): void {
   try {
-    const dir = join(getVigilHomeDir(), "state");
+    const dir = join(getFermiHomeDir(), "state");
     mkdirSync(dir, { recursive: true });
     writeFileSync(cachePath(), JSON.stringify(data, null, 2) + "\n", {
       encoding: "utf-8",

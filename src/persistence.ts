@@ -27,7 +27,7 @@ import {
 import { gunzipSync, gzipSync } from "node:zlib";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { getVigilHomeDir } from "./home-path.js";
+import { getFermiHomeDir } from "./home-path.js";
 import { LogIdAllocator, type LogEntry, type LogEntryType, type TuiDisplayKind } from "./log-entry.js";
 import type { ChildSessionMetaRecord } from "./session-tree-types.js";
 import { parseJsonc } from "./jsonc.js";
@@ -54,7 +54,7 @@ function projectSlug(projectPath: string): string {
 
 function resolvePreferredBaseDir(baseDir?: string): string {
   if (baseDir) return baseDir.replace(/^~/, homedir());
-  return getVigilHomeDir();
+  return getFermiHomeDir();
 }
 
 function resolveSessionTimezone(): string {
@@ -138,7 +138,7 @@ export class SessionStore {
   private _candidateBaseDirs(): string[] {
     const candidates = [
       this._preferredBaseDir,
-      join(tmpdir(), "vigil", "sessions"),
+      join(tmpdir(), "fermi", "sessions"),
     ];
     const seen = new Set<string>();
     const dedup: string[] = [];
@@ -572,7 +572,7 @@ export interface ModelTierEntry {
 export type AgentModelEntry = ModelTierEntry;
 
 /** User-editable settings. Lives in settings.json (JSONC). */
-export interface VigilSettings {
+export interface FermiSettings {
   // -- Model --
   /** Declarative default model. Overrides state/model-selection.json. */
   default_model?: string;
@@ -1259,26 +1259,26 @@ export function fixStorage(baseDir?: string): FixStorageResult {
 // New settings API
 // ------------------------------------------------------------------
 
-/** Load global settings from ~/.vigil/settings.json (JSONC). */
-export function loadGlobalSettings(homeDir?: string): VigilSettings {
-  const dir = homeDir ?? getVigilHomeDir();
+/** Load global settings from ~/.fermi/settings.json (JSONC). */
+export function loadGlobalSettings(homeDir?: string): FermiSettings {
+  const dir = homeDir ?? getFermiHomeDir();
   const path = join(dir, SETTINGS_FILE);
   if (!existsSync(path)) return {};
   try {
     const text = readFileSync(path, "utf-8");
-    return parseJsonc<VigilSettings>(text) ?? {};
+    return parseJsonc<FermiSettings>(text) ?? {};
   } catch {
     return {};
   }
 }
 
-/** Load project-local settings from {projectPath}/.vigil/settings.json (JSONC). */
-export function loadLocalSettings(projectPath: string): VigilSettings {
-  const path = join(projectPath, ".vigil", SETTINGS_FILE);
+/** Load project-local settings from {projectPath}/.fermi/settings.json (JSONC). */
+export function loadLocalSettings(projectPath: string): FermiSettings {
+  const path = join(projectPath, ".fermi", SETTINGS_FILE);
   if (!existsSync(path)) return {};
   try {
     const text = readFileSync(path, "utf-8");
-    return parseJsonc<VigilSettings>(text) ?? {};
+    return parseJsonc<FermiSettings>(text) ?? {};
   } catch {
     return {};
   }
@@ -1293,8 +1293,8 @@ export function loadLocalSettings(projectPath: string): VigilSettings {
  * - Arrays (disabled_skills): local replaces global
  * - `providers`: global only — local value is ignored
  */
-export function mergeSettings(global: VigilSettings, local: VigilSettings): VigilSettings {
-  const merged: VigilSettings = { ...global };
+export function mergeSettings(global: FermiSettings, local: FermiSettings): FermiSettings {
+  const merged: FermiSettings = { ...global };
 
   // Scalars — local overrides if present
   if (local.default_model !== undefined) merged.default_model = local.default_model;
@@ -1323,7 +1323,7 @@ export function mergeSettings(global: VigilSettings, local: VigilSettings): Vigi
 
 /** Load model selection state from state/model-selection.json. */
 export function loadModelSelectionState(homeDir?: string): ModelSelectionState {
-  const dir = homeDir ?? getVigilHomeDir();
+  const dir = homeDir ?? getFermiHomeDir();
   const path = join(dir, STATE_DIR, MODEL_SELECTION_FILE);
   if (!existsSync(path)) return {};
   try {
@@ -1342,7 +1342,7 @@ export function loadModelSelectionState(homeDir?: string): ModelSelectionState {
 
 /** Save model selection state to state/model-selection.json. Atomic write. */
 export function saveModelSelectionState(state: ModelSelectionState, homeDir?: string): void {
-  const dir = homeDir ?? getVigilHomeDir();
+  const dir = homeDir ?? getFermiHomeDir();
   const stateDir = join(dir, STATE_DIR);
   mkdirSync(stateDir, { recursive: true });
   const file = join(stateDir, MODEL_SELECTION_FILE);
@@ -1355,7 +1355,7 @@ export function saveModelSelectionState(state: ModelSelectionState, homeDir?: st
  * Save settings.json (global or local). Atomic write.
  * Only writes the fields that are defined — undefined fields are omitted.
  */
-export function saveSettings(settings: VigilSettings, filePath: string): void {
+export function saveSettings(settings: FermiSettings, filePath: string): void {
   const dir = dirname(filePath);
   mkdirSync(dir, { recursive: true });
   const tmp = filePath + ".tmp";
@@ -1376,19 +1376,19 @@ export function saveSettings(settings: VigilSettings, filePath: string): void {
 
 /** Get the global settings.json path. */
 export function globalSettingsPath(homeDir?: string): string {
-  return join(homeDir ?? getVigilHomeDir(), SETTINGS_FILE);
+  return join(homeDir ?? getFermiHomeDir(), SETTINGS_FILE);
 }
 
 /** Get the project-local settings.json path. */
 export function localSettingsPath(projectPath: string): string {
-  return join(projectPath, ".vigil", SETTINGS_FILE);
+  return join(projectPath, ".fermi", SETTINGS_FILE);
 }
 
 /**
- * Convert VigilSettings providers + mcp_servers into the formats
+ * Convert FermiSettings providers + mcp_servers into the formats
  * expected by Config and MCPClientManager.
  */
-export function settingsToConfigInputs(settings: VigilSettings): {
+export function settingsToConfigInputs(settings: FermiSettings): {
   providerEnvVars: Record<string, string>;
   localProviders: Record<string, LocalProviderConfig>;
   mcpServers: MCPServerConfig[];

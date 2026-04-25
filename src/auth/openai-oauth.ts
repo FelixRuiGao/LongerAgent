@@ -5,7 +5,7 @@
  *   1. Browser login (PKCE) — recommended, opens browser for one-click auth
  *   2. Device code — fallback for SSH / headless environments
  *
- * Token persistence in ~/.vigil/state/oauth.json with automatic refresh.
+ * Token persistence in ~/.fermi/state/oauth.json with automatic refresh.
  * No external dependencies — uses Node 18+ built-in fetch, crypto, http.
  */
 
@@ -16,7 +16,7 @@ import { platform } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { confirm, select } from "@inquirer/prompts";
-import { getVigilHomeDir } from "../home-path.js";
+import { getFermiHomeDir } from "../home-path.js";
 import {
   deviceCodeLoginCLI as copilotDeviceCodeLoginCLI,
   saveGitHubTokens,
@@ -81,7 +81,7 @@ export interface AuthStoreData {
 // =============================================================================
 
 function authStorePath(): string {
-  return join(getVigilHomeDir(), "state", "oauth.json");
+  return join(getFermiHomeDir(), "state", "oauth.json");
 }
 
 export function loadAuthStore(): AuthStoreData {
@@ -101,7 +101,7 @@ export function loadAuthStore(): AuthStoreData {
 
 export function saveAuthStore(store: AuthStoreData): void {
   const p = authStorePath();
-  const stateDir = join(getVigilHomeDir(), "state");
+  const stateDir = join(getFermiHomeDir(), "state");
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(p, JSON.stringify(store, null, 2) + "\n", {
     encoding: "utf-8",
@@ -371,7 +371,7 @@ export async function browserLoginHeadless(
     state,
     id_token_add_organizations: "true",
     codex_cli_simplified_flow: "true",
-    originator: "vigil",
+    originator: "fermi",
   });
   const authorizeUrl = `${AUTHORIZE_URL}?${params.toString()}`;
 
@@ -526,7 +526,7 @@ export async function deviceCodeLoginHeadless(
 }
 
 // =============================================================================
-// CLI wrappers (console.log + inquirer for `vigil oauth` command)
+// CLI wrappers (console.log + inquirer for `fermi oauth` command)
 // =============================================================================
 
 /**
@@ -601,7 +601,7 @@ export async function refreshAccessToken(
     const errCode = typeof data["error"] === "string" ? data["error"] : "";
     const reloginHint =
       errCode === "invalid_grant" || errCode === "invalid_token"
-        ? " Run 'vigil oauth' to re-authenticate."
+        ? " Run 'fermi oauth' to re-authenticate."
         : "";
     throw new Error(`Token refresh failed: ${errDesc}.${reloginHint}`);
   }
@@ -609,7 +609,7 @@ export async function refreshAccessToken(
   const accessToken = String(data["access_token"] ?? "");
   if (!accessToken) {
     throw new Error(
-      "Token refresh response missing access_token. Run 'vigil oauth' to re-authenticate.",
+      "Token refresh response missing access_token. Run 'fermi oauth' to re-authenticate.",
     );
   }
 
@@ -642,7 +642,7 @@ export async function ensureFreshToken(): Promise<string> {
     !codex.refresh_token.trim()
   ) {
     throw new Error(
-      "No OpenAI OAuth credentials stored. Run 'vigil oauth' to log in.",
+      "No OpenAI OAuth credentials stored. Run 'fermi oauth' to log in.",
     );
   }
 
@@ -655,7 +655,7 @@ export async function ensureFreshToken(): Promise<string> {
 }
 
 // =============================================================================
-// CLI command: `vigil oauth [action] [service]`
+// CLI command: `fermi oauth [action] [service]`
 // =============================================================================
 //
 // Supports two OAuth services:
@@ -663,17 +663,17 @@ export async function ensureFreshToken(): Promise<string> {
 //   - copilot  — GitHub Copilot device flow (new)
 //
 // Command forms:
-//   vigil oauth                    → picker: service × action
-//   vigil oauth login              → picker: service
-//   vigil oauth logout             → picker: which service to clear
-//   vigil oauth status             → show all services' statuses
-//   vigil oauth login codex        → direct
-//   vigil oauth login copilot      → direct
-//   vigil oauth logout codex       → direct
-//   vigil oauth logout copilot     → direct
+//   fermi oauth                    → picker: service × action
+//   fermi oauth login              → picker: service
+//   fermi oauth logout             → picker: which service to clear
+//   fermi oauth status             → show all services' statuses
+//   fermi oauth login codex        → direct
+//   fermi oauth login copilot      → direct
+//   fermi oauth logout codex       → direct
+//   fermi oauth logout copilot     → direct
 //
-// Back-compat: users who previously ran `vigil oauth` or
-// `vigil oauth login` now see a 2-item picker with one extra keystroke.
+// Back-compat: users who previously ran `fermi oauth` or
+// `fermi oauth login` now see a 2-item picker with one extra keystroke.
 // =============================================================================
 
 type OAuthService = "codex" | "copilot";
@@ -751,10 +751,10 @@ async function codexLogin(): Promise<void> {
   saveOAuthTokens(tokens);
   console.log();
   console.log("  Codex login successful!");
-  console.log("  OAuth tokens saved to ~/.vigil/state/oauth.json");
+  console.log("  OAuth tokens saved to ~/.fermi/state/oauth.json");
   console.log();
   console.log(
-    "  To use with Vigil, run 'vigil init' and select",
+    "  To use with Fermi, run 'fermi init' and select",
   );
   console.log("  'OpenAI (ChatGPT Login)'.");
   console.log("  If it is already configured, you can switch to it later with '/model'.");
@@ -834,10 +834,10 @@ async function copilotLogin(): Promise<void> {
 
   console.log();
   console.log("  Copilot login successful!");
-  console.log("  GitHub OAuth tokens saved to ~/.vigil/state/oauth.json");
+  console.log("  GitHub OAuth tokens saved to ~/.fermi/state/oauth.json");
   console.log();
   console.log(
-    "  To use with Vigil, run 'vigil init' and select",
+    "  To use with Fermi, run 'fermi init' and select",
   );
   console.log("  'GitHub Copilot'.");
   console.log("  If it is already configured, you can switch to it later with '/model'.");
@@ -900,7 +900,7 @@ async function pickService(
 }
 
 function printStatusAll(): void {
-  console.log("  Vigil OAuth Status");
+  console.log("  Fermi OAuth Status");
   console.log();
   for (const line of codexStatusLines()) console.log(line);
   console.log();
@@ -921,7 +921,7 @@ function normalizeService(raw?: string): OAuthService | null {
 // -----------------------------------------------------------------------------
 
 /**
- * Entry point for `vigil oauth [action] [service]`.
+ * Entry point for `fermi oauth [action] [service]`.
  *
  * Both arguments are optional. If action is empty, defaults to `login`.
  * If service is empty, shows an interactive picker (unless `status`, which
@@ -936,7 +936,7 @@ export async function oauthCommand(
 
   console.log();
   console.log("  ╔══════════════════════════════════════╗");
-  console.log("  ║           Vigil OAuth Login          ║");
+  console.log("  ║           Fermi OAuth Login          ║");
   console.log("  ╚══════════════════════════════════════╝");
   console.log();
 
@@ -954,7 +954,7 @@ export async function oauthCommand(
       break;
     default:
       console.log(`  Unknown action: ${normalized}`);
-      console.log("  Usage: vigil oauth [login|status|logout] [codex|copilot]");
+      console.log("  Usage: fermi oauth [login|status|logout] [codex|copilot]");
       return;
   }
 

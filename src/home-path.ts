@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const VIGIL_HOME_DIR = ".vigil";
+export const FERMI_HOME_DIR = ".fermi";
 
-export function getVigilHomeDir(): string {
-  return join(homedir(), VIGIL_HOME_DIR);
+export function getFermiHomeDir(): string {
+  return join(homedir(), FERMI_HOME_DIR);
 }

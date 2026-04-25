@@ -2,7 +2,7 @@
  * Non-blocking update checker.
  *
  * Checks the npm registry for a newer version at most once per 24 hours.
- * Caches the result in ~/.vigil/.update-check.json.
+ * Caches the result in ~/.fermi/.update-check.json.
  *
  * The latest package.json may contain an `updateNotice` string field —
  * if present, it is displayed alongside the version update message.
@@ -12,11 +12,11 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getVigilHomeDir } from "./home-path.js";
+import { getFermiHomeDir } from "./home-path.js";
 
 const CACHE_FILE = ".update-check.json";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const PACKAGE_NAME = "vigil-code";
+const PACKAGE_NAME = "fermi-code";
 
 interface UpdateCache {
   lastCheck: number;
@@ -31,7 +31,7 @@ interface RegistryResponse {
 }
 
 function cachePath(): string {
-  return join(getVigilHomeDir(), CACHE_FILE);
+  return join(getFermiHomeDir(), CACHE_FILE);
 }
 
 function readCache(): UpdateCache | null {
@@ -46,7 +46,7 @@ function readCache(): UpdateCache | null {
 
 function writeCache(cache: UpdateCache): void {
   try {
-    const dir = getVigilHomeDir();
+    const dir = getFermiHomeDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(cachePath(), JSON.stringify(cache));
   } catch { /* ignore */ }

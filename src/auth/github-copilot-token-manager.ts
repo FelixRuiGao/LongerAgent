@@ -108,7 +108,7 @@ class CopilotTokenManager {
     if (!resp.ok) {
       const hint =
         resp.status === 401 || resp.status === 403
-          ? " Run 'vigil oauth' to re-authenticate."
+          ? " Run 'fermi oauth' to re-authenticate."
           : "";
       throw new Error(
         `Failed to mint Copilot API token: HTTP ${resp.status}.${hint}`,

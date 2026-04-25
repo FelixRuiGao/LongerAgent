@@ -2,15 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Config } from "../src/config.js";
 
 const ENV_VARS = [
-  "VIGIL_GLM_API_KEY",
-  "VIGIL_GLM_INTL_API_KEY",
-  "VIGIL_GLM_CODE_API_KEY",
-  "VIGIL_GLM_INTL_CODE_API_KEY",
-  "VIGIL_KIMI_API_KEY",
-  "VIGIL_KIMI_CN_API_KEY",
-  "VIGIL_KIMI_CODE_API_KEY",
-  "VIGIL_MINIMAX_API_KEY",
-  "VIGIL_MINIMAX_CN_API_KEY",
+  "FERMI_GLM_API_KEY",
+  "FERMI_GLM_INTL_API_KEY",
+  "FERMI_GLM_CODE_API_KEY",
+  "FERMI_GLM_INTL_CODE_API_KEY",
+  "FERMI_KIMI_API_KEY",
+  "FERMI_KIMI_CN_API_KEY",
+  "FERMI_KIMI_CODE_API_KEY",
+  "FERMI_MINIMAX_API_KEY",
+  "FERMI_MINIMAX_CN_API_KEY",
 ];
 
 const savedEnv = new Map<string, string | undefined>();
@@ -35,8 +35,8 @@ describe("managed provider credentials", () => {
     savedEnv.clear();
   });
 
-  it("auto-registers managed provider models from Vigil env slots", () => {
-    process.env["VIGIL_GLM_CODE_API_KEY"] = "glm-code-secret";
+  it("auto-registers managed provider models from Fermi env slots", () => {
+    process.env["FERMI_GLM_CODE_API_KEY"] = "glm-code-secret";
 
     const cfg = new Config({});
 
@@ -46,7 +46,7 @@ describe("managed provider credentials", () => {
   });
 
   it("does not share managed credentials across endpoints", () => {
-    process.env["VIGIL_GLM_API_KEY"] = "glm-standard-secret";
+    process.env["FERMI_GLM_API_KEY"] = "glm-standard-secret";
 
     const cfg = new Config({});
 

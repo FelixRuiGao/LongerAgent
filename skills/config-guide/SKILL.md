@@ -1,14 +1,14 @@
 ---
 name: config-guide
-description: Explains Vigil's configuration system, settings.json, local project settings, model tiers, and directory structure. Use when users ask about configuration, settings, how to set up providers, or project-local overrides.
+description: Explains Fermi's configuration system, settings.json, local project settings, model tiers, and directory structure. Use when users ask about configuration, settings, how to set up providers, or project-local overrides.
 ---
 
-# Vigil Configuration Guide
+# Fermi Configuration Guide
 
 ## Directory Structure
 
 ```
-~/.vigil/                              # Global config
+~/.fermi/                              # Global config
 ├── settings.json                      # User-editable settings (JSONC, supports comments)
 ├── state/                             # System-managed (do not edit)
 │   ├── model-selection.json           #   Last /model selection
@@ -19,7 +19,7 @@ description: Explains Vigil's configuration system, settings.json, local project
 ├── projects/                          # Session storage
 └── AGENTS.md                          # Global persistent memory
 
-{PROJECT}/.vigil/                      # Project-local (user creates manually)
+{PROJECT}/.fermi/                      # Project-local (user creates manually)
 ├── settings.json                      # Local overrides (can be committed to git)
 ├── skills/                            # Project-local skills
 ├── AGENTS.md                          # Project memory (auto-gitignored)
@@ -74,7 +74,7 @@ The single user-editable config file. Supports `//` and `/* */` comments.
 
 ## Project-Local Settings
 
-Create `{PROJECT}/.vigil/settings.json` to override global settings for a specific project. Only include the fields you want to override:
+Create `{PROJECT}/.fermi/settings.json` to override global settings for a specific project. Only include the fields you want to override:
 
 ```jsonc
 {
@@ -113,7 +113,7 @@ Configure different model capability levels for sub-agents:
 
 ## First-Time Setup
 
-Run `vigil init` to:
+Run `fermi init` to:
 1. Configure providers (add API keys, set up local servers)
 2. Select your main model and thinking level
 3. Optionally configure sub-agent model tiers

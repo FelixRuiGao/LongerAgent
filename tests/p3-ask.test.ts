@@ -50,7 +50,7 @@ function makeSessionLike(projectRoot: string): any {
 
 describe("P3 ask behavior", () => {
   it("creates agent_question asks and requires resolveAgentQuestionAsk", () => {
-    const root = makeTempDir("vigil-p3-agent-question-");
+    const root = makeTempDir("fermi-p3-agent-question-");
     try {
       const s = makeSessionLike(root);
       const execAsk = (Session.prototype as any)._execAsk;
@@ -115,7 +115,7 @@ describe("P3 ask behavior", () => {
   });
 
   it("updates summarize hint state and hint injection even when activation suspends on ask", async () => {
-    const root = makeTempDir("vigil-p3-ask-hint-");
+    const root = makeTempDir("fermi-p3-ask-hint-");
     try {
       const s = makeSessionLike(root);
       s._updateHintStateAfterApiCall = vi.fn();
@@ -175,8 +175,8 @@ describe("P3 ask behavior", () => {
   });
 
   it("supports explicit external @file attachments without session permission rules", async () => {
-    const projectRoot = makeTempDir("vigil-p3-attach-proj-");
-    const externalDir = makeTempDir("vigil-p3-attach-ext-");
+    const projectRoot = makeTempDir("fermi-p3-attach-proj-");
+    const externalDir = makeTempDir("fermi-p3-attach-ext-");
     try {
       const attachedFile = join(externalDir, "attached.txt");
       writeFileSync(attachedFile, "hello from external attachment\n", "utf-8");
@@ -197,7 +197,7 @@ describe("P3 ask behavior", () => {
 
 describe("P3 pending turn helpers", () => {
   it("resumes pre_user_input by re-entering turn with saved user input", async () => {
-    const root = makeTempDir("vigil-p3-resume-pre-");
+    const root = makeTempDir("fermi-p3-resume-pre-");
     try {
       const s = makeSessionLike(root);
       s._pendingTurnState = { stage: "pre_user_input", userInput: "hello" };
@@ -212,7 +212,7 @@ describe("P3 pending turn helpers", () => {
   });
 
   it("resumes activation by calling the activation loop helper", async () => {
-    const root = makeTempDir("vigil-p3-resume-act-");
+    const root = makeTempDir("fermi-p3-resume-act-");
     try {
       const s = makeSessionLike(root);
       s._pendingTurnState = { stage: "activation" };
@@ -388,8 +388,8 @@ describe("P3 tool-loop ask propagation", () => {
 
 describe("P3 log-native session listing", () => {
   it("formats log.json UTC timestamps into local time for session listing", () => {
-    const baseDir = makeTempDir("vigil-p3-store-list-local-");
-    const projectPath = makeTempDir("vigil-p3-project-list-local-");
+    const baseDir = makeTempDir("fermi-p3-store-list-local-");
+    const projectPath = makeTempDir("fermi-p3-project-list-local-");
     try {
       const store = new SessionStore({ baseDir, projectPath });
       const sessionDir = store.createSession();

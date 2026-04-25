@@ -15,7 +15,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getVigilHomeDir } from "./home-path.js";
+import { getFermiHomeDir } from "./home-path.js";
 
 // ------------------------------------------------------------------
 // Prompt layer types
@@ -55,7 +55,7 @@ export function renderPromptVariables(prompt: string, vars: PromptVariables): st
 export function readAgentsMemory(projectRoot: string): string {
   const parts: string[] = [];
 
-  const globalPath = join(getVigilHomeDir(), "AGENTS.md");
+  const globalPath = join(getFermiHomeDir(), "AGENTS.md");
   if (existsSync(globalPath)) {
     try {
       const content = readFileSync(globalPath, "utf-8").trim();

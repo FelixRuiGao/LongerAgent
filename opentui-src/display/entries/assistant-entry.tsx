@@ -4,12 +4,12 @@ import React from "react";
 
 import { getTreeSitterClient } from "@opentui/core";
 
-import { getVigilAssistantRenderer } from "../../forked/core/lib/diagnostic.js";
+import { getFermiAssistantRenderer } from "../../forked/core/lib/diagnostic.js";
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../../components/conversation-types.js";
 
 const MARKDOWN_TREE_SITTER_CLIENT = getTreeSitterClient();
-const ASSISTANT_RENDERER_MODE = getVigilAssistantRenderer();
+const ASSISTANT_RENDERER_MODE = getFermiAssistantRenderer();
 
 interface AssistantEntryProps {
   entry: PresentationEntry;

@@ -3,8 +3,8 @@
  *
  * Three scopes:
  *   session — in-memory only, dies with the session
- *   project — {projectRoot}/.vigil/permissions.json
- *   global  — ~/.vigil/permissions.json
+ *   project — {projectRoot}/.fermi/permissions.json
+ *   global  — ~/.fermi/permissions.json
  *
  * Rule matching: deny rules take priority over allow rules.
  * Within the same action, more specific scope wins (session > project > global).
@@ -13,7 +13,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { getVigilHomeDir } from "../home-path.js";
+import { getFermiHomeDir } from "../home-path.js";
 import type { PermissionRule, PermissionRuleFile, InvocationAssessment } from "./types.js";
 
 // ------------------------------------------------------------------
@@ -148,11 +148,11 @@ export class PermissionRuleStore {
   // -- File I/O --------------------------------------------------------
 
   private _projectFilePath(): string {
-    return join(this._projectRoot, ".vigil", "permissions.json");
+    return join(this._projectRoot, ".fermi", "permissions.json");
   }
 
   private _globalFilePath(): string {
-    return join(getVigilHomeDir(), "permissions.json");
+    return join(getFermiHomeDir(), "permissions.json");
   }
 
   private _loadFileRules(filePath: string): PermissionRule[] {
