@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/cn.js'
 import { Markdown } from '@/components/Markdown.js'
+import { shortenSummary } from '@/lib/path.js'
 
 interface LogEntry {
   id: string
@@ -43,9 +44,11 @@ interface ToolResultEntry extends LogEntry {
 export function Transcript({
   entries,
   activeId,
+  workDir,
 }: {
   entries: unknown[]
   activeId: string | null
+  workDir?: string
 }): JSX.Element {
   // Pre-pair tool_call → tool_result so we can render each pair as a unit.
   const items = useMemo(() => {
@@ -99,7 +102,15 @@ export function Transcript({
         {items.map((item) => {
           if (item.kind === 'tool') {
             const active = item.call.id === activeId
-            return <ToolPair key={item.call.id} call={item.call} result={item.result} active={active} />
+            return (
+              <ToolPair
+                key={item.call.id}
+                call={item.call}
+                result={item.result}
+                active={active}
+                workDir={workDir}
+              />
+            )
           }
           return <EntryRow key={item.entry.id} entry={item.entry} active={item.entry.id === activeId} />
         })}
@@ -208,9 +219,10 @@ interface ToolPairProps {
   call: ToolCallEntry
   result: ToolResultEntry | null
   active: boolean
+  workDir?: string
 }
 
-function ToolPair({ call, result, active }: ToolPairProps): JSX.Element {
+function ToolPair({ call, result, active, workDir }: ToolPairProps): JSX.Element {
   const meta = call.meta as Record<string, unknown> | undefined
   const toolName = (meta?.['toolName'] as string) ?? 'tool'
   const Icon = pickToolIcon(toolName)
@@ -264,7 +276,7 @@ function ToolPair({ call, result, active }: ToolPairProps): JSX.Element {
             {label}
           </span>
           {rest && (
-            <span className="truncate text-fg-3">{abbreviatePath(rest)}</span>
+            <span className="truncate text-fg-3">{shortenSummary(rest, workDir)}</span>
           )}
           {isError && !running && (
             <XCircle className="ml-1 h-3 w-3 shrink-0 self-center text-error" />
@@ -406,8 +418,3 @@ function pickResultLang(toolName: string, text: string): string {
   return 'text'
 }
 
-const HOME_PREFIX = /\/Users\/[a-zA-Z0-9._-]+/g
-
-function abbreviatePath(s: string): string {
-  return s.replace(HOME_PREFIX, '~').replace(/\s+/g, ' ')
-}

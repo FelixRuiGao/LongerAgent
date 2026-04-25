@@ -17,6 +17,7 @@ import {
 import { cn } from '@/lib/cn.js'
 import { api } from '@/lib/api.js'
 import { useSessionStore } from '@/state/sessionStore.js'
+import { shortenSummary } from '@/lib/path.js'
 import type { SessionTab } from '@shared/rpc.js'
 
 interface PlanCheckpoint {
@@ -171,7 +172,7 @@ export function RightPane({ tab }: { tab: SessionTab }): JSX.Element {
                 </div>
                 {c.lastToolCallSummary && (
                   <div className="mt-0.5 truncate text-[10.5px] text-fg-3">
-                    {c.lastToolCallSummary}
+                    {shortenSummary(c.lastToolCallSummary, tab.workDir)}
                   </div>
                 )}
                 <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
@@ -196,7 +197,7 @@ export function RightPane({ tab }: { tab: SessionTab }): JSX.Element {
                 <span className="text-fg-2">{r.toolName ?? r.type}</span>
                 {r.text && (
                   <span className="ml-1.5 truncate text-muted">
-                    {abbreviateLine(r.text, r.toolName)}
+                    {abbreviateLine(r.text, r.toolName, tab.workDir)}
                   </span>
                 )}
               </li>
@@ -278,16 +279,11 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function abbreviateLine(s: string, toolName: string | null): string {
+function abbreviateLine(s: string, toolName: string | null, workDir?: string): string {
   let t = s
-  if (toolName) {
-    // The display already starts with "<toolName> "; strip it for brevity.
-    if (t.startsWith(`${toolName} `)) t = t.slice(toolName.length + 1)
+  if (toolName && t.startsWith(`${toolName} `)) {
+    t = t.slice(toolName.length + 1)
   }
-  // Shorten absolute paths to basenames
-  t = t.replace(/(\/[A-Za-z0-9_\-./]+)/g, (full) => {
-    const base = full.split('/').pop() ?? full
-    return base
-  })
+  t = shortenSummary(t, workDir)
   return t.length > 50 ? `${t.slice(0, 47)}…` : t
 }

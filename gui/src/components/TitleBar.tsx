@@ -1,6 +1,7 @@
 import { Sun, Moon } from 'lucide-react'
 import { useSessionStore } from '@/state/sessionStore.js'
 import { cn } from '@/lib/cn.js'
+import { shortPath } from '@/lib/path.js'
 
 export function TitleBar(): JSX.Element {
   const theme = useSessionStore((s) => s.theme)
@@ -17,7 +18,7 @@ export function TitleBar(): JSX.Element {
           <>
             <span className="text-muted">·</span>
             <span className="font-mono text-[11px] text-fg-3" title={activeTab.workDir}>
-              {shortenPath(activeTab.workDir)}
+              {shortPath(activeTab.workDir)}
             </span>
           </>
         )}
@@ -38,8 +39,3 @@ export function TitleBar(): JSX.Element {
   )
 }
 
-function shortenPath(p: string): string {
-  const segs = p.split('/').filter(Boolean)
-  if (segs.length <= 3) return p
-  return '…/' + segs.slice(-2).join('/')
-}

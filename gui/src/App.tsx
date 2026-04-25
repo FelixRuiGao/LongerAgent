@@ -4,6 +4,7 @@ import { SessionPane } from '@/components/SessionPane.js'
 import { TitleBar } from '@/components/TitleBar.js'
 import { EmptyState } from '@/components/EmptyState.js'
 import { RightPane } from '@/components/RightPane.js'
+import { CommandPalette } from '@/components/CommandPalette.js'
 import { useSessionStore } from '@/state/sessionStore.js'
 
 export function App(): JSX.Element {
@@ -31,6 +32,7 @@ export function App(): JSX.Element {
         </main>
         {activeTab && <RightPane key={activeTab.tabId} tab={activeTab} />}
       </div>
+      <CommandPalette />
     </div>
   )
 }

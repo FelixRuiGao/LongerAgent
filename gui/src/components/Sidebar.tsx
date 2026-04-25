@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Plus, FolderOpen, X } from 'lucide-react'
 import { useSessionStore } from '@/state/sessionStore.js'
 import type { SessionTab } from '@shared/rpc.js'
 import { cn } from '@/lib/cn.js'
 import { api } from '@/lib/api.js'
+import { projectName, shortenSummary } from '@/lib/path.js'
 
 export function Sidebar(): JSX.Element {
   const tabs = useSessionStore((s) => s.tabs)
@@ -74,6 +75,9 @@ export function Sidebar(): JSX.Element {
               perTab={perTab}
               onSelect={setActive}
               onClose={closeTab}
+              workDirForCurrent={
+                items.find((t) => t.tabId === activeTabId)?.workDir ?? workDir
+              }
             />
           ))
         )}
@@ -89,13 +93,14 @@ function SessionGroup(props: {
   perTab: ReturnType<typeof useSessionStore.getState>['perTab']
   onSelect: (id: string) => void
   onClose: (id: string) => void
+  workDirForCurrent: string
 }): JSX.Element {
-  const { workDir, items, activeTabId, perTab, onSelect, onClose } = props
+  const { workDir, items, activeTabId, perTab, onSelect, onClose, workDirForCurrent } = props
   return (
     <div className="mb-3 last:mb-0">
       <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-muted">
         <FolderOpen className="h-3 w-3" />
-        <span className="truncate">{deriveProjectName(workDir)}</span>
+        <span className="truncate">{projectName(workDir)}</span>
       </div>
       <ul className="space-y-0.5">
         {items.map((t) => {
@@ -132,7 +137,7 @@ function SessionGroup(props: {
                     {t.title || t.displayName || 'Untitled session'}
                   </div>
                   <div className="mt-0.5 truncate text-[10.5px] text-fg-3">
-                    {summarizeStatus(status, ask ?? null)}
+                    {summarizeStatus(status, ask ?? null, workDirForCurrent)}
                   </div>
                 </div>
                 <button
@@ -183,38 +188,15 @@ function StatusDot({
 function summarizeStatus(
   status: { currentTurnRunning: boolean; lastToolCallSummary: string; sessionPhase: string } | null | undefined,
   ask: { kind: string } | null,
+  workDir?: string,
 ): string {
   if (ask) return ask.kind === 'approval' ? 'Awaiting approval' : 'Awaiting answer'
   if (!status) return 'Idle'
   if (status.currentTurnRunning) {
-    if (status.lastToolCallSummary) return shortenSummary(status.lastToolCallSummary)
+    if (status.lastToolCallSummary) return shortenSummary(status.lastToolCallSummary, workDir)
     return capitalize(status.sessionPhase) || 'Working'
   }
   return 'Idle'
-}
-
-function shortenSummary(s: string): string {
-  // Tool-call summaries often contain absolute paths. Replace home-prefix
-  // with `~`, keep only basename of paths.
-  return s
-    .replace(new RegExp(`(${escapeRegex(homePrefix())}/[^\\s]+)`, 'g'), (full) => {
-      const base = full.split('/').pop() ?? full
-      return base
-    })
-    .replace(/\s+/g, ' ')
-}
-
-let cachedHome: string | null = null
-function homePrefix(): string {
-  if (cachedHome) return cachedHome
-  // Best-effort; renderer can't access process.env. Use a path token only
-  // to ensure replacement when the agent is summarizing absolute paths.
-  cachedHome = '/Users/'
-  return cachedHome
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function capitalize(s: string): string {
@@ -236,7 +218,3 @@ function groupByWorkDir(tabs: readonly SessionTab[]): Array<[string, SessionTab[
   )
 }
 
-function deriveProjectName(workDir: string): string {
-  const segs = workDir.split('/').filter(Boolean)
-  return segs[segs.length - 1] ?? workDir
-}

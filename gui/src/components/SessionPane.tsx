@@ -45,7 +45,11 @@ export function SessionPane({ tab }: { tab: SessionTab }): JSX.Element {
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
       <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto">
-        <Transcript entries={state?.logEntries ?? []} activeId={state?.activeLogEntryId ?? null} />
+        <Transcript
+          entries={state?.logEntries ?? []}
+          activeId={state?.activeLogEntryId ?? null}
+          workDir={tab.workDir}
+        />
       </div>
       <AskBar tab={tab} />
       <StatusBar tab={tab} state={state ?? null} />
