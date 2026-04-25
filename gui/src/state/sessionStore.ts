@@ -94,9 +94,24 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       handleEvent(e)
     })
 
-    // Restore existing tabs (none initially in fresh process, but harmless)
+    // Restore existing tabs (after a renderer reload, the main process still
+    // has live subprocesses we should re-attach to).
     const tabs = await api.tabs.list()
-    set({ tabs })
+    const perTab = { ...get().perTab }
+    for (const t of tabs) {
+      perTab[t.tabId] = { ...emptyTabState }
+    }
+    set({
+      tabs,
+      perTab,
+      activeTabId: get().activeTabId ?? tabs[0]?.tabId ?? null,
+    })
+    for (const t of tabs) {
+      void get().refreshMeta(t.tabId)
+      void get().refreshLog(t.tabId)
+      void get().refreshStatus(t.tabId)
+      void get().refreshModels(t.tabId)
+    }
   },
 
   setTheme(theme) {

@@ -10,6 +10,7 @@
 import { useMemo } from 'react'
 import { User, Wrench, Terminal, Sparkles, AlertTriangle, FileEdit, Search, Brain } from 'lucide-react'
 import { cn } from '@/lib/cn.js'
+import { Markdown } from '@/components/Markdown.js'
 
 interface LogEntry {
   id: string
@@ -129,13 +130,13 @@ function AssistantText({ text, active }: { text: string; active: boolean }): JSX
       <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
         <Sparkles className="h-3.5 w-3.5" />
       </div>
-      <div
-        className={cn(
-          'flex-1 text-[13.5px] leading-[1.65] text-fg whitespace-pre-wrap break-words',
-          active && 'after:ml-1 after:inline-block after:h-3.5 after:w-1.5 after:translate-y-0.5 after:bg-accent/70',
-        )}
-      >
-        {text}
+      <div className="min-w-0 flex-1">
+        <Markdown
+          text={text}
+          className={cn(
+            active && 'after:ml-1 after:inline-block after:h-3.5 after:w-1.5 after:translate-y-0.5 after:bg-accent/70',
+          )}
+        />
       </div>
     </div>
   )
@@ -148,13 +149,10 @@ function Reasoning({ text, active }: { text: string; active: boolean }): JSX.Ele
       <div className="-ml-10 mt-1 flex h-7 w-7 shrink-0 items-center justify-center text-fg-3">
         <Brain className="h-3.5 w-3.5" />
       </div>
-      <div
-        className={cn(
-          'flex-1 text-[12.5px] italic leading-[1.6] text-fg-3 whitespace-pre-wrap break-words',
-          active && 'shimmer-text not-italic',
-        )}
-      >
-        {text}
+      <div className="min-w-0 flex-1 text-[12.5px] italic leading-[1.6] text-fg-3">
+        <div className={cn('whitespace-pre-wrap break-words', active && 'shimmer-text not-italic')}>
+          {text}
+        </div>
       </div>
     </div>
   )
@@ -164,25 +162,30 @@ function ToolCall({ entry, active }: { entry: LogEntry; active: boolean }): JSX.
   const meta = entry.meta as Record<string, unknown> | undefined
   const toolName = (meta?.['toolName'] as string) ?? 'tool'
   const Icon = pickToolIcon(toolName)
+  // entry.display already encodes "<toolName> <args>". Don't duplicate the
+  // tool name — split it into a label + remainder so the label can shimmer
+  // independently while running.
+  const display = entry.display ?? toolName
+  const space = display.indexOf(' ')
+  const label = space > 0 ? display.slice(0, space) : display
+  const rest = space > 0 ? display.slice(space + 1) : ''
 
   return (
-    <div className="flex items-start gap-3 pl-10 -mt-1">
-      <div className="-ml-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-fg-3">
+    <div className="flex items-start gap-3 pl-10">
+      <div className="-ml-10 mt-1 flex h-7 w-7 shrink-0 items-center justify-center text-fg-3">
         <Icon className="h-3.5 w-3.5" />
       </div>
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 py-0.5">
         <div
           className={cn(
-            'inline-flex max-w-full items-baseline gap-2 rounded-md px-2.5 py-1 font-mono text-[11.5px]',
-            active
-              ? 'bg-bg-1 text-fg'
-              : 'text-fg-2',
+            'inline-flex max-w-full items-baseline gap-2 rounded-md font-mono text-[11.5px]',
+            active && 'text-fg',
           )}
         >
-          <span className={cn('font-medium', active && 'shimmer-text')}>
-            {toolName}
+          <span className={cn('font-medium', active ? 'shimmer-text' : 'text-fg-2')}>
+            {label}
           </span>
-          <span className="truncate text-fg-3">{entry.display ?? ''}</span>
+          {rest && <span className="truncate text-fg-3">{rest}</span>}
         </div>
       </div>
     </div>

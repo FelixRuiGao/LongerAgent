@@ -27,19 +27,25 @@ export function StatusBar({ tab, state }: { tab: SessionTab; state: TabState | n
       <span className="ml-auto inline-flex items-center gap-3 text-muted">
         {status && status.lifetimeToolCallCount > 0 && (
           <span>
-            <span className="text-fg-3">{status.lifetimeToolCallCount}</span> tools
+            <span className="text-fg-3">{status.lifetimeToolCallCount}</span>
+            <span className="text-muted"> tools</span>
           </span>
         )}
-        {ctxBudget > 0 && (
-          <span>
+        {ctxBudget >= 10_000 && (
+          <span title={`${used.toLocaleString()} / ${ctxBudget.toLocaleString()} tokens`}>
             <span className="text-fg-3">{formatTokens(used)}</span>
             <span className="text-muted"> / </span>
             <span>{formatTokens(ctxBudget)}</span>
-            <span className="text-muted"> ({pct}%)</span>
+            <span className="text-muted"> · {pct}%</span>
           </span>
         )}
         {meta?.thinkingLevel && meta.thinkingLevel !== 'none' && (
-          <span className="font-mono text-fg-3">{meta.thinkingLevel}</span>
+          <span
+            className="font-mono text-fg-3"
+            title={`Thinking effort: ${meta.thinkingLevel}`}
+          >
+            {meta.thinkingLevel}
+          </span>
         )}
       </span>
     </div>

@@ -3,6 +3,7 @@ import { useSessionStore } from '@/state/sessionStore.js'
 import { Composer } from '@/components/Composer.js'
 import { Transcript } from '@/components/Transcript.js'
 import { StatusBar } from '@/components/StatusBar.js'
+import { AskBar } from '@/components/ApprovalCard.js'
 import type { SessionTab } from '@shared/rpc.js'
 
 export function SessionPane({ tab }: { tab: SessionTab }): JSX.Element {
@@ -46,6 +47,7 @@ export function SessionPane({ tab }: { tab: SessionTab }): JSX.Element {
       <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto">
         <Transcript entries={state?.logEntries ?? []} activeId={state?.activeLogEntryId ?? null} />
       </div>
+      <AskBar tab={tab} />
       <StatusBar tab={tab} state={state ?? null} />
       <Composer
         tab={tab}

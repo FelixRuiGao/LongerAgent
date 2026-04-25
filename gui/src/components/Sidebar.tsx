@@ -30,11 +30,18 @@ export function Sidebar(): JSX.Element {
   }
 
   return (
-    <aside className="hairline-r flex w-[260px] shrink-0 flex-col bg-bg/30 backdrop-blur-sm">
-      <div className="flex h-12 items-center justify-between px-4">
-        <span className="text-[10.5px] font-medium uppercase tracking-[0.16em] text-fg-3">
-          Sessions
-        </span>
+    <aside className="hairline-r flex w-[268px] shrink-0 flex-col bg-bg/30 backdrop-blur-sm">
+      <div className="flex h-12 shrink-0 items-center justify-between px-4">
+        <div className="flex items-baseline gap-2">
+          <span className="text-[10.5px] font-medium uppercase tracking-[0.16em] text-fg-3">
+            Sessions
+          </span>
+          {tabs.length > 0 && (
+            <span className="font-mono text-[10px] text-muted">
+              {tabs.length}
+            </span>
+          )}
+        </div>
         <button
           onClick={onNewSession}
           disabled={creating}
@@ -44,7 +51,7 @@ export function Sidebar(): JSX.Element {
             creating && 'opacity-50',
           )}
           aria-label="New session"
-          title="New session"
+          title="New session (⌘N)"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -98,10 +105,18 @@ function SessionGroup(props: {
           const ask = state?.pendingAsk
           return (
             <li key={t.tabId}>
-              <button
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => onSelect(t.tabId)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelect(t.tabId)
+                  }
+                }}
                 className={cn(
-                  'group relative flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition',
+                  'group relative flex w-full cursor-pointer items-start gap-2 rounded-md px-3 py-2 text-left transition',
                   active
                     ? 'bg-accent-soft text-fg'
                     : 'text-fg-2 hover:bg-bg-1 hover:text-fg',
@@ -134,7 +149,7 @@ function SessionGroup(props: {
                 >
                   <X className="h-3 w-3" />
                 </button>
-              </button>
+              </div>
             </li>
           )
         })}
@@ -172,10 +187,34 @@ function summarizeStatus(
   if (ask) return ask.kind === 'approval' ? 'Awaiting approval' : 'Awaiting answer'
   if (!status) return 'Idle'
   if (status.currentTurnRunning) {
-    if (status.lastToolCallSummary) return status.lastToolCallSummary
+    if (status.lastToolCallSummary) return shortenSummary(status.lastToolCallSummary)
     return capitalize(status.sessionPhase) || 'Working'
   }
   return 'Idle'
+}
+
+function shortenSummary(s: string): string {
+  // Tool-call summaries often contain absolute paths. Replace home-prefix
+  // with `~`, keep only basename of paths.
+  return s
+    .replace(new RegExp(`(${escapeRegex(homePrefix())}/[^\\s]+)`, 'g'), (full) => {
+      const base = full.split('/').pop() ?? full
+      return base
+    })
+    .replace(/\s+/g, ' ')
+}
+
+let cachedHome: string | null = null
+function homePrefix(): string {
+  if (cachedHome) return cachedHome
+  // Best-effort; renderer can't access process.env. Use a path token only
+  // to ensure replacement when the agent is summarizing absolute paths.
+  cachedHome = '/Users/'
+  return cachedHome
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function capitalize(s: string): string {
