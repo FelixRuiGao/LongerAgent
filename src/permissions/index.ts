@@ -1,4 +1,4 @@
-export { classifyTool } from "./classify.js";
+export { classifyTool, classifyToolAsync, initBashParser } from "./classify.js";
 export { PermissionRuleStore } from "./rules.js";
 export { PermissionAdvisor } from "./advisor.js";
 export type {

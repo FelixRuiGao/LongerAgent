@@ -33,6 +33,7 @@ export async function runHookCommand(
     try {
       child = spawn(manifest.command, manifest.args ?? [], {
         env,
+        cwd: process.cwd(),
         stdio: ["pipe", "pipe", "pipe"],
         timeout: timeoutMs,
       });

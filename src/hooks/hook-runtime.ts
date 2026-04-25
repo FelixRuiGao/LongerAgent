@@ -167,13 +167,15 @@ export class HookRuntime {
       if (hook.disabled) return false;
       if (!hook.matcher) return true;
 
-      // Tool name matching
-      if (hook.matcher.toolNames && payload.toolName) {
+      // Tool name matching — if hook requires toolNames but event has none, skip
+      if (hook.matcher.toolNames) {
+        if (!payload.toolName) return false;
         if (!hook.matcher.toolNames.includes(payload.toolName)) return false;
       }
 
-      // Agent ID matching
-      if (hook.matcher.agentIds && payload.agentId) {
+      // Agent ID matching — if hook requires agentIds but event has none, skip
+      if (hook.matcher.agentIds) {
+        if (!payload.agentId) return false;
         if (!hook.matcher.agentIds.includes(payload.agentId)) return false;
       }
 

@@ -194,6 +194,15 @@ async function ensureMcpSdk(): Promise<boolean> {
  * Each server's tools are namespaced as `mcp__<server>__<tool>`
  * to avoid collisions with built-in Vigil tools.
  */
+export type McpServerState = "disconnected" | "connecting" | "connected" | "failed";
+
+export interface McpServerStatus {
+  name: string;
+  state: McpServerState;
+  toolCount: number;
+  error?: string;
+}
+
 export class MCPClientManager {
   private _configs: MCPServerConfig[];
   private _configByName: Map<string, MCPServerConfig>;
@@ -203,6 +212,8 @@ export class MCPClientManager {
   private _toolServer: Map<string, string> = new Map();  // namespaced -> server name
   private _toolOriginal: Map<string, string> = new Map();// namespaced -> original name
   private _serverTools: Map<string, string[]> = new Map();// server -> [namespaced names]
+  private _serverState: Map<string, McpServerState> = new Map();
+  private _serverError: Map<string, string> = new Map();
   private _connected = false;
 
   constructor(serverConfigs: MCPServerConfig[]) {
@@ -234,9 +245,14 @@ export class MCPClientManager {
 
     for (const cfg of this._configs) {
       if (this._clients.has(cfg.name)) continue;
+      this._serverState.set(cfg.name, "connecting");
       try {
         await this._connectServer(cfg);
+        this._serverState.set(cfg.name, "connected");
+        this._serverError.delete(cfg.name);
       } catch (err) {
+        this._serverState.set(cfg.name, "failed");
+        this._serverError.set(cfg.name, err instanceof Error ? err.message : String(err));
         console.error(`Failed to connect to MCP server '${cfg.name}':`, err);
       }
     }
@@ -357,6 +373,16 @@ export class MCPClientManager {
     }
   }
 
+  /** Get status of all configured servers. */
+  getServerStatuses(): McpServerStatus[] {
+    return this._configs.map((cfg) => ({
+      name: cfg.name,
+      state: this._serverState.get(cfg.name) ?? "disconnected",
+      toolCount: this._serverTools.get(cfg.name)?.length ?? 0,
+      error: this._serverError.get(cfg.name),
+    }));
+  }
+
   /** Execute an MCP tool and return a Vigil ToolResult. */
   async callTool(
     namespacedName: string,
@@ -373,6 +399,7 @@ export class MCPClientManager {
         client = this._clients.get(serverName);
       }
       if (!client) {
+        this._serverState.set(serverName, "failed");
         return new ToolResult({ content: `ERROR: MCP server '${serverName}' is not connected` });
       }
     }
@@ -395,22 +422,34 @@ export class MCPClientManager {
       const result = await client.callTool({ name: originalName, arguments: args });
       return new ToolResult({ content: extractText(result) });
     } catch (err) {
-      // Connection may be stale — try one reconnect
-      console.warn(`MCP tool '${originalName}' failed, attempting reconnect:`, err);
-      if (await this._reconnectServer(serverName)) {
-        client = this._clients.get(serverName);
-        if (client) {
-          try {
-            const result = await client.callTool({ name: originalName, arguments: args });
-            return new ToolResult({ content: extractText(result) });
-          } catch (e2) {
-            return new ToolResult({
-              content: `ERROR: MCP tool '${originalName}' failed after reconnect: ${e2}`,
-            });
+      // Distinguish connection errors from tool execution errors
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const isConnectionError = /ECONNREFUSED|EPIPE|ENOTFOUND|ETIMEDOUT|transport|disconnect/i.test(errMsg);
+
+      if (isConnectionError) {
+        console.warn(`MCP server '${serverName}' connection lost, attempting reconnect`);
+        this._serverState.set(serverName, "connecting");
+        if (await this._reconnectServer(serverName)) {
+          this._serverState.set(serverName, "connected");
+          client = this._clients.get(serverName);
+          if (client) {
+            try {
+              const result = await client.callTool({ name: originalName, arguments: args });
+              return new ToolResult({ content: extractText(result) });
+            } catch (e2) {
+              this._serverState.set(serverName, "failed");
+              return new ToolResult({
+                content: `ERROR: MCP tool '${originalName}' failed after reconnect: ${e2}`,
+              });
+            }
           }
         }
+        this._serverState.set(serverName, "failed");
+        return new ToolResult({ content: `ERROR: MCP server '${serverName}' connection lost: ${errMsg}` });
       }
-      return new ToolResult({ content: `ERROR: MCP tool '${originalName}' failed: ${err}` });
+
+      // Tool execution error — don't reconnect, just report
+      return new ToolResult({ content: `ERROR: MCP tool '${originalName}' failed: ${errMsg}` });
     }
   }
 

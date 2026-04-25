@@ -1576,11 +1576,28 @@ async function cmdMcp(ctx: CommandContext): Promise<void> {
     byServer.get(server)!.push(originalName);
   }
 
+  // Show server statuses if available
+  const statuses = typeof mcpManager.getServerStatuses === "function"
+    ? mcpManager.getServerStatuses()
+    : null;
+
   const lines: string[] = [`MCP: ${byServer.size} server(s), ${allTools.length} tool(s)\n`];
   for (const [server, tools] of byServer) {
-    lines.push(`  ${server} (${tools.length} tools)`);
+    const status = statuses?.find((s: any) => s.name === server);
+    const stateLabel = status ? ` [${status.state}]` : "";
+    const errorLabel = status?.error ? ` (${status.error})` : "";
+    lines.push(`  ${server}${stateLabel}${errorLabel} (${tools.length} tools)`);
     for (const t of tools) {
       lines.push(`    - ${t}`);
+    }
+  }
+
+  // Show failed servers that have no tools
+  if (statuses) {
+    for (const s of statuses) {
+      if (!byServer.has(s.name) && s.state === "failed") {
+        lines.push(`  ${s.name} [failed] (${s.error ?? "unknown error"})`);
+      }
     }
   }
 
@@ -1665,12 +1682,20 @@ export function registerSkillCommands(
   registry: CommandRegistry,
   skills: ReadonlyMap<string, SkillMeta>,
 ): void {
-  for (const skill of skills.values()) {
+  const sortedSkills = [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));
+  for (const skill of sortedSkills) {
     if (!skill.userInvocable) continue;
+
+    // Skip skills whose name conflicts with built-in commands
+    const cmdName = "/" + skill.name;
+    if (registry.lookup(cmdName)) {
+      console.warn(`Skill "${skill.name}" skipped: conflicts with built-in command ${cmdName}`);
+      continue;
+    }
 
     const captured = skill; // capture for closure
     registry.register({
-      name: "/" + captured.name,
+      name: cmdName,
       description: captured.description,
       handler: async (ctx: CommandContext, args: string) => {
         const content = resolveSkillContent(captured, args);

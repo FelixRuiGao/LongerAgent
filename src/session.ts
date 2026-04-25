@@ -78,7 +78,7 @@ import {
   type GateAdvisor,
 } from "./tool-runtime.js";
 import { BackgroundShellManager } from "./background-shell-manager.js";
-import { PermissionAdvisor, PermissionRuleStore, classifyTool, type PermissionMode } from "./permissions/index.js";
+import { PermissionAdvisor, PermissionRuleStore, classifyTool, classifyToolAsync, initBashParser, type PermissionMode } from "./permissions/index.js";
 import { HookRuntime, type HookEvent, type HookPayload } from "./hooks/index.js";
 import { assembleFullSystemPrompt } from "./prompt-assembler.js";
 import {
@@ -889,6 +889,15 @@ export class Session {
     this._ensureSkillTool();
     this._persistedModelSelection = this._buildPersistedModelSelection();
     this._updateInitialTokenEstimate();
+
+    // Init tree-sitter bash parser (async, non-blocking)
+    initBashParser();
+
+    // Fire SessionStart hook (fire-and-forget)
+    this.hookRuntime.fireAndForget("SessionStart", {
+      event: "SessionStart",
+      timestamp: Date.now(),
+    });
   }
 
   private _buildPersistedModelSelection(
@@ -2843,7 +2852,7 @@ export class Session {
       case "deny":
         return { kind: "deny", message: decision.message };
       case "ask": {
-        const assessment = classifyTool(ctx.toolName, ctx.toolArgs);
+        const assessment = await classifyToolAsync(ctx.toolName, ctx.toolArgs);
         const offers = this._permissionAdvisor["_buildOffers"](assessment);
         const options = offers.map((o: any) => o.label);
         options.push("Deny");
@@ -2885,6 +2894,10 @@ export class Session {
       const hookResult = await this.hookRuntime.evaluate("PreToolUse", hookPayload);
       if (hookResult.decision === "deny") {
         return { kind: "deny", message: hookResult.denyReason ?? "Denied by hook" };
+      }
+      // Apply updatedInput from hooks (merge into tool args)
+      if (hookResult.updatedInput) {
+        Object.assign(ctx.toolArgs, hookResult.updatedInput);
       }
     }
 
@@ -3760,14 +3773,22 @@ export class Session {
       this._recordSessionEvent(summary);
     };
 
-    let onToolResult: ((name: string, tool: string, toolCallId: string, isError: boolean, summary: string) => void) | undefined;
-    if (this._progress) {
-      const step = this._turnCount;
-      const progress = this._progress;
-      onToolResult = (name: string, tool: string, toolCallId: string, isError: boolean, summary: string) => {
-        progress.onToolResult(step, name, tool, toolCallId, isError, summary);
-      };
-    }
+    const onToolResult = (name: string, tool: string, toolCallId: string, isError: boolean, summary: string) => {
+      if (this._progress) {
+        this._progress.onToolResult(this._turnCount, name, tool, toolCallId, isError, summary);
+      }
+      // Fire PostToolUse / PostToolUseFailure hooks
+      if (this.hookRuntime.hooks.length > 0) {
+        const event = isError ? "PostToolUseFailure" : "PostToolUse";
+        this.hookRuntime.fireAndForget(event, {
+          event,
+          timestamp: Date.now(),
+          toolName: tool,
+          toolCallId,
+          agentId: name,
+        });
+      }
+    };
 
     // Streaming tool call callbacks — set active entry for early display
     const onToolCallPartialCb = (_callId: string, _name: string, _rawArguments: string) => {
@@ -4679,6 +4700,11 @@ export class Session {
     if (!this._cachedSystemPrompt) {
       this._cachedSystemPrompt = this._assembleSystemPrompt();
     }
+    // Append hook additional context (dynamic, not cached)
+    const hookCtx = this.hookRuntime.getAdditionalContext();
+    if (hookCtx) {
+      return this._cachedSystemPrompt + "\n\n" + hookCtx;
+    }
     return this._cachedSystemPrompt;
   }
 
@@ -5052,6 +5078,12 @@ export class Session {
   ): ChildSessionHandle {
     const handle = this._instantiateChildSession(taskId, templateLabel, mode, teamId, agent);
     this._saveChildSession(handle);
+    // Fire SubagentStart hook
+    this.hookRuntime.fireAndForget("SubagentStart", {
+      event: "SubagentStart",
+      timestamp: Date.now(),
+      agentId: taskId,
+    });
     return handle;
   }
 
@@ -5096,6 +5128,13 @@ export class Session {
     handle.abortController = null;
     handle.turnPromise = null;
     handle.lastActivityAt = Date.now();
+
+    // Fire SubagentStop hook
+    this.hookRuntime.fireAndForget("SubagentStop", {
+      event: "SubagentStop",
+      timestamp: Date.now(),
+      agentId: handle.id,
+    });
 
     // Determine outcome from error / endStatus
     const endStatus = error ? "error" : handle.session.lastTurnEndStatus;
@@ -6217,6 +6256,7 @@ export class Session {
 
     // 9. Fire Stop hooks (fire-and-forget)
     this.hookRuntime.fireAndForget("Stop", { event: "Stop", timestamp: Date.now() });
+    this.hookRuntime.fireAndForget("SessionEnd", { event: "SessionEnd", timestamp: Date.now() });
 
     // 10. Close MCP connections
     if (this._mcpManager) {

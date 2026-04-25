@@ -1,15 +1,37 @@
 /**
- * Tool classification — maps a tool call to a PermissionClass.
+ * Tool classification -- maps a tool call to a PermissionClass.
  *
- * Static classification for built-in tools, plus bash command analysis
- * with catastrophic pattern detection and safe-command whitelist.
+ * Uses tree-sitter-bash for AST-accurate bash command parsing when available,
+ * with a regex fallback for environments where tree-sitter is not loaded.
  *
- * The bash analysis is intentionally simple (regex-based). The interface
- * (InvocationAssessment) supports upgrading to a full parser later —
- * only the internals of classifyBashCommand() need to change.
+ * Four bash risk tiers with git subcommand awareness:
+ *   safe -> write_reversible -> write_potent -> write_danger -> catastrophic
+ *
+ * Safe command list synthesized from Claude Code, Codex CLI, and Fermi.
  */
 
 import type { InvocationAssessment, PermissionClass } from "./types.js";
+import type { BashParseResult, ParsedBashCommand, ParsedBashSegment } from "./bash/types.js";
+
+// ------------------------------------------------------------------
+// Tree-sitter parser (lazy async init)
+// ------------------------------------------------------------------
+
+let parserReady: Promise<typeof import("./bash/parser.js")> | null = null;
+let parserModule: typeof import("./bash/parser.js") | null = null;
+
+export function initBashParser(): void {
+  if (parserReady) return;
+  parserReady = import("./bash/parser.js").then(async (mod) => {
+    await mod.getParser();
+    parserModule = mod;
+    return mod;
+  }).catch((err) => {
+    console.warn("tree-sitter bash parser unavailable, using regex fallback:", err);
+    parserModule = null;
+    return null as any;
+  });
+}
 
 // ------------------------------------------------------------------
 // Static tool classification
@@ -28,7 +50,7 @@ const WRITE_REVERSIBLE_TOOLS = new Set([
 ]);
 
 const SPAWN_TOOLS = new Set([
-  "spawn", "spawn_file",
+  "spawn",
 ]);
 
 const WRITE_DANGER_TOOLS = new Set([
@@ -36,94 +58,144 @@ const WRITE_DANGER_TOOLS = new Set([
 ]);
 
 // ------------------------------------------------------------------
-// Bash safe-command whitelist
+// Bash safe-command whitelist (always auto-allowed)
 // ------------------------------------------------------------------
 
 const BASH_SAFE_COMMANDS = new Set([
-  // Read-only inspection
-  "ls", "ll", "la", "dir", "tree", "find", "locate",
-  "cat", "head", "tail", "less", "more", "wc", "file",
-  "stat", "readlink", "realpath", "basename", "dirname",
-  "pwd", "whoami", "hostname", "uname", "arch", "date",
-  "which", "where", "whence", "type", "command",
-  "echo", "printf",
-  "env", "printenv", "set",
-  "id", "groups",
-  "df", "du", "free", "uptime", "ps", "top",
-  // Version/help
-  "node", "deno", "bun", "python", "python3", "ruby", "go", "java", "javac",
-  "rustc", "cargo", "gcc", "g++", "clang", "clang++", "make", "cmake",
-  // Package managers (read/install — not global)
-  "npm", "npx", "pnpm", "yarn", "pip", "pip3", "uv",
-  "gem", "bundle", "composer", "brew",
-  "cargo", "go",
-  // VCS
-  "git", "hg", "svn",
-  // Build/test runners
-  "tsc", "esbuild", "vite", "webpack", "rollup", "parcel",
-  "jest", "vitest", "mocha", "pytest", "unittest",
-  "eslint", "prettier", "biome", "oxlint",
-  // Containers (inspect)
-  "docker", "podman", "kubectl",
-  // Text processing
+  "ls", "ll", "la", "dir", "cat", "head", "tail", "less", "more",
+  "wc", "file", "stat", "readlink", "realpath", "basename", "dirname",
+  "tree",
   "grep", "egrep", "fgrep", "rg", "ag", "ack",
-  "sed", "awk", "cut", "sort", "uniq", "tr", "diff", "patch",
-  "jq", "yq", "xmllint", "xsltproc",
-  // Network (read)
-  "curl", "wget", "ping", "dig", "nslookup", "host",
-  // Misc safe
-  "true", "false", "test", "[", "[[",
-  "sleep", "seq", "yes", "tee", "xargs",
-  "tar", "gzip", "gunzip", "bzip2", "xz", "unzip", "zip",
-  "md5sum", "sha256sum", "shasum", "openssl",
-  "ssh-keygen",
+  "pwd", "whoami", "hostname", "uname", "arch", "id", "groups",
+  "which", "where", "whence", "type", "command",
+  "echo", "printf", "true", "false", "test", "[", "[[", "expr", "seq",
+  "sort", "uniq", "cut", "tr", "paste", "nl", "rev", "fmt",
+  "comm", "cmp", "diff",
+  "jq", "yq",
+  "date", "env", "printenv", "uptime", "ps", "df", "du", "free",
+  "lsof", "pgrep", "tput",
+  "md5sum", "sha256sum", "shasum", "base64",
+  "sleep", "tee",
 ]);
 
-// ------------------------------------------------------------------
-// Bash danger-command list (not catastrophic, but risky)
-// ------------------------------------------------------------------
+const BASH_REVERSIBLE_COMMANDS = new Set([
+  "mkdir", "touch", "cp", "mv", "ln",
+]);
 
 const BASH_DANGER_COMMANDS = new Set([
+  "rm", "rmdir",
+  "sudo", "su", "doas",
+  "chmod", "chown", "chgrp",
   "kill", "killall", "pkill",
   "reboot", "shutdown", "halt", "poweroff", "init",
   "mount", "umount",
   "iptables", "ip6tables", "nft",
   "systemctl", "service", "launchctl",
   "useradd", "userdel", "usermod", "groupadd", "groupdel",
-  "passwd", "chown", "chgrp",
+  "passwd",
   "crontab",
+]);
+
+const BASH_POTENT_COMMANDS = new Set([
+  "npm", "npx", "pnpm", "yarn", "bun",
+  "pip", "pip3", "uv",
+  "cargo", "go",
+  "python", "python3", "node", "deno",
+  "ruby", "gem", "bundle",
+  "java", "javac", "gradle", "mvn",
+  "gcc", "g++", "clang", "clang++",
+  "make", "cmake",
+  "rustc",
+  "docker", "podman", "kubectl",
+  "bash", "sh", "zsh",
+  "sed", "awk", "xargs",
+  "curl", "wget",
+  "tar", "gzip", "gunzip", "bzip2", "xz", "unzip", "zip",
   "scp", "rsync", "sftp",
-  "sudo", "su", "doas",
+  "tsc", "esbuild", "vite", "webpack", "rollup", "parcel",
+  "jest", "vitest", "mocha", "pytest",
+  "eslint", "prettier", "biome",
+  "brew", "apt", "apt-get", "yum", "dnf", "pacman",
+  "ssh-keygen",
+  "openssl",
 ]);
 
 // ------------------------------------------------------------------
-// Bash catastrophic patterns
+// Process wrappers -- stripped before classification
 // ------------------------------------------------------------------
 
-const CATASTROPHIC_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--force\b|-[a-zA-Z]*f[a-zA-Z]*r)\s+.*(\s+\/\s*$|\s+\/\s|\s+"\/")/, reason: "rm -rf targeting root" },
-  { pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--force\b|-[a-zA-Z]*f[a-zA-Z]*r)\s+~\s*$/, reason: "rm -rf targeting home" },
-  { pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--force\b|-[a-zA-Z]*f[a-zA-Z]*r)\s+\$HOME\b/, reason: "rm -rf targeting $HOME" },
-  { pattern: /\bdd\s+.*\bof\s*=\s*\/dev\//, reason: "dd writing to device" },
-  { pattern: /\b(mkfs|fdisk|parted|wipefs|shred)\b/, reason: "disk formatting/destruction tool" },
-  { pattern: /\bchmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?(000|777)\s+(\/\s*$|\/\s|~)/, reason: "recursive chmod on root/home" },
-  { pattern: /--no-preserve-root/, reason: "--no-preserve-root flag" },
-  { pattern: /\b(rm|del)\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--force\b)\s+\.\.\s*$/, reason: "rm -rf targeting parent directory" },
+const PROCESS_WRAPPERS = new Set([
+  "timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin",
+]);
+
+// ------------------------------------------------------------------
+// Git subcommand classification
+// ------------------------------------------------------------------
+
+const GIT_SAFE_SUBCOMMANDS = new Set([
+  "status", "log", "diff", "show", "branch",
+  "rev-parse", "remote", "tag",
+  "stash",
+  "ls-files", "ls-tree", "ls-remote",
+  "describe", "shortlog", "blame", "annotate",
+  "config",
+  "reflog",
+  "name-rev", "rev-list",
+  "cat-file", "hash-object",
+  "count-objects", "fsck", "verify-pack",
+  "for-each-ref",
+  "worktree",
+]);
+
+const GIT_REVERSIBLE_SUBCOMMANDS = new Set([
+  "add", "commit", "fetch", "pull",
+  "stash",
+  "switch",
+  "checkout",
+  "merge",
+  "cherry-pick",
+  "init",
+]);
+
+const GIT_DANGER_SUBCOMMANDS = new Set([
+  "push", "reset", "clean", "rebase",
+]);
+
+const GIT_FORCE_FLAGS = new Set([
+  "--force", "-f", "--force-with-lease", "--hard", "--no-preserve-root",
+]);
+
+const GIT_DELETE_FLAGS = new Set([
+  "-D", "-d", "--delete",
+]);
+
+// ------------------------------------------------------------------
+// Catastrophic patterns (regex -- checked before parsing)
+// ------------------------------------------------------------------
+
+const CATASTROPHIC_PATTERNS: Array<{ pattern: RegExp }> = [
+  { pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--force\b|-[a-zA-Z]*f[a-zA-Z]*r)\s+\/(\s|$)/ },
+  { pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--force\b|-[a-zA-Z]*f[a-zA-Z]*r)\s+"?\/"/ },
+  { pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--force\b|-[a-zA-Z]*f[a-zA-Z]*r)\s+~(\s|$)/ },
+  { pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--force\b|-[a-zA-Z]*f[a-zA-Z]*r)\s+\$HOME\b/ },
+  { pattern: /\bdd\s+.*\bof\s*=\s*\/dev\// },
+  { pattern: /\b(mkfs|fdisk|parted|wipefs|shred)\b/ },
+  { pattern: /\bchmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?(000|777)\s+(\/\s*$|\/\s|~)/ },
+  { pattern: /--no-preserve-root/ },
+  { pattern: /\b(rm|del)\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--force\b)\s+\.\.\s*$/ },
 ];
 
 // ------------------------------------------------------------------
-// classifyTool — main entry point
+// classifyTool -- main entry point
 // ------------------------------------------------------------------
 
 export function classifyTool(
   toolName: string,
   toolArgs: Record<string, unknown>,
 ): InvocationAssessment {
-  // MCP tools — default to potent
   if (toolName.startsWith("mcp__")) {
     return { permissionClass: "write_potent", toolName, canMemoize: true };
   }
-
   if (READ_TOOLS.has(toolName)) {
     return { permissionClass: "read", toolName };
   }
@@ -142,58 +214,249 @@ export function classifyTool(
     return classifyBashCommand(toolName, command);
   }
 
-  // Unknown tool — default to potent
   return { permissionClass: "write_potent", toolName, canMemoize: true };
 }
 
-// ------------------------------------------------------------------
-// Bash command classification
-// ------------------------------------------------------------------
+/**
+ * Async classification that uses tree-sitter when available.
+ * Falls back to sync regex classification.
+ */
+export async function classifyToolAsync(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+): Promise<InvocationAssessment> {
+  if (toolName !== "bash" && toolName !== "bash_background") {
+    return classifyTool(toolName, toolArgs);
+  }
 
-function classifyBashCommand(toolName: string, command: string): InvocationAssessment {
-  const trimmed = command.trim();
-  if (!trimmed) {
+  const command = typeof toolArgs["command"] === "string" ? toolArgs["command"] : "";
+  if (!command.trim()) {
     return { permissionClass: "write_potent", toolName };
   }
 
-  // Check catastrophic patterns first
-  for (const { pattern, reason } of CATASTROPHIC_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      return {
-        permissionClass: "catastrophic",
-        toolName,
-        commands: [extractLeadCommand(trimmed)],
-        canonicalPattern: trimmed,
-        canMemoize: false,
-      };
-    }
+  // Try tree-sitter (skip regex catastrophic — tree-sitter handles quoting correctly)
+  if (parserModule) {
+    const result = await parserModule.parseBashCommand(command);
+    return classifyFromParseResult(toolName, command, result);
   }
 
-  // Extract the lead command for classification
-  const leadCommand = extractLeadCommand(trimmed);
-  const commands = extractAllCommands(trimmed);
+  // Regex fallback (includes catastrophic check)
+  return classifyBashCommand(toolName, command);
+}
 
-  // If ANY command in a pipeline/chain is danger, escalate
+// ------------------------------------------------------------------
+// Tree-sitter-based classification
+// ------------------------------------------------------------------
+
+function classifyFromParseResult(
+  toolName: string,
+  rawCommand: string,
+  result: BashParseResult,
+): InvocationAssessment {
+  if (result.kind === "unsupported") {
+    // Unsupported constructs (subshell, heredoc, etc.) -> potent + ask
+    return {
+      permissionClass: "write_potent",
+      toolName,
+      commands: [extractLeadCommandRegex(rawCommand)],
+      canMemoize: false,
+    };
+  }
+
   let maxClass: PermissionClass = "read";
-  for (const cmd of commands) {
-    const cls = classifySingleCommand(cmd);
-    if (CLASS_ORDER[cls] > CLASS_ORDER[maxClass]) {
-      maxClass = cls;
+  const allCommandNames: string[] = [];
+
+  for (const segment of result.segments) {
+    for (const cmd of segment.commands) {
+      const stripped = stripWrappersFromParsed(cmd);
+      const cls = classifyParsedCommand(stripped);
+      allCommandNames.push(stripped.name);
+      if (CLASS_ORDER[cls] > CLASS_ORDER[maxClass]) {
+        maxClass = cls;
+      }
     }
   }
 
-  // Build canonical pattern for memoization
-  const canMemoize = commands.length === 1 && maxClass !== "catastrophic";
-  const canonicalPattern = canMemoize ? buildCanonicalPattern(leadCommand, trimmed) : undefined;
+  const isSingleCommand = result.segments.length === 1 &&
+    result.segments[0]!.commands.length === 1;
+  const canMemoize = isSingleCommand && maxClass !== "catastrophic";
+  const canonicalPattern = canMemoize
+    ? buildCanonicalPatternFromParsed(result.segments[0]!.commands[0]!)
+    : undefined;
 
   return {
     permissionClass: maxClass,
     toolName,
-    commands,
+    commands: allCommandNames,
     canonicalPattern,
     canMemoize,
   };
 }
+
+function classifyParsedCommand(cmd: ParsedBashCommand): PermissionClass {
+  const name = cmd.name.split("/").pop() ?? cmd.name;
+
+  // Catastrophic: disk tools
+  if (["mkfs", "fdisk", "parted", "wipefs", "shred", "dd"].includes(name)) {
+    if (name === "dd") {
+      const hasDevTarget = cmd.argv.some(
+        (t) => t.kind === "literal" && /^of=\/dev\//.test(t.value),
+      );
+      if (hasDevTarget) return "catastrophic";
+    } else {
+      return "catastrophic";
+    }
+  }
+
+  // Catastrophic: rm -rf targeting root/home
+  if (name === "rm") {
+    const hasRecursiveForce = cmd.argv.some(
+      (t) => t.kind === "literal" && /^-[a-zA-Z]*r[a-zA-Z]*f|^-[a-zA-Z]*f[a-zA-Z]*r|^--force$/.test(t.value),
+    );
+    if (hasRecursiveForce) {
+      const targetsDangerousPath = cmd.argv.some((t) => {
+        if (t.value.startsWith("-")) return false;
+        return t.value === "/" || t.value === "~" || t.kind === "home_reference"
+          || t.value === ".." || t.value === "$HOME";
+      });
+      if (targetsDangerousPath) return "catastrophic";
+    }
+  }
+
+  // --no-preserve-root anywhere
+  if (cmd.argv.some((t) => t.value === "--no-preserve-root")) {
+    return "catastrophic";
+  }
+
+  if (name === "git") {
+    return classifyGitParsed(cmd);
+  }
+
+  if (name === "find") {
+    const hasDangerous = cmd.argv.some(
+      (t) => t.kind === "literal" && /^-(exec|execdir|delete|ok)$/.test(t.value),
+    );
+    return hasDangerous ? "write_potent" : "read";
+  }
+
+  if (BASH_DANGER_COMMANDS.has(name)) return "write_danger";
+  if (BASH_REVERSIBLE_COMMANDS.has(name)) return "write_reversible";
+  if (BASH_SAFE_COMMANDS.has(name)) return "read";
+  if (BASH_POTENT_COMMANDS.has(name)) return "write_potent";
+
+  return "write_potent";
+}
+
+function classifyGitParsed(cmd: ParsedBashCommand): PermissionClass {
+  // Find the subcommand (skip flags)
+  let subcommand = "";
+  for (const token of cmd.argv) {
+    if (token.kind === "literal" && !token.value.startsWith("-")) {
+      subcommand = token.value;
+      break;
+    }
+  }
+
+  if (!subcommand) return "write_potent";
+
+  const hasForceFlag = cmd.argv.some(
+    (t) => t.kind === "literal" && GIT_FORCE_FLAGS.has(t.value),
+  );
+  const hasDeleteFlag = cmd.argv.some(
+    (t) => t.kind === "literal" && GIT_DELETE_FLAGS.has(t.value),
+  );
+
+  if (GIT_DANGER_SUBCOMMANDS.has(subcommand)) return "write_danger";
+  if (subcommand === "branch" && hasDeleteFlag) return "write_danger";
+  if (hasForceFlag) return "write_danger";
+  if (GIT_REVERSIBLE_SUBCOMMANDS.has(subcommand)) return "write_reversible";
+  if (GIT_SAFE_SUBCOMMANDS.has(subcommand)) return "read";
+
+  return "write_potent";
+}
+
+/**
+ * Strip process wrappers from a parsed command.
+ * Returns a new ParsedBashCommand with the wrapper removed.
+ */
+function stripWrappersFromParsed(cmd: ParsedBashCommand): ParsedBashCommand {
+  const name = cmd.name.split("/").pop() ?? cmd.name;
+
+  // "env" prefix: skip env and any VAR=val args, take next literal as command
+  if (name === "env") {
+    let idx = 0;
+    while (idx < cmd.argv.length) {
+      const token = cmd.argv[idx]!;
+      if (token.kind === "literal" && token.value.includes("=")) {
+        idx++;
+        continue;
+      }
+      if (token.kind === "literal" && token.value.startsWith("-")) {
+        idx++;
+        continue;
+      }
+      break;
+    }
+    if (idx < cmd.argv.length) {
+      const newName = cmd.argv[idx]!;
+      return {
+        text: cmd.text,
+        name: newName.value,
+        nameToken: newName,
+        argv: cmd.argv.slice(idx + 1),
+      };
+    }
+  }
+
+  if (!PROCESS_WRAPPERS.has(name)) return cmd;
+
+  // Skip wrapper + its flags + one value arg for timeout/stdbuf
+  let skip = 0;
+  while (skip < cmd.argv.length && cmd.argv[skip]!.value.startsWith("-")) {
+    skip++;
+  }
+  if ((name === "timeout" || name === "stdbuf") && skip < cmd.argv.length) {
+    const next = cmd.argv[skip]!;
+    if (!next.value.startsWith("-")) {
+      skip++;
+    }
+  }
+  if (skip < cmd.argv.length) {
+    const newName = cmd.argv[skip]!;
+    return {
+      text: cmd.text,
+      name: newName.value,
+      nameToken: newName,
+      argv: cmd.argv.slice(skip + 1),
+    };
+  }
+
+  return cmd;
+}
+
+function buildCanonicalPatternFromParsed(cmd: ParsedBashCommand): string {
+  const stripped = stripWrappersFromParsed(cmd);
+  const name = stripped.name.split("/").pop() ?? stripped.name;
+
+  const subcommandTools = new Set([
+    "git", "npm", "npx", "pnpm", "yarn", "docker", "kubectl",
+    "cargo", "go", "pip", "brew", "apt", "apt-get",
+  ]);
+
+  if (subcommandTools.has(name)) {
+    for (const token of stripped.argv) {
+      if (token.kind === "literal" && !token.value.startsWith("-")) {
+        return `${name} ${token.value}`;
+      }
+    }
+  }
+
+  return name;
+}
+
+// ------------------------------------------------------------------
+// Regex fallback (sync)
+// ------------------------------------------------------------------
 
 const CLASS_ORDER: Record<PermissionClass, number> = {
   read: 0,
@@ -204,53 +467,144 @@ const CLASS_ORDER: Record<PermissionClass, number> = {
   catastrophic: 5,
 };
 
-function classifySingleCommand(cmd: string): PermissionClass {
-  if (BASH_SAFE_COMMANDS.has(cmd)) return "read";
+function classifyBashCommand(toolName: string, command: string): InvocationAssessment {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return { permissionClass: "write_potent", toolName };
+  }
+
+  for (const { pattern } of CATASTROPHIC_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return {
+        permissionClass: "catastrophic",
+        toolName,
+        commands: [extractLeadCommandRegex(trimmed)],
+        canonicalPattern: trimmed,
+        canMemoize: false,
+      };
+    }
+  }
+
+  const segments = splitCompoundCommandRegex(trimmed);
+  let maxClass: PermissionClass = "read";
+
+  for (const segment of segments) {
+    const stripped = stripProcessWrappersRegex(segment);
+    const cmd = extractLeadCommandRegex(stripped);
+    const cls = classifySingleCommandRegex(cmd, stripped);
+    if (CLASS_ORDER[cls] > CLASS_ORDER[maxClass]) {
+      maxClass = cls;
+    }
+  }
+
+  const leadCommand = extractLeadCommandRegex(stripProcessWrappersRegex(segments[0] ?? trimmed));
+  const commands = segments.map((s) => extractLeadCommandRegex(stripProcessWrappersRegex(s)));
+  const canMemoize = segments.length === 1 && maxClass !== "catastrophic";
+  const canonicalPattern = canMemoize
+    ? buildCanonicalPatternRegex(leadCommand, stripProcessWrappersRegex(segments[0] ?? trimmed))
+    : undefined;
+
+  return { permissionClass: maxClass, toolName, commands, canonicalPattern, canMemoize };
+}
+
+function classifySingleCommandRegex(cmd: string, fullSegment: string): PermissionClass {
+  if (!cmd) return "write_potent";
+
+  if (cmd === "git") return classifyGitCommandRegex(fullSegment);
+
+  if (cmd === "find") {
+    if (/-(exec|execdir|delete|ok)\b/.test(fullSegment)) return "write_potent";
+    return "read";
+  }
+
   if (BASH_DANGER_COMMANDS.has(cmd)) return "write_danger";
-  // rm without -rf is danger (not catastrophic — catastrophic caught above)
-  if (cmd === "rm" || cmd === "rmdir") return "write_danger";
-  if (cmd === "mv" || cmd === "cp") return "write_potent";
-  if (cmd === "chmod" || cmd === "chown") return "write_potent";
-  if (cmd === "ln") return "write_potent";
-  if (cmd === "mkdir") return "read"; // creating dirs is generally safe
-  if (cmd === "touch") return "read";
+  if (BASH_REVERSIBLE_COMMANDS.has(cmd)) return "write_reversible";
+  if (BASH_SAFE_COMMANDS.has(cmd)) return "read";
+  if (BASH_POTENT_COMMANDS.has(cmd)) return "write_potent";
+
   return "write_potent";
 }
 
-// ------------------------------------------------------------------
-// Command extraction helpers
-// ------------------------------------------------------------------
+function classifyGitCommandRegex(segment: string): PermissionClass {
+  const parts = segment.trim().split(/\s+/);
+  let subIdx = 1;
+  while (subIdx < parts.length && parts[subIdx]!.startsWith("-")) subIdx++;
+  const subcommand = parts[subIdx] ?? "";
+  if (!subcommand) return "write_potent";
 
-function extractLeadCommand(command: string): string {
-  // Skip env var assignments at the start (VAR=value cmd ...)
-  const withoutEnv = command.replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)+/, "");
-  const first = withoutEnv.trim().split(/\s+/)[0] ?? "";
-  // Strip path prefix (e.g. /usr/bin/git → git)
-  const base = first.split("/").pop() ?? first;
-  return base;
+  const hasForceFlag = parts.some((p) => GIT_FORCE_FLAGS.has(p));
+  const hasDeleteFlag = parts.some((p) => GIT_DELETE_FLAGS.has(p));
+
+  if (GIT_DANGER_SUBCOMMANDS.has(subcommand)) return "write_danger";
+  if (subcommand === "branch" && hasDeleteFlag) return "write_danger";
+  if (hasForceFlag) return "write_danger";
+  if (GIT_REVERSIBLE_SUBCOMMANDS.has(subcommand)) return "write_reversible";
+  if (GIT_SAFE_SUBCOMMANDS.has(subcommand)) return "read";
+
+  return "write_potent";
 }
 
-function extractAllCommands(command: string): string[] {
-  // Split on pipes, &&, ||, ; to get individual commands
-  const parts = command.split(/\s*(?:\|{1,2}|&&|;)\s*/);
-  const cmds: string[] = [];
-  for (const part of parts) {
-    const trimmed = part.trim();
-    if (!trimmed) continue;
-    const cmd = extractLeadCommand(trimmed);
-    if (cmd) cmds.push(cmd);
+function splitCompoundCommandRegex(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!;
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
+    if (ch === "\\" && !inSingle && i + 1 < command.length) { current += ch + command[i + 1]; i++; continue; }
+
+    if (!inSingle && !inDouble) {
+      if (ch === "&" && command[i + 1] === "&") { if (current.trim()) segments.push(current.trim()); current = ""; i++; continue; }
+      if (ch === "|" && command[i + 1] === "|") { if (current.trim()) segments.push(current.trim()); current = ""; i++; continue; }
+      if (ch === ";" || ch === "|" || (ch === "&" && command[i + 1] !== "&")) { if (current.trim()) segments.push(current.trim()); current = ""; continue; }
+    }
+    current += ch;
   }
-  return cmds.length > 0 ? cmds : [extractLeadCommand(command)];
+  if (current.trim()) segments.push(current.trim());
+  return segments.length > 0 ? segments : [command.trim()];
 }
 
-function buildCanonicalPattern(leadCommand: string, fullCommand: string): string {
-  // For simple single-word commands, use the command name
-  // For commands with meaningful first argument, include it
+function stripProcessWrappersRegex(command: string): string {
+  let result = command.trim();
+  result = result.replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)+/, "");
+
+  if (/^env\s/.test(result)) {
+    result = result.replace(/^env\s+/, "");
+    result = result.replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)+/, "");
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const parts = result.split(/\s+/);
+    if (parts.length >= 2 && PROCESS_WRAPPERS.has(parts[0]!)) {
+      let skip = 1;
+      while (skip < parts.length && parts[skip]!.startsWith("-")) skip++;
+      if ((parts[0] === "timeout" || parts[0] === "stdbuf") && skip < parts.length && !parts[skip]!.startsWith("-")) skip++;
+      if (skip < parts.length) { result = parts.slice(skip).join(" "); changed = true; }
+    }
+  }
+  return result.trim();
+}
+
+function extractLeadCommandRegex(command: string): string {
+  const trimmed = command.trim();
+  if (!trimmed) return "";
+  const first = trimmed.split(/\s+/)[0] ?? "";
+  return first.split("/").pop() ?? first;
+}
+
+function buildCanonicalPatternRegex(leadCommand: string, fullCommand: string): string {
   const parts = fullCommand.trim().split(/\s+/);
   if (parts.length <= 1) return leadCommand;
 
-  // git <subcommand>, npm <subcommand>, docker <subcommand>
-  const subcommandTools = new Set(["git", "npm", "npx", "pnpm", "yarn", "docker", "kubectl", "cargo", "go", "pip", "brew"]);
+  const subcommandTools = new Set([
+    "git", "npm", "npx", "pnpm", "yarn", "docker", "kubectl",
+    "cargo", "go", "pip", "brew", "apt", "apt-get",
+  ]);
   if (subcommandTools.has(leadCommand) && parts.length >= 2) {
     return `${leadCommand} ${parts[1]}`;
   }

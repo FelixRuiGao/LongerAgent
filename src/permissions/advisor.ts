@@ -10,7 +10,7 @@
 
 import type { GateAdvisor, GateDecision } from "../tool-runtime.js";
 import type { ToolPreflightContext } from "../agents/tool-loop.js";
-import { classifyTool } from "./classify.js";
+import { classifyTool, classifyToolAsync } from "./classify.js";
 import { PermissionRuleStore } from "./rules.js";
 import type {
   PermissionMode,
@@ -57,7 +57,7 @@ export class PermissionAdvisor implements GateAdvisor {
   // -- GateAdvisor interface -------------------------------------------
 
   async evaluate(ctx: ToolPreflightContext): Promise<GateDecision> {
-    const assessment = classifyTool(ctx.toolName, ctx.toolArgs);
+    const assessment = await classifyToolAsync(ctx.toolName, ctx.toolArgs);
     const mode = effectiveMode(this._sessionMode, this._agentCeiling);
 
     // 1. Check allow-once grants
