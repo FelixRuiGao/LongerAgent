@@ -1,14 +1,24 @@
 /**
  * Conversation transcript renderer.
  *
- * Takes raw `LogEntry[]` from the server and projects them into visual cards.
- * For now this is a deliberately spartan view — we'll layer richer renderers
- * (file diffs, code blocks, tool result tabs) on top once the basic flow is
- * proven. Aesthetics first; rich semantics next.
+ * Pairs each tool_call with its corresponding tool_result so they render
+ * as one expandable card. Other entry types render standalone.
  */
 
-import { useMemo } from 'react'
-import { User, Wrench, Terminal, Sparkles, AlertTriangle, FileEdit, Search, Brain } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import {
+  User,
+  Wrench,
+  Terminal,
+  Sparkles,
+  AlertTriangle,
+  FileEdit,
+  Search,
+  Brain,
+  ChevronRight,
+  CheckCircle2,
+  XCircle,
+} from 'lucide-react'
 import { cn } from '@/lib/cn.js'
 import { Markdown } from '@/components/Markdown.js'
 
@@ -22,6 +32,14 @@ interface LogEntry {
   content?: unknown
 }
 
+interface ToolCallEntry extends LogEntry {
+  type: 'tool_call'
+}
+
+interface ToolResultEntry extends LogEntry {
+  type: 'tool_result'
+}
+
 export function Transcript({
   entries,
   activeId,
@@ -29,11 +47,37 @@ export function Transcript({
   entries: unknown[]
   activeId: string | null
 }): JSX.Element {
-  const visible = useMemo(() => {
-    return (entries as LogEntry[]).filter((e) => !e.discarded && e.tuiVisible !== false)
+  // Pre-pair tool_call → tool_result so we can render each pair as a unit.
+  const items = useMemo(() => {
+    const arr = entries as LogEntry[]
+    const visible = arr.filter((e) => !e.discarded && e.tuiVisible !== false)
+    const resultByCallId = new Map<string, ToolResultEntry>()
+    for (const e of visible) {
+      if (e.type === 'tool_result') {
+        const callId = (e.meta as Record<string, unknown> | undefined)?.['toolCallId']
+        if (typeof callId === 'string') resultByCallId.set(callId, e as ToolResultEntry)
+      }
+    }
+    type Item =
+      | { kind: 'entry'; entry: LogEntry }
+      | { kind: 'tool'; call: ToolCallEntry; result: ToolResultEntry | null }
+
+    const out: Item[] = []
+    for (const e of visible) {
+      if (e.type === 'tool_call') {
+        const callId = (e.meta as Record<string, unknown> | undefined)?.['toolCallId']
+        const result = typeof callId === 'string' ? resultByCallId.get(callId) ?? null : null
+        out.push({ kind: 'tool', call: e as ToolCallEntry, result })
+      } else if (e.type === 'tool_result') {
+        // skip — rendered with its call
+      } else {
+        out.push({ kind: 'entry', entry: e })
+      }
+    }
+    return out
   }, [entries])
 
-  if (visible.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="mx-auto flex h-full max-w-2xl items-center justify-center px-6 text-center">
         <div className="text-fg-3">
@@ -52,9 +96,13 @@ export function Transcript({
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
       <div className="space-y-5">
-        {visible.map((entry) => (
-          <EntryRow key={entry.id} entry={entry} active={entry.id === activeId} />
-        ))}
+        {items.map((item) => {
+          if (item.kind === 'tool') {
+            const active = item.call.id === activeId
+            return <ToolPair key={item.call.id} call={item.call} result={item.result} active={active} />
+          }
+          return <EntryRow key={item.entry.id} entry={item.entry} active={item.entry.id === activeId} />
+        })}
       </div>
     </div>
   )
@@ -62,7 +110,6 @@ export function Transcript({
 
 function EntryRow({ entry, active }: { entry: LogEntry; active: boolean }): JSX.Element {
   const display = entry.display ?? ''
-
   switch (entry.type) {
     case 'user_message':
       return <UserMessage text={display} />
@@ -70,11 +117,6 @@ function EntryRow({ entry, active }: { entry: LogEntry; active: boolean }): JSX.
       return <AssistantText text={display} active={active} />
     case 'reasoning':
       return <Reasoning text={display} active={active} />
-    case 'tool_call':
-      return <ToolCall entry={entry} active={active} />
-    case 'tool_result':
-      // Hide tool_result rows by default — they show under the call.
-      return <></>
     case 'agent_result':
       return <AgentResult text={display} />
     case 'sub_agent_start':
@@ -106,7 +148,7 @@ function EntryRow({ entry, active }: { entry: LogEntry; active: boolean }): JSX.
   }
 }
 
-// ── Row variants ──
+// ── User message ──
 
 function UserMessage({ text }: { text: string }): JSX.Element {
   return (
@@ -122,6 +164,8 @@ function UserMessage({ text }: { text: string }): JSX.Element {
     </div>
   )
 }
+
+// ── Assistant text + reasoning ──
 
 function AssistantText({ text, active }: { text: string; active: boolean }): JSX.Element {
   if (!text.trim()) return <></>
@@ -158,39 +202,117 @@ function Reasoning({ text, active }: { text: string; active: boolean }): JSX.Ele
   )
 }
 
-function ToolCall({ entry, active }: { entry: LogEntry; active: boolean }): JSX.Element {
-  const meta = entry.meta as Record<string, unknown> | undefined
+// ── Tool call / result pair ──
+
+interface ToolPairProps {
+  call: ToolCallEntry
+  result: ToolResultEntry | null
+  active: boolean
+}
+
+function ToolPair({ call, result, active }: ToolPairProps): JSX.Element {
+  const meta = call.meta as Record<string, unknown> | undefined
   const toolName = (meta?.['toolName'] as string) ?? 'tool'
   const Icon = pickToolIcon(toolName)
-  // entry.display already encodes "<toolName> <args>". Don't duplicate the
-  // tool name — split it into a label + remainder so the label can shimmer
-  // independently while running.
-  const display = entry.display ?? toolName
+
+  // Split "<toolName> <args>" so we can shimmer the label while running
+  const display = call.display ?? toolName
   const space = display.indexOf(' ')
   const label = space > 0 ? display.slice(0, space) : display
   const rest = space > 0 ? display.slice(space + 1) : ''
 
+  const resultMeta = result?.meta as Record<string, unknown> | undefined
+  const resultContent = result?.content as { content?: string } | undefined
+  const resultText = (resultContent?.content as string | undefined) ?? result?.display ?? ''
+  const isError = resultMeta?.['isError'] === true
+  const running = active || !result
+
+  // Auto-hide tool result by default; expand on click.
+  const [expanded, setExpanded] = useState(false)
+  const canExpand = !!result && resultText.trim().length > 0
+  const togglable = canExpand && !running
+
   return (
     <div className="flex items-start gap-3 pl-10">
       <div className="-ml-10 mt-1 flex h-7 w-7 shrink-0 items-center justify-center text-fg-3">
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className={cn('h-3.5 w-3.5', isError && 'text-error', !isError && result && 'text-success/80')} />
       </div>
-      <div className="flex-1 min-w-0 py-0.5">
-        <div
+      <div className="min-w-0 flex-1 py-0.5">
+        <button
+          onClick={() => togglable && setExpanded((v) => !v)}
+          disabled={!togglable}
           className={cn(
-            'inline-flex max-w-full items-baseline gap-2 rounded-md font-mono text-[11.5px]',
-            active && 'text-fg',
+            'group inline-flex max-w-full items-baseline gap-1.5 rounded-md text-left font-mono text-[11.5px]',
+            togglable && 'cursor-pointer hover:text-fg',
           )}
         >
-          <span className={cn('font-medium', active ? 'shimmer-text' : 'text-fg-2')}>
+          {togglable && (
+            <ChevronRight
+              className={cn(
+                'mb-px h-3 w-3 shrink-0 self-center text-fg-3 transition-transform',
+                expanded && 'rotate-90',
+              )}
+            />
+          )}
+          {!togglable && running && (
+            <span className="mb-px inline-block h-1.5 w-1.5 shrink-0 self-center rounded-full bg-accent pulse-soft" />
+          )}
+          {!togglable && !running && (
+            <CheckCircle2 className="mb-px h-3 w-3 shrink-0 self-center text-fg-3" />
+          )}
+          <span className={cn('font-medium', running ? 'shimmer-text' : 'text-fg-2')}>
             {label}
           </span>
-          {rest && <span className="truncate text-fg-3">{rest}</span>}
-        </div>
+          {rest && (
+            <span className="truncate text-fg-3">{abbreviatePath(rest)}</span>
+          )}
+          {isError && !running && (
+            <XCircle className="ml-1 h-3 w-3 shrink-0 self-center text-error" />
+          )}
+        </button>
+
+        {expanded && result && (
+          <ToolResultBody toolName={toolName} text={resultText} isError={isError} />
+        )}
       </div>
     </div>
   )
 }
+
+function ToolResultBody({
+  toolName,
+  text,
+  isError,
+}: {
+  toolName: string
+  text: string
+  isError: boolean
+}): JSX.Element {
+  const lang = pickResultLang(toolName, text)
+  // For very long results, cap render to first ~200 lines + last ~50 lines
+  // with a "(N lines hidden)" separator. Avoids freezing the renderer.
+  const lines = text.split('\n')
+  let body = text
+  if (lines.length > 280) {
+    const head = lines.slice(0, 200).join('\n')
+    const tail = lines.slice(-50).join('\n')
+    body = `${head}\n\n  … ${lines.length - 250} lines hidden …\n\n${tail}`
+  }
+  return (
+    <div
+      className={cn(
+        'mt-1.5 overflow-hidden rounded-md border bg-bg-1/60',
+        isError ? 'border-error/30' : 'border-border',
+      )}
+    >
+      <pre className="m-0 max-h-[420px] overflow-auto px-3 py-2 font-mono text-[11.5px] leading-[1.55] text-fg-2 whitespace-pre">
+        <code className={`language-${lang}`}>{body}</code>
+      </pre>
+    </div>
+  )
+}
+
+// ── Misc rows ──
 
 function AgentResult({ text }: { text: string }): JSX.Element {
   return (
@@ -237,9 +359,7 @@ function CompactMarker({ text }: { text: string }): JSX.Element {
 }
 
 function StatusRow({ text }: { text: string }): JSX.Element {
-  return (
-    <div className="text-center text-[11.5px] italic text-muted">{text}</div>
-  )
+  return <div className="text-center text-[11.5px] italic text-muted">{text}</div>
 }
 
 function ErrorRow({ text }: { text: string }): JSX.Element {
@@ -265,12 +385,29 @@ function InterruptedRow({ text }: { text: string }): JSX.Element {
   )
 }
 
+// ── Utils ──
+
 function pickToolIcon(name: string): React.FC<{ className?: string }> {
   if (name === 'bash' || name === 'bash_background' || name === 'bash_output' || name === 'kill_shell')
     return Terminal
   if (name === 'edit_file' || name === 'write_file') return FileEdit
   if (name === 'glob' || name === 'grep' || name === 'list_dir' || name === 'read_file') return Search
-  if (name === 'spawn' || name === 'spawn_file' || name === 'kill_agent' || name === 'send' || name === 'check_status' || name === 'wait')
-    return Wrench
   return Wrench
+}
+
+function pickResultLang(toolName: string, text: string): string {
+  if (toolName === 'bash' || toolName === 'bash_background' || toolName === 'bash_output') return 'bash'
+  if (toolName === 'read_file') {
+    // Heuristic: try to infer lang from file extension in the result header
+    const m = text.match(/Lines? \d+-\d+ of/)
+    if (m) return 'text'
+    return 'text'
+  }
+  return 'text'
+}
+
+const HOME_PREFIX = /\/Users\/[a-zA-Z0-9._-]+/g
+
+function abbreviatePath(s: string): string {
+  return s.replace(HOME_PREFIX, '~').replace(/\s+/g, ' ')
 }
