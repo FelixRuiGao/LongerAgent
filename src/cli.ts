@@ -74,6 +74,31 @@ function identifyPrimaryAgent(
 // ------------------------------------------------------------------
 
 export async function main(argv: string[] = process.argv): Promise<void> {
+  // Server mode short-circuit — bypass commander/TUI entirely.
+  // The GUI (Electron main process) spawns this with `--server --work-dir <path>`.
+  if (argv.includes("--server")) {
+    const args = argv.slice(2);
+    const getFlag = (name: string): string | undefined => {
+      const idx = args.indexOf(name);
+      return idx >= 0 ? args[idx + 1] : undefined;
+    };
+    const workDir = getFlag("--work-dir") ?? process.cwd();
+    const sessionId = getFlag("--session-id");
+    const selectedModel = getFlag("--model");
+    const selectedAgent = getFlag("--agent");
+    const templates = getFlag("--templates");
+    const { runServerMode } = await import("./server/server-mode.js");
+    try {
+      await runServerMode({ workDir, sessionId, selectedModel, selectedAgent, templates });
+    } catch (err) {
+      process.stderr.write(
+        `[fermi --server] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+      );
+      process.exit(1);
+    }
+    return;
+  }
+
   const program = new Command();
   program
     .name("fermi")

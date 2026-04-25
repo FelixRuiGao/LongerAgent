@@ -1,0 +1,197 @@
+/* Fonts must come before tailwindcss import per CSS @import rules. */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&display=swap');
+
+@import 'tailwindcss';
+
+/* ── Theme tokens ──
+   Cosmic / observatory aesthetic. Deep indigo blacks, a single electric
+   lavender accent, hairline borders, warm white type. Avoids the standard
+   gray-900/blue-500 vibe-coding palette. */
+
+@theme {
+  /* Dark (default) */
+  --color-bg: oklch(0.135 0.022 275);
+  --color-bg-1: oklch(0.165 0.025 275);
+  --color-bg-2: oklch(0.205 0.028 275);
+  --color-bg-elev: oklch(0.235 0.030 275);
+  --color-border: oklch(0.265 0.024 275);
+  --color-border-strong: oklch(0.330 0.028 275);
+  --color-fg: oklch(0.955 0.005 280);
+  --color-fg-2: oklch(0.780 0.012 275);
+  --color-fg-3: oklch(0.620 0.014 275);
+  --color-muted: oklch(0.500 0.014 275);
+
+  /* Single warm-toned accent (electric lavender) — the TUI logo end-stop. */
+  --color-accent: oklch(0.745 0.165 298);
+  --color-accent-strong: oklch(0.700 0.205 298);
+  --color-accent-soft: oklch(0.745 0.165 298 / 0.14);
+
+  /* Functional colors — scientific / restrained, not candy. */
+  --color-success: oklch(0.755 0.150 158);
+  --color-warning: oklch(0.815 0.150 75);
+  --color-error: oklch(0.660 0.215 25);
+  --color-info: oklch(0.745 0.130 235);
+
+  /* Provider-tinted dots — match TUI provider colors. */
+  --color-provider-openai: #10a37f;
+  --color-provider-anthropic: #d4a574;
+  --color-provider-kimi: #38bdf8;
+  --color-provider-glm: #818cf8;
+  --color-provider-minimax: #f472b6;
+  --color-provider-openrouter: #c084fc;
+
+  /* Typography — Geist sans + mono, Newsreader for display */
+  --font-sans:
+    'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display:
+    'Newsreader', 'Geist', serif;
+  --font-mono:
+    'Geist Mono', 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+
+  /* Radii — softer than default, enough to feel modern not childish. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
+:root[data-theme='light'] {
+  --color-bg: oklch(0.985 0.003 275);
+  --color-bg-1: oklch(0.965 0.005 275);
+  --color-bg-2: oklch(0.945 0.008 275);
+  --color-bg-elev: oklch(0.995 0.001 275);
+  --color-border: oklch(0.880 0.012 275);
+  --color-border-strong: oklch(0.820 0.015 275);
+  --color-fg: oklch(0.180 0.020 275);
+  --color-fg-2: oklch(0.380 0.020 275);
+  --color-fg-3: oklch(0.520 0.015 275);
+  --color-muted: oklch(0.620 0.012 275);
+
+  --color-accent: oklch(0.520 0.190 298);
+  --color-accent-strong: oklch(0.460 0.220 298);
+  --color-accent-soft: oklch(0.520 0.190 298 / 0.10);
+
+  --color-success: oklch(0.470 0.170 158);
+  --color-warning: oklch(0.580 0.180 75);
+  --color-error: oklch(0.500 0.220 25);
+  --color-info: oklch(0.470 0.150 235);
+}
+
+/* ── Base ── */
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+  font-variant-numeric: tabular-nums;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* The window has the OS title bar drag region at the top. */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+.titlebar-nodrag {
+  -webkit-app-region: no-drag;
+}
+
+/* ── Cosmic vignette: subtle dark glow from corners ── */
+.cosmic-bg {
+  background:
+    radial-gradient(80% 50% at 0% 100%, oklch(0.32 0.110 295 / 0.15) 0%, transparent 60%),
+    radial-gradient(60% 40% at 100% 0%, oklch(0.30 0.080 240 / 0.10) 0%, transparent 55%),
+    var(--color-bg);
+}
+
+:root[data-theme='light'] .cosmic-bg {
+  background:
+    radial-gradient(80% 50% at 0% 100%, oklch(0.85 0.080 295 / 0.30) 0%, transparent 60%),
+    radial-gradient(60% 40% at 100% 0%, oklch(0.92 0.040 240 / 0.40) 0%, transparent 55%),
+    var(--color-bg);
+}
+
+/* ── Subtle scrollbar ── */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+
+/* ── Selection ── */
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-fg);
+}
+
+/* ── Reusable utility classes ── */
+
+@utility hairline {
+  border: 1px solid var(--color-border);
+}
+
+@utility hairline-b {
+  border-bottom: 1px solid var(--color-border);
+}
+
+@utility hairline-r {
+  border-right: 1px solid var(--color-border);
+}
+
+/* Focus ring — soft, accent-colored, no harsh outline */
+@utility ring-focus {
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 1px var(--color-bg), 0 0 0 3px var(--color-accent-soft);
+  }
+}
+
+/* Status-pulse animation — restrained, not the typical breathing-light. */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1.0; }
+}
+.pulse-soft {
+  animation: pulse-soft 2.4s ease-in-out infinite;
+}
+
+/* Shimmer — for "working" states. Slow, single-direction. */
+@keyframes shimmer-glide {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--color-fg-3) 0%,
+    var(--color-fg) 35%,
+    var(--color-fg-3) 70%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer-glide 2.6s linear infinite;
+}
