@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { marked } from 'marked'
 import { cn } from '@/lib/cn.js'
 import { highlightCode } from '@/lib/shiki.js'
+import { useSessionStore } from '@/state/sessionStore.js'
 
 marked.setOptions({
   gfm: true,
@@ -35,7 +36,10 @@ export function Markdown({
     }
   }, [text])
 
-  // Cache: codeText|lang -> highlighted innerHTML.
+  const theme = useSessionStore((s) => s.theme)
+
+  // Cache: theme|codeText|lang -> highlighted innerHTML. Including the
+  // theme in the key invalidates cached highlights on theme switch.
   const [highlightCache, setHighlightCache] = useState<Map<string, string>>(
     () => new Map(),
   )
@@ -48,14 +52,14 @@ export function Markdown({
       CODE_BLOCK_RE,
       (match, lang: string, body: string) => {
         const decoded = decodeHtml(body).replace(/\n$/, '')
-        const cached = highlightCache.get(`${lang}|${decoded}`)
+        const cached = highlightCache.get(`${theme}|${lang}|${decoded}`)
         if (cached) {
           return `<pre><code class="language-${lang}" data-highlighted="1">${cached}</code></pre>`
         }
         return match
       },
     )
-  }, [baseHtml, highlightCache])
+  }, [baseHtml, highlightCache, theme])
 
   // After render, find any unhighlighted code blocks and request highlighting.
   // Results go into `highlightCache` which triggers a re-render.
@@ -65,7 +69,7 @@ export function Markdown({
     const pending = matches.filter((m) => {
       const lang = m[1] ?? 'text'
       const decoded = decodeHtml(m[2] ?? '').replace(/\n$/, '')
-      return !highlightCache.has(`${lang}|${decoded}`)
+      return !highlightCache.has(`${theme}|${lang}|${decoded}`)
     })
     if (pending.length === 0) return
     let stillMounted = true
@@ -73,7 +77,7 @@ export function Markdown({
       pending.map(async (m) => {
         const lang = m[1] ?? 'text'
         const decoded = decodeHtml(m[2] ?? '').replace(/\n$/, '')
-        const key = `${lang}|${decoded}`
+        const key = `${theme}|${lang}|${decoded}`
         try {
           const highlighted = await highlightCode(decoded, lang)
           if (!stillMounted || !highlighted) return null
@@ -95,7 +99,7 @@ export function Markdown({
     return () => {
       stillMounted = false
     }
-  }, [baseHtml, highlightCache])
+  }, [baseHtml, highlightCache, theme])
 
   return (
     <div

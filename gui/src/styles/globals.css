@@ -59,24 +59,24 @@
 }
 
 :root[data-theme='light'] {
-  --color-bg: oklch(0.985 0.003 275);
-  --color-bg-1: oklch(0.965 0.005 275);
-  --color-bg-2: oklch(0.945 0.008 275);
-  --color-bg-elev: oklch(0.995 0.001 275);
-  --color-border: oklch(0.880 0.012 275);
-  --color-border-strong: oklch(0.820 0.015 275);
-  --color-fg: oklch(0.180 0.020 275);
-  --color-fg-2: oklch(0.380 0.020 275);
-  --color-fg-3: oklch(0.520 0.015 275);
-  --color-muted: oklch(0.620 0.012 275);
+  --color-bg: oklch(0.985 0.004 275);
+  --color-bg-1: oklch(0.960 0.006 275);
+  --color-bg-2: oklch(0.935 0.010 275);
+  --color-bg-elev: oklch(1.000 0 0);
+  --color-border: oklch(0.860 0.014 275);
+  --color-border-strong: oklch(0.780 0.018 275);
+  --color-fg: oklch(0.165 0.025 275);
+  --color-fg-2: oklch(0.310 0.025 275);
+  --color-fg-3: oklch(0.450 0.020 275);
+  --color-muted: oklch(0.560 0.018 275);
 
-  --color-accent: oklch(0.520 0.190 298);
-  --color-accent-strong: oklch(0.460 0.220 298);
-  --color-accent-soft: oklch(0.520 0.190 298 / 0.10);
+  --color-accent: oklch(0.500 0.210 298);
+  --color-accent-strong: oklch(0.440 0.230 298);
+  --color-accent-soft: oklch(0.500 0.210 298 / 0.10);
 
   --color-success: oklch(0.470 0.170 158);
-  --color-warning: oklch(0.580 0.180 75);
-  --color-error: oklch(0.500 0.220 25);
+  --color-warning: oklch(0.560 0.190 75);
+  --color-error: oklch(0.480 0.225 25);
   --color-info: oklch(0.470 0.150 235);
 }
 
@@ -180,6 +180,10 @@ body {
 
 @utility hairline-r {
   border-right: 1px solid var(--color-border);
+}
+
+@utility hairline-l {
+  border-left: 1px solid var(--color-border);
 }
 
 /* Focus ring — soft, accent-colored, no harsh outline */
