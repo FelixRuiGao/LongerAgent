@@ -1,23 +1,20 @@
 /**
- * Conversation transcript renderer.
+ * Transcript: document-style rendering matching the design template.
  *
- * Pairs each tool_call with its corresponding tool_result so they render
- * as one expandable card. Other entry types render standalone.
+ * - User messages → right-aligned neutral bubble
+ * - Reasoning → "✦ Thought for Xs" header + dim body
+ * - Assistant text → document prose with markdown
+ * - Tool calls → prefix-labeled rows (Q_ grep, $_ bash, ✎_ edit, etc.)
+ *   with expandable result body
+ * - File edits → inline pill chips with +/- counts
  */
 
 import { useMemo, useState } from 'react'
 import {
-  User,
-  Wrench,
-  Terminal,
   Sparkles,
-  AlertTriangle,
-  FileEdit,
-  Search,
-  Brain,
   ChevronRight,
-  CheckCircle2,
-  XCircle,
+  AlertTriangle,
+  File,
 } from 'lucide-react'
 import { cn } from '@/lib/cn.js'
 import { Markdown } from '@/components/Markdown.js'
@@ -34,13 +31,8 @@ interface LogEntry {
   content?: unknown
 }
 
-interface ToolCallEntry extends LogEntry {
-  type: 'tool_call'
-}
-
-interface ToolResultEntry extends LogEntry {
-  type: 'tool_result'
-}
+interface ToolCallEntry extends LogEntry { type: 'tool_call' }
+interface ToolResultEntry extends LogEntry { type: 'tool_result' }
 
 export function Transcript({
   entries,
@@ -51,7 +43,6 @@ export function Transcript({
   activeId: string | null
   workDir?: string
 }): JSX.Element {
-  // Pre-pair tool_call → tool_result so we can render each pair as a unit.
   const items = useMemo(() => {
     const arr = entries as LogEntry[]
     const visible = arr.filter((e) => !e.discarded && e.tuiVisible !== false)
@@ -65,7 +56,6 @@ export function Transcript({
     type Item =
       | { kind: 'entry'; entry: LogEntry }
       | { kind: 'tool'; call: ToolCallEntry; result: ToolResultEntry | null }
-
     const out: Item[] = []
     for (const e of visible) {
       if (e.type === 'tool_call') {
@@ -73,7 +63,7 @@ export function Transcript({
         const result = typeof callId === 'string' ? resultByCallId.get(callId) ?? null : null
         out.push({ kind: 'tool', call: e as ToolCallEntry, result })
       } else if (e.type === 'tool_result') {
-        // skip — rendered with its call
+        // rendered with its call
       } else {
         out.push({ kind: 'entry', entry: e })
       }
@@ -83,28 +73,26 @@ export function Transcript({
 
   if (items.length === 0) {
     return (
-      <div className="mx-auto flex h-full max-w-2xl items-center justify-center px-6 text-center">
-        <div className="text-fg-3">
-          <p className="text-[13px] leading-relaxed">
-            Send a message to begin.
-            <br />
-            <span className="text-muted">
-              The agent will work in this directory and may modify files.
-            </span>
-          </p>
+      <div className="flex h-full items-center justify-center">
+        <div className="text-center">
+          <p className="text-[13px] text-ink-3">Send a message to begin.</p>
+          <p className="mt-1 text-[12px] text-ink-4">The agent will work in this directory and may modify files.</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <div className="space-y-5">
-        {items.map((item) => {
-          if (item.kind === 'tool') {
-            const active = item.call.id === activeId
+    <div className="mx-auto max-w-[760px] px-8 py-6">
+      {items.map((item) => {
+        if (item.kind === 'tool') {
+          const active = item.call.id === activeId
+          const meta = item.call.meta as Record<string, unknown> | undefined
+          const toolName = (meta?.['toolName'] as string) ?? 'tool'
+          const isFileModify = toolName === 'write_file' || toolName === 'edit_file'
+          if (isFileModify) {
             return (
-              <ToolPair
+              <FileEditPill
                 key={item.call.id}
                 call={item.call}
                 result={item.result}
@@ -113,9 +101,18 @@ export function Transcript({
               />
             )
           }
-          return <EntryRow key={item.entry.id} entry={item.entry} active={item.entry.id === activeId} />
-        })}
-      </div>
+          return (
+            <ToolRow
+              key={item.call.id}
+              call={item.call}
+              result={item.result}
+              active={active}
+              workDir={workDir}
+            />
+          )
+        }
+        return <EntryRow key={item.entry.id} entry={item.entry} active={item.entry.id === activeId} />
+      })}
     </div>
   )
 }
@@ -124,17 +121,17 @@ function EntryRow({ entry, active }: { entry: LogEntry; active: boolean }): JSX.
   const display = entry.display ?? ''
   switch (entry.type) {
     case 'user_message':
-      return <UserMessage text={display} />
+      return <UserBubble text={display} />
     case 'assistant_text':
       return <AssistantText text={display} active={active} />
     case 'reasoning':
-      return <Reasoning text={display} active={active} />
+      return <ThoughtHeader text={display} active={active} />
     case 'agent_result':
-      return <AgentResult text={display} />
+      return <AssistantText text={display} active={false} />
     case 'sub_agent_start':
     case 'sub_agent_end':
     case 'sub_agent_tool_call':
-      return <SubAgentRow text={display} type={entry.type} />
+      return <SubAgentRow text={display} />
     case 'compact_marker':
       return <CompactMarker text={display} />
     case 'status':
@@ -152,222 +149,18 @@ function EntryRow({ entry, active }: { entry: LogEntry; active: boolean }): JSX.
     case 'ask_resolution':
       return <></>
     default:
-      return (
-        <div className="text-[11px] text-muted font-mono">
-          [{entry.type}] {display}
-        </div>
-      )
+      return <div className="mono text-[11px] text-ink-4">[{entry.type}] {display}</div>
   }
 }
 
-// ── User message ──
+/* ── User message bubble (neutral, right-aligned) ── */
 
-function UserMessage({ text }: { text: string }): JSX.Element {
+function UserBubble({ text }: { text: string }): JSX.Element {
   return (
-    <div className="flex justify-end">
-      <div className="group flex max-w-[80%] items-start gap-2.5">
-        <div className="rounded-2xl rounded-tr-sm bg-accent-soft border border-accent/20 px-4 py-2.5 text-[13.5px] leading-relaxed text-fg whitespace-pre-wrap break-words">
-          {text}
-        </div>
-        <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-bg-2 text-fg-3">
-          <User className="h-3.5 w-3.5" />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Assistant text + reasoning ──
-
-function AssistantText({ text, active }: { text: string; active: boolean }): JSX.Element {
-  if (!text.trim()) return <></>
-  return (
-    <div className="flex items-start gap-3">
-      <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
-        <Sparkles className="h-3.5 w-3.5" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <Markdown
-          text={text}
-          className={cn(
-            active && 'after:ml-1 after:inline-block after:h-3.5 after:w-1.5 after:translate-y-0.5 after:bg-accent/70',
-          )}
-        />
-      </div>
-    </div>
-  )
-}
-
-function Reasoning({ text, active }: { text: string; active: boolean }): JSX.Element {
-  if (!text.trim()) return <></>
-  return (
-    <div className="flex items-start gap-3 pl-10 -mt-2">
-      <div className="-ml-10 mt-1 flex h-7 w-7 shrink-0 items-center justify-center text-fg-3">
-        <Brain className="h-3.5 w-3.5" />
-      </div>
-      <div className="min-w-0 flex-1 text-[12.5px] italic leading-[1.6] text-fg-3">
-        <div className={cn('whitespace-pre-wrap break-words', active && 'shimmer-text not-italic')}>
-          {text}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Tool call / result pair ──
-
-interface ToolPairProps {
-  call: ToolCallEntry
-  result: ToolResultEntry | null
-  active: boolean
-  workDir?: string
-}
-
-function ToolPair({ call, result, active, workDir }: ToolPairProps): JSX.Element {
-  const meta = call.meta as Record<string, unknown> | undefined
-  const toolName = (meta?.['toolName'] as string) ?? 'tool'
-  const Icon = pickToolIcon(toolName)
-
-  // Split "<toolName> <args>" so we can shimmer the label while running
-  const display = call.display ?? toolName
-  const space = display.indexOf(' ')
-  const label = space > 0 ? display.slice(0, space) : display
-  const rest = space > 0 ? display.slice(space + 1) : ''
-
-  const resultMeta = result?.meta as Record<string, unknown> | undefined
-  const resultContent = result?.content as { content?: string } | undefined
-  const resultText = (resultContent?.content as string | undefined) ?? ''
-  // For file_modify tools, the diff lives in result.display, not content.
-  const resultDisplay = result?.display ?? ''
-  const isError = resultMeta?.['isError'] === true
-  const running = active || !result
-  const isFileModify = toolName === 'write_file' || toolName === 'edit_file'
-
-  // For file-modify tools, expand by default (the diff IS the content).
-  // For everything else, collapse by default.
-  const [expanded, setExpanded] = useState(isFileModify)
-  const canExpand =
-    !!result && (resultText.trim().length > 0 || resultDisplay.trim().length > 0)
-  const togglable = canExpand && !running
-
-  return (
-    <div className="flex items-start gap-3 pl-10">
-      <div className="-ml-10 mt-1 flex h-7 w-7 shrink-0 items-center justify-center text-fg-3">
-        <Icon className={cn('h-3.5 w-3.5', isError && 'text-error', !isError && result && 'text-success/80')} />
-      </div>
-      <div className="min-w-0 flex-1 py-0.5">
-        <button
-          onClick={() => togglable && setExpanded((v) => !v)}
-          disabled={!togglable}
-          className={cn(
-            'group inline-flex max-w-full items-baseline gap-1.5 rounded-md text-left font-mono text-[11.5px]',
-            togglable && 'cursor-pointer hover:text-fg',
-          )}
-        >
-          {togglable && (
-            <ChevronRight
-              className={cn(
-                'mb-px h-3 w-3 shrink-0 self-center text-fg-3 transition-transform',
-                expanded && 'rotate-90',
-              )}
-            />
-          )}
-          {!togglable && running && (
-            <span className="mb-px inline-block h-1.5 w-1.5 shrink-0 self-center rounded-full bg-accent pulse-soft" />
-          )}
-          {!togglable && !running && (
-            <CheckCircle2 className="mb-px h-3 w-3 shrink-0 self-center text-fg-3" />
-          )}
-          <span className={cn('font-medium', running ? 'shimmer-text' : 'text-fg-2')}>
-            {label}
-          </span>
-          {rest && (
-            <span className="truncate text-fg-3">{shortenSummary(rest, workDir)}</span>
-          )}
-          {isError && !running && (
-            <XCircle className="ml-1 h-3 w-3 shrink-0 self-center text-error" />
-          )}
-        </button>
-
-        {expanded && result && isFileModify && (
-          <DiffView
-            text={resultDisplay}
-            workDir={workDir}
-            isError={isError}
-            resultSummary={shortenSummary(
-              resultText.replace(/\s*\[mtime_ms=\d+\]/g, ''),
-              workDir,
-            )}
-          />
-        )}
-        {expanded && result && !isFileModify && (
-          <ToolResultBody toolName={toolName} text={resultText} isError={isError} />
-        )}
-      </div>
-    </div>
-  )
-}
-
-function ToolResultBody({
-  toolName,
-  text,
-  isError,
-}: {
-  toolName: string
-  text: string
-  isError: boolean
-}): JSX.Element {
-  const lang = pickResultLang(toolName, text)
-  // For very long results, cap render to first ~200 lines + last ~50 lines
-  // with a "(N lines hidden)" separator. Avoids freezing the renderer.
-  const lines = text.split('\n')
-  let body = text
-  if (lines.length > 280) {
-    const head = lines.slice(0, 200).join('\n')
-    const tail = lines.slice(-50).join('\n')
-    body = `${head}\n\n  … ${lines.length - 250} lines hidden …\n\n${tail}`
-  }
-  return (
-    <div
-      className={cn(
-        'mt-1.5 overflow-hidden rounded-md border bg-bg-1/60',
-        isError ? 'border-error/30' : 'border-border',
-      )}
-    >
-      <pre className="m-0 max-h-[420px] overflow-auto px-3 py-2 font-mono text-[11.5px] leading-[1.55] text-fg-2 whitespace-pre">
-        <code className={`language-${lang}`}>{body}</code>
-      </pre>
-    </div>
-  )
-}
-
-// ── Misc rows ──
-
-function AgentResult({ text }: { text: string }): JSX.Element {
-  return (
-    <div className="flex items-start gap-3 pl-10 -mt-1">
-      <div className="-ml-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-info">
-        <Wrench className="h-3.5 w-3.5" />
-      </div>
-      <div className="flex-1 rounded-md border border-border bg-bg-1/50 px-3 py-2 text-[12px] text-fg-2 whitespace-pre-wrap break-words">
-        {text}
-      </div>
-    </div>
-  )
-}
-
-function SubAgentRow({ text, type }: { text: string; type: string }): JSX.Element {
-  const isStart = type === 'sub_agent_start'
-  return (
-    <div className="flex items-start gap-3 pl-10 -mt-1">
-      <div className="-ml-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-fg-3">
-        <Wrench className="h-3.5 w-3.5" />
-      </div>
+    <div className="my-3.5 flex justify-end">
       <div
-        className={cn(
-          'rounded-md px-2.5 py-1 font-mono text-[11.5px]',
-          isStart ? 'text-fg-2' : 'text-fg-3',
-        )}
+        className="max-w-[72%] whitespace-pre-wrap rounded-2xl px-4 py-[11px] text-[13.5px] leading-[1.55]"
+        style={{ background: 'var(--color-bubble)', color: 'var(--color-bubble-ink)' }}
       >
         {text}
       </div>
@@ -375,63 +168,235 @@ function SubAgentRow({ text, type }: { text: string; type: string }): JSX.Elemen
   )
 }
 
+/* ── Thought header ("✦ Thought for Xs" + dim reasoning body) ── */
+
+function ThoughtHeader({ text, active }: { text: string; active: boolean }): JSX.Element {
+  if (!text.trim()) return <></>
+  return (
+    <div className="my-1.5 pl-0.5">
+      <div className="mb-1 flex items-center gap-1.5 text-[11.5px] font-medium tracking-wide text-ink-3">
+        <Sparkles className="h-[11px] w-[11px]" strokeWidth={1.6} />
+        <span>Thinking</span>
+      </div>
+      <div className="pl-[17px]">
+        <div className={cn('text-[13px] leading-[1.6] text-ink-2', active && 'shimmer-text')}>
+          {text}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Assistant text (document prose with markdown) ── */
+
+function AssistantText({ text, active }: { text: string; active: boolean }): JSX.Element {
+  if (!text.trim()) return <></>
+  return (
+    <div className="my-2">
+      <Markdown text={text} className={cn(active && 'shimmer-text')} />
+    </div>
+  )
+}
+
+/* ── Tool row (prefix-labeled: Q_, $_, %_, ✎_) ── */
+
+function ToolRow({
+  call,
+  result,
+  active,
+  workDir,
+}: {
+  call: ToolCallEntry
+  result: ToolResultEntry | null
+  active: boolean
+  workDir?: string
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const meta = call.meta as Record<string, unknown> | undefined
+  const toolName = (meta?.['toolName'] as string) ?? 'tool'
+  const display = call.display ?? toolName
+  const space = display.indexOf(' ')
+  const cmd = space > 0 ? display.slice(space + 1) : display
+  const prefix = pickPrefix(toolName)
+
+  const resultContent = result?.content as { content?: string } | undefined
+  const resultText = resultContent?.content ?? result?.display ?? ''
+  const isError = (result?.meta as Record<string, unknown> | undefined)?.['isError'] === true
+  const running = active || !result
+  const canExpand = !!result && resultText.trim().length > 0
+
+  return (
+    <div className="my-1.5">
+      <button
+        onClick={() => canExpand && setOpen(!open)}
+        disabled={!canExpand && !running}
+        className={cn(
+          'flex w-full items-center gap-2.5 rounded-[10px] border px-3 py-2 text-left transition',
+          'border-line-soft bg-code-bg',
+          canExpand && 'cursor-pointer hover:border-line',
+        )}
+      >
+        <span className="mono w-3.5 shrink-0 text-center text-[11px] text-ink-3">
+          {running ? <span className="pulse-ring" /> : prefix}
+        </span>
+        <span
+          className={cn(
+            'mono flex-1 truncate text-[12px] leading-[1.4]',
+            running ? 'shimmer-text' : 'text-code-ink',
+          )}
+        >
+          {shortenSummary(cmd, workDir)}
+        </span>
+        {canExpand && (
+          <ChevronRight
+            className={cn(
+              'h-[11px] w-[11px] shrink-0 text-ink-4 transition-transform',
+              open && 'rotate-90',
+            )}
+            strokeWidth={2}
+          />
+        )}
+      </button>
+      {open && result && (
+        <div
+          className={cn(
+            'mono my-1 rounded-[10px] border border-line-soft bg-code-bg px-3.5 py-3 text-[11.5px] leading-[1.6] text-ink-2',
+            'max-h-[400px] overflow-auto whitespace-pre',
+            isError && 'border-error/30 text-error',
+          )}
+        >
+          {truncateResult(resultText)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ── File edit pill (inline chip with +/- counts) ── */
+
+function FileEditPill({
+  call,
+  result,
+  active,
+  workDir,
+}: {
+  call: ToolCallEntry
+  result: ToolResultEntry | null
+  active: boolean
+  workDir?: string
+}): JSX.Element {
+  const [showDiff, setShowDiff] = useState(false)
+  const display = call.display ?? ''
+  const space = display.indexOf(' ')
+  const path = space > 0 ? display.slice(space + 1) : display
+  const shortPath = shortenSummary(path, workDir)
+
+  const resultDisplay = result?.display ?? ''
+  const resultContent = result?.content as { content?: string } | undefined
+  const resultText = (resultContent?.content ?? '').replace(/\s*\[mtime_ms=\d+\]/g, '')
+
+  // Parse +/- from result text
+  const addsMatch = resultDisplay.match(/\+(\d+)/)
+  const delsMatch = resultDisplay.match(/-(\d+)/)
+  const adds = addsMatch ? parseInt(addsMatch[1]!, 10) : 0
+  const dels = delsMatch ? parseInt(delsMatch[1]!, 10) : 0
+
+  // Count actual diff lines as fallback
+  const diffLines = resultDisplay.split('\n')
+  const actualAdds = adds || diffLines.filter((l) => /^\s*\d+\s*\+/.test(l)).length
+  const actualDels = dels || diffLines.filter((l) => /^\s*\d+\s*-/.test(l)).length
+
+  return (
+    <div className="my-1 inline-block">
+      <button
+        onClick={() => setShowDiff(!showDiff)}
+        className={cn(
+          'inline-flex items-center gap-2 rounded-[10px] border border-line-soft bg-code-bg px-3 py-1.5',
+          'transition hover:border-line',
+          active && 'animate-pulse',
+        )}
+      >
+        <File className="h-3 w-3 text-ink-3" strokeWidth={1.6} />
+        <span className="mono text-[12px] text-ink">{shortPath}</span>
+        {actualAdds > 0 && (
+          <span className="mono text-[11px] text-diff-add-ink">+{actualAdds}</span>
+        )}
+        {actualDels > 0 && (
+          <span className="mono text-[11px] text-diff-rm-ink">−{actualDels}</span>
+        )}
+      </button>
+      {showDiff && result && (
+        <DiffView
+          text={resultDisplay}
+          workDir={workDir}
+          isError={false}
+          resultSummary={resultText}
+        />
+      )}
+    </div>
+  )
+}
+
+/* ── Misc rows ── */
+
+function SubAgentRow({ text }: { text: string }): JSX.Element {
+  return <div className="mono my-0.5 text-[11.5px] text-ink-3">{text}</div>
+}
+
 function CompactMarker({ text }: { text: string }): JSX.Element {
   return (
-    <div className="my-2 flex items-center gap-3">
-      <div className="h-px flex-1 bg-border" />
-      <span className="text-[10.5px] font-medium uppercase tracking-[0.16em] text-muted">
+    <div className="my-3 flex items-center gap-3">
+      <div className="h-px flex-1 bg-line-soft" />
+      <span className="text-[10.5px] font-medium uppercase tracking-[0.16em] text-ink-4">
         {text || 'compact'}
       </span>
-      <div className="h-px flex-1 bg-border" />
+      <div className="h-px flex-1 bg-line-soft" />
     </div>
   )
 }
 
 function StatusRow({ text }: { text: string }): JSX.Element {
-  return <div className="text-center text-[11.5px] italic text-muted">{text}</div>
+  return <div className="text-center text-[11.5px] italic text-ink-4">{text}</div>
 }
 
 function ErrorRow({ text }: { text: string }): JSX.Element {
   return (
-    <div className="flex items-start gap-3 pl-10 -mt-1">
-      <div className="-ml-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-error">
-        <AlertTriangle className="h-3.5 w-3.5" />
-      </div>
-      <div className="flex-1 rounded-md border border-error/30 bg-error/5 px-3 py-2 text-[12px] text-error whitespace-pre-wrap">
-        {text}
-      </div>
+    <div className="my-1.5 flex items-start gap-2 rounded-[10px] border border-error/30 bg-error/5 px-3 py-2">
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-error" />
+      <div className="flex-1 text-[12px] text-error whitespace-pre-wrap">{text}</div>
     </div>
   )
 }
 
 function InterruptedRow({ text }: { text: string }): JSX.Element {
   return (
-    <div className="flex justify-center">
-      <span className="rounded-full border border-warning/30 bg-warning/5 px-3 py-1 text-[10.5px] uppercase tracking-[0.14em] text-warning">
+    <div className="my-3 flex items-center gap-3">
+      <div className="h-px flex-1 border-t border-dashed border-line-soft" />
+      <span className="text-[10.5px] uppercase tracking-[0.14em] text-ink-3">
         {text || 'Interrupted'}
       </span>
+      <div className="h-px flex-1 border-t border-dashed border-line-soft" />
     </div>
   )
 }
 
-// ── Utils ──
+/* ── Helpers ── */
 
-function pickToolIcon(name: string): React.FC<{ className?: string }> {
-  if (name === 'bash' || name === 'bash_background' || name === 'bash_output' || name === 'kill_shell')
-    return Terminal
-  if (name === 'edit_file' || name === 'write_file') return FileEdit
-  if (name === 'glob' || name === 'grep' || name === 'list_dir' || name === 'read_file') return Search
-  return Wrench
+function pickPrefix(name: string): string {
+  if (name === 'grep') return 'Q'
+  if (name === 'bash' || name === 'bash_background') return '$'
+  if (name === 'edit_file') return '✎'
+  if (name === 'write_file') return '+'
+  if (name === 'read_file') return '◇'
+  if (name === 'list_dir' || name === 'glob') return '⌕'
+  if (name === 'web_search' || name === 'web_fetch') return '⊕'
+  return '›'
 }
 
-function pickResultLang(toolName: string, text: string): string {
-  if (toolName === 'bash' || toolName === 'bash_background' || toolName === 'bash_output') return 'bash'
-  if (toolName === 'read_file') {
-    // Heuristic: try to infer lang from file extension in the result header
-    const m = text.match(/Lines? \d+-\d+ of/)
-    if (m) return 'text'
-    return 'text'
-  }
-  return 'text'
+function truncateResult(text: string): string {
+  const lines = text.split('\n')
+  if (lines.length <= 60) return text
+  const head = lines.slice(0, 40).join('\n')
+  const tail = lines.slice(-15).join('\n')
+  return `${head}\n\n  … ${lines.length - 55} lines hidden …\n\n${tail}`
 }
-

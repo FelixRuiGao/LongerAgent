@@ -1,10 +1,16 @@
+/**
+ * Left rail: search bar + project tree + user footer.
+ * Follows template: flat surface, project groups with collapse arrows,
+ * session dots (spinner for working, accent for notify, gray for idle).
+ */
+
 import { useState } from 'react'
-import { Plus, FolderOpen, X } from 'lucide-react'
+import { Plus, Search, ChevronDown, MoreHorizontal, X } from 'lucide-react'
 import { useSessionStore } from '@/state/sessionStore.js'
 import type { SessionTab } from '@shared/rpc.js'
 import { cn } from '@/lib/cn.js'
 import { api } from '@/lib/api.js'
-import { projectName, shortenSummary } from '@/lib/path.js'
+import { projectName } from '@/lib/path.js'
 
 export function Sidebar(): JSX.Element {
   const tabs = useSessionStore((s) => s.tabs)
@@ -14,8 +20,8 @@ export function Sidebar(): JSX.Element {
   const createTab = useSessionStore((s) => s.createTab)
   const perTab = useSessionStore((s) => s.perTab)
   const [creating, setCreating] = useState(false)
+  const [query, setQuery] = useState('')
 
-  // Group tabs by workDir for a project-list feel.
   const groups = groupByWorkDir(tabs)
 
   const onNewSession = async (): Promise<void> => {
@@ -31,43 +37,46 @@ export function Sidebar(): JSX.Element {
   }
 
   return (
-    <aside className="hairline-r flex w-[268px] shrink-0 flex-col bg-bg/30 backdrop-blur-sm">
-      <div className="flex h-12 shrink-0 items-center justify-between px-4">
-        <div className="flex items-baseline gap-2">
-          <span className="text-[10.5px] font-medium uppercase tracking-[0.16em] text-fg-3">
-            Sessions
-          </span>
-          {tabs.length > 0 && (
-            <span className="font-mono text-[10px] text-muted">
-              {tabs.length}
-            </span>
-          )}
+    <aside
+      className="flex w-[244px] shrink-0 flex-col bg-rail"
+      style={{ boxShadow: 'inset -1px 0 0 var(--color-line-soft)' }}
+    >
+      {/* Search + new button */}
+      <div className="flex gap-1.5 px-2.5 pb-2.5 pt-2">
+        <div className="flex flex-1 items-center gap-1.5 rounded-[10px] border border-line-soft bg-pane-2 px-3 py-[7px]">
+          <Search className="h-3 w-3 text-ink-4" strokeWidth={2} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search sessions"
+            className="flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-4"
+          />
+          <span className="mono text-[10px] text-ink-4">⌘K</span>
         </div>
         <button
           onClick={onNewSession}
           disabled={creating}
+          title="New session"
           className={cn(
-            'ring-focus flex h-6 w-6 items-center justify-center rounded',
-            'text-fg-3 transition hover:bg-bg-1 hover:text-fg',
+            'grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[10px]',
+            'border border-line-soft bg-pane-2 text-ink-2 transition',
+            'hover:bg-line-soft hover:text-ink',
             creating && 'opacity-50',
           )}
-          aria-label="New session"
-          title="New session (⌘N)"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-[13px] w-[13px]" strokeWidth={2} />
         </button>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2 pb-4">
+      {/* Project tree */}
+      <div className="flex-1 overflow-y-auto pt-1">
         {groups.length === 0 ? (
-          <div className="px-3 pt-2 text-[12px] leading-relaxed text-muted">
-            No sessions yet.
-            <br />
-            Click <span className="text-fg-3">+</span> to begin.
+          <div className="px-4 py-6 text-[12px] text-ink-3">
+            No sessions yet. Click + to begin.
           </div>
         ) : (
           groups.map(([workDir, items]) => (
-            <SessionGroup
+            <ProjectGroup
               key={workDir}
               workDir={workDir}
               items={items}
@@ -75,79 +84,127 @@ export function Sidebar(): JSX.Element {
               perTab={perTab}
               onSelect={setActive}
               onClose={closeTab}
-              workDirForCurrent={
-                items.find((t) => t.tabId === activeTabId)?.workDir ?? workDir
-              }
             />
           ))
         )}
-      </nav>
+      </div>
+
+      {/* User footer */}
+      <div className="border-t border-line-soft px-3 py-3">
+        <div className="flex items-center gap-2.5">
+          <div
+            className="mono grid h-7 w-7 shrink-0 place-items-center rounded-[9px] text-[11px] font-semibold text-[#ececec]"
+            style={{ background: 'linear-gradient(135deg, #2a2d34, #4a4e57)' }}
+          >
+            fg
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[12.5px] font-medium leading-tight text-ink">
+              Felix Gao
+            </div>
+            <div className="text-[11px] leading-tight text-ink-3">
+              Pro
+            </div>
+          </div>
+          <button className="text-ink-3 hover:text-ink">
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
     </aside>
   )
 }
 
-function SessionGroup(props: {
+function ProjectGroup({
+  workDir,
+  items,
+  activeTabId,
+  perTab,
+  onSelect,
+  onClose,
+}: {
   workDir: string
   items: SessionTab[]
   activeTabId: string | null
   perTab: ReturnType<typeof useSessionStore.getState>['perTab']
   onSelect: (id: string) => void
   onClose: (id: string) => void
-  workDirForCurrent: string
 }): JSX.Element {
-  const { workDir, items, activeTabId, perTab, onSelect, onClose, workDirForCurrent } = props
+  const [expanded, setExpanded] = useState(true)
+  const name = projectName(workDir)
+
   return (
-    <div className="mb-3 last:mb-0">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-muted">
-        <FolderOpen className="h-3 w-3" />
-        <span className="truncate">{projectName(workDir)}</span>
-      </div>
-      <ul className="space-y-0.5">
-        {items.map((t) => {
-          const active = t.tabId === activeTabId
-          const state = perTab[t.tabId]
-          const status = state?.status
-          const ask = state?.pendingAsk
-          return (
-            <li key={t.tabId}>
+    <div className="mb-1">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-1.5 px-3.5 py-[5px] text-ink-3"
+      >
+        <ChevronDown
+          className={cn('h-3 w-3 opacity-80 transition-transform', !expanded && '-rotate-90')}
+          strokeWidth={2}
+        />
+        <span className="flex-1 text-left text-[12px] font-semibold text-ink-2">
+          {name}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="flex flex-col">
+          {items.map((t) => {
+            const active = t.tabId === activeTabId
+            const state = perTab[t.tabId]
+            const status = state?.status
+            const isWorking = status?.currentTurnRunning ?? false
+            const hasAsk = !!state?.pendingAsk
+
+            return (
               <div
+                key={t.tabId}
                 role="button"
                 tabIndex={0}
                 onClick={() => onSelect(t.tabId)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    onSelect(t.tabId)
-                  }
+                  if (e.key === 'Enter' || e.key === ' ') onSelect(t.tabId)
                 }}
                 className={cn(
-                  'group relative flex w-full cursor-pointer items-start gap-2 rounded-md px-3 py-2 text-left transition',
-                  active
-                    ? 'bg-accent-soft text-fg'
-                    : 'text-fg-2 hover:bg-bg-1 hover:text-fg',
+                  'group relative mx-2 my-px flex cursor-pointer items-center gap-2 rounded-[10px] py-2 pl-7 pr-2.5',
+                  active ? 'bg-pane-2 text-ink' : 'text-ink-2 hover:bg-line-soft',
                 )}
               >
-                <StatusDot
-                  running={status?.currentTurnRunning ?? false}
-                  hasAsk={!!ask}
-                  active={active}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[12.5px] leading-tight">
-                    {t.title || t.displayName || 'Untitled session'}
-                  </div>
-                  <div className="mt-0.5 truncate text-[10.5px] text-fg-3">
-                    {summarizeStatus(status, ask ?? null, workDirForCurrent)}
-                  </div>
-                </div>
+                {/* Status dot */}
+                <span className="absolute left-3 top-1/2 -translate-y-1/2">
+                  {isWorking ? (
+                    <span className="working-spinner" />
+                  ) : hasAsk ? (
+                    <span className="block h-1.5 w-1.5 rounded-full bg-accent" />
+                  ) : (
+                    <span
+                      className={cn(
+                        'block h-1.5 w-1.5 rounded-full',
+                        active ? 'bg-ink-3' : 'bg-ink-4',
+                      )}
+                    />
+                  )}
+                </span>
+
+                <span
+                  className={cn(
+                    'flex-1 truncate text-[12.5px] leading-tight',
+                    active ? 'font-medium' : 'font-normal',
+                  )}
+                >
+                  {t.title || t.displayName || 'New session'}
+                </span>
+
+                {/* Time ago / close */}
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
                     void onClose(t.tabId)
                   }}
                   className={cn(
-                    'invisible mt-0.5 flex h-4 w-4 items-center justify-center rounded text-fg-3 transition',
-                    'hover:bg-bg-2 hover:text-fg group-hover:visible',
+                    'invisible flex h-4 w-4 items-center justify-center rounded text-ink-3 transition',
+                    'hover:bg-line hover:text-ink group-hover:visible',
                     active && 'visible',
                   )}
                   aria-label="Close"
@@ -155,53 +212,12 @@ function SessionGroup(props: {
                   <X className="h-3 w-3" />
                 </button>
               </div>
-            </li>
-          )
-        })}
-      </ul>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
-}
-
-function StatusDot({
-  running,
-  hasAsk,
-  active,
-}: {
-  running: boolean
-  hasAsk: boolean
-  active: boolean
-}): JSX.Element {
-  let cls = 'h-1.5 w-1.5 mt-1.5 rounded-full shrink-0'
-  if (hasAsk) {
-    cls += ' bg-warning'
-  } else if (running) {
-    cls += ' bg-accent pulse-soft'
-  } else if (active) {
-    cls += ' bg-fg-3'
-  } else {
-    cls += ' bg-border-strong'
-  }
-  return <span className={cls} aria-hidden />
-}
-
-function summarizeStatus(
-  status: { currentTurnRunning: boolean; lastToolCallSummary: string; sessionPhase: string } | null | undefined,
-  ask: { kind: string } | null,
-  workDir?: string,
-): string {
-  if (ask) return ask.kind === 'approval' ? 'Awaiting approval' : 'Awaiting answer'
-  if (!status) return 'Idle'
-  if (status.currentTurnRunning) {
-    if (status.lastToolCallSummary) return shortenSummary(status.lastToolCallSummary, workDir)
-    return capitalize(status.sessionPhase) || 'Working'
-  }
-  return 'Idle'
-}
-
-function capitalize(s: string): string {
-  if (!s) return s
-  return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
 function groupByWorkDir(tabs: readonly SessionTab[]): Array<[string, SessionTab[]]> {
@@ -211,10 +227,7 @@ function groupByWorkDir(tabs: readonly SessionTab[]): Array<[string, SessionTab[
     arr.push(t)
     map.set(t.workDir, arr)
   }
-  // Sort each group by createdAt desc
   return [...map.entries()].map(
-    ([k, v]) =>
-      [k, [...v].sort((a, b) => b.createdAt - a.createdAt)] as [string, SessionTab[]],
+    ([k, v]) => [k, [...v].sort((a, b) => b.createdAt - a.createdAt)] as [string, SessionTab[]],
   )
 }
-

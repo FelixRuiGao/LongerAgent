@@ -1,5 +1,11 @@
+/**
+ * Composer: borderless input + fade overlay + simplified status pills.
+ * Matches template: no top border, pane-2 bg textarea, fade-out overlay
+ * above, minimal status bar (accept edits / attach / model picker / theme).
+ */
+
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Square } from 'lucide-react'
+import { ArrowUp, Square, Paperclip, Sun, Moon, Zap, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/cn.js'
 import { useSessionStore } from '@/state/sessionStore.js'
 import { api } from '@/lib/api.js'
@@ -19,20 +25,21 @@ export function Composer({
 }): JSX.Element {
   const [text, setText] = useState('')
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const theme = useSessionStore((s) => s.theme)
+  const setTheme = useSessionStore((s) => s.setTheme)
 
-  // Auto-grow textarea
   useEffect(() => {
     const ta = taRef.current
     if (!ta) return
     ta.style.height = 'auto'
-    ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`
+    ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`
   }, [text])
 
   const send = async (): Promise<void> => {
-    const value = text.trim()
-    if (!value || disabled) return
+    const v = text.trim()
+    if (!v || disabled) return
     setText('')
-    await onSubmit(value)
+    await onSubmit(v)
   }
 
   const interrupt = async (): Promise<void> => {
@@ -43,43 +50,50 @@ export function Composer({
     }
   }
 
-  return (
-    <div className="px-6 pb-5 pt-2">
-      <div
-        className={cn(
-          'group relative rounded-2xl border bg-bg-1/70 backdrop-blur-md transition',
-          'border-border focus-within:border-accent/40 focus-within:bg-bg-1',
-          'shadow-[0_0_0_0_rgba(0,0,0,0)] focus-within:shadow-[0_0_0_4px_rgba(180,140,242,0.06)]',
-        )}
-      >
-        <textarea
-          ref={taRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.altKey) {
-              e.preventDefault()
-              void send()
-            }
-          }}
-          placeholder={disabled ? 'Working…' : 'Ask Fermi to do something…'}
-          rows={1}
-          className={cn(
-            'block w-full resize-none bg-transparent px-4 py-3.5 pr-14',
-            'text-[13.5px] leading-[1.55] text-fg placeholder:text-muted',
-            'outline-none',
-          )}
-        />
+  const meta = state?.meta
+  const modelName = meta?.modelConfigName ?? tab.selectedModel ?? ''
 
-        <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
+  return (
+    <div className="relative bg-pane px-6 pb-3.5">
+      {/* Fade overlay: content behind composer fades into pane bg */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 -top-9 h-9"
+        style={{ background: 'linear-gradient(to bottom, transparent, var(--color-pane))' }}
+      />
+
+      <div className="relative mx-auto max-w-[760px]">
+        {/* Scroll-to-bottom pill */}
+        {disabled && (
+          <div className="absolute -top-8 left-1/2 -translate-x-1/2">
+            <span className="inline-flex items-center gap-1 rounded-full bg-pane-2 border border-line px-2 py-0.5 text-[11px] text-ink-3">
+              <span className="pulse-ring" />
+              <span>Working…</span>
+            </span>
+          </div>
+        )}
+
+        {/* Input area */}
+        <div className="flex items-end gap-2 rounded-2xl bg-pane-2 px-4 py-3">
+          <textarea
+            ref={taRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.metaKey) {
+                e.preventDefault()
+                void send()
+              }
+            }}
+            placeholder="Type / for commands"
+            rows={1}
+            className="flex-1 resize-none bg-transparent py-1 text-[14px] leading-[1.5] text-ink outline-none placeholder:text-ink-4"
+            style={{ minHeight: 22, maxHeight: 140, overflowY: 'auto' }}
+          />
           {disabled ? (
             <button
               onClick={interrupt}
-              className={cn(
-                'ring-focus flex h-8 w-8 items-center justify-center rounded-full',
-                'bg-bg-2 text-warning transition hover:bg-warning/10',
-              )}
-              aria-label="Interrupt"
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-[10px] text-ink-3 transition hover:bg-line-soft hover:text-ink"
               title="Interrupt"
             >
               <Square className="h-3 w-3 fill-current" />
@@ -89,104 +103,57 @@ export function Composer({
               onClick={() => void send()}
               disabled={!text.trim()}
               className={cn(
-                'ring-focus flex h-8 w-8 items-center justify-center rounded-full transition',
-                text.trim()
-                  ? 'bg-accent text-bg hover:bg-accent-strong'
-                  : 'bg-bg-2 text-muted',
+                'grid h-7 w-7 shrink-0 place-items-center rounded-[10px] transition',
+                text.trim() ? 'text-ink hover:bg-line-soft' : 'text-ink-3',
               )}
-              aria-label="Send"
               title="Send (↵)"
             >
-              <ArrowUp className="h-4 w-4" />
+              <ArrowUp className="h-3.5 w-3.5" strokeWidth={2} />
             </button>
           )}
         </div>
-      </div>
-      <div className="mt-2 flex items-center justify-between px-1 text-[10.5px] text-muted">
-        <span className="font-mono">↵ send · ⇧↵ newline · ⌘K commands</span>
-        <ModelChip tab={tab} state={state} />
-      </div>
-    </div>
-  )
-}
 
-function ModelChip({ tab, state }: { tab: SessionTab; state: TabState | null }): JSX.Element {
-  const selectModel = useSessionStore((s) => s.selectModel)
-  const [open, setOpen] = useState(false)
-  const meta = state?.meta
-  const models = state?.models ?? []
-  const current = meta?.modelConfigName ?? tab.selectedModel ?? 'no model'
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          'inline-flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[10.5px] transition',
-          'text-fg-3 hover:bg-bg-1 hover:text-fg',
-        )}
-      >
-        <span
-          className="h-1.5 w-1.5 rounded-full"
-          style={{
-            background: providerColor(meta?.modelProvider ?? tab.modelProvider ?? ''),
-          }}
-        />
-        <span className="truncate max-w-[200px]">{current}</span>
-      </button>
-      {open && (
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute bottom-full right-0 z-50 mb-1.5 w-80 max-h-72 overflow-y-auto rounded-lg border border-border bg-bg-elev shadow-xl">
-            {models.length === 0 ? (
-              <div className="px-3 py-3 text-[11.5px] text-fg-3">No models available</div>
+        {/* Status bar: simplified pills */}
+        <div className="flex items-center gap-0.5 px-1 pt-2">
+          <StatusPill>
+            <Paperclip className="h-3 w-3" strokeWidth={1.6} />
+          </StatusPill>
+          <div className="flex-1" />
+          <StatusPill>
+            <Zap className="h-[11px] w-[11px]" strokeWidth={1.8} />
+            <span className="whitespace-nowrap">{modelName || 'no model'}</span>
+            <ChevronDown className="h-[9px] w-[9px] opacity-50" strokeWidth={2} />
+          </StatusPill>
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            title="Toggle theme"
+            className="ml-0.5 grid h-[26px] w-[26px] place-items-center rounded-lg text-ink-3 transition hover:bg-line-soft hover:text-ink"
+          >
+            {theme === 'dark' ? (
+              <Sun className="h-3 w-3" strokeWidth={1.6} />
             ) : (
-              models.map((m) => (
-                <button
-                  key={m.name}
-                  onClick={() => {
-                    void selectModel(tab.tabId, m.name)
-                    setOpen(false)
-                  }}
-                  className={cn(
-                    'flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition',
-                    m.name === current
-                      ? 'bg-accent-soft text-fg'
-                      : 'hover:bg-bg-2',
-                  )}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-[11.5px] text-fg">{m.name}</div>
-                    <div className="truncate text-[10.5px] text-fg-3">
-                      {m.provider} · {m.model}
-                    </div>
-                  </div>
-                  <span
-                    className="h-2 w-2 shrink-0 rounded-full"
-                    style={{ background: providerColor(m.provider) }}
-                  />
-                </button>
-              ))
+              <Moon className="h-3 w-3" strokeWidth={1.6} />
             )}
-          </div>
-        </>
-      )}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
-function providerColor(provider: string): string {
-  const map: Record<string, string> = {
-    openai: 'var(--color-provider-openai)',
-    'openai-codex': 'var(--color-provider-openai)',
-    anthropic: 'var(--color-provider-anthropic)',
-    kimi: 'var(--color-provider-kimi)',
-    glm: 'var(--color-provider-glm)',
-    minimax: 'var(--color-provider-minimax)',
-    openrouter: 'var(--color-provider-openrouter)',
-  }
-  return map[provider] ?? 'var(--color-fg-3)'
+function StatusPill({
+  children,
+  onClick,
+}: {
+  children: React.ReactNode
+  onClick?: () => void
+}): JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-[5px] rounded-lg px-2.5 py-1 text-[11.5px] font-medium text-ink-3 transition hover:bg-line-soft hover:text-ink"
+    >
+      {children}
+    </button>
+  )
 }

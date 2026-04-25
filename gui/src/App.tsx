@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { Sidebar } from '@/components/Sidebar.js'
 import { SessionPane } from '@/components/SessionPane.js'
-import { TitleBar } from '@/components/TitleBar.js'
 import { EmptyState } from '@/components/EmptyState.js'
 import { RightPane } from '@/components/RightPane.js'
 import { CommandPalette } from '@/components/CommandPalette.js'
@@ -19,8 +18,11 @@ export function App(): JSX.Element {
   const activeTab = tabs.find((t) => t.tabId === activeTabId) ?? null
 
   return (
-    <div className="cosmic-bg flex h-full flex-col">
-      <TitleBar />
+    <div className="flex h-full flex-col bg-pane">
+      {/* Invisible drag region for macOS titlebar — Electron's hiddenInset
+          handles the actual traffic lights; we just need the drag area. */}
+      <div className="titlebar-drag h-9 shrink-0" />
+
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
