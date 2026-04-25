@@ -56,6 +56,7 @@ export function Transcript({
     type Item =
       | { kind: 'entry'; entry: LogEntry }
       | { kind: 'tool'; call: ToolCallEntry; result: ToolResultEntry | null }
+      | { kind: 'reasoning'; entries: LogEntry[] }
     const out: Item[] = []
     for (const e of visible) {
       if (e.type === 'tool_call') {
@@ -64,6 +65,14 @@ export function Transcript({
         out.push({ kind: 'tool', call: e as ToolCallEntry, result })
       } else if (e.type === 'tool_result') {
         // rendered with its call
+      } else if (e.type === 'reasoning') {
+        // Merge consecutive reasoning entries under one header
+        const last = out[out.length - 1]
+        if (last && last.kind === 'reasoning') {
+          last.entries.push(e)
+        } else {
+          out.push({ kind: 'reasoning', entries: [e] })
+        }
       } else {
         out.push({ kind: 'entry', entry: e })
       }
@@ -84,7 +93,13 @@ export function Transcript({
 
   return (
     <div className="mx-auto max-w-[760px] px-8 py-6">
-      {items.map((item) => {
+      {items.map((item, idx) => {
+        if (item.kind === 'reasoning') {
+          const lastEntry = item.entries[item.entries.length - 1]!
+          const active = lastEntry.id === activeId
+          const combined = item.entries.map((e) => e.display ?? '').filter(Boolean).join('\n')
+          return <ThoughtBlock key={item.entries[0]!.id} text={combined} active={active} />
+        }
         if (item.kind === 'tool') {
           const active = item.call.id === activeId
           const meta = item.call.meta as Record<string, unknown> | undefined
@@ -125,7 +140,9 @@ function EntryRow({ entry, active }: { entry: LogEntry; active: boolean }): JSX.
     case 'assistant_text':
       return <AssistantText text={display} active={active} />
     case 'reasoning':
-      return <ThoughtHeader text={display} active={active} />
+      // Handled by the reasoning-merge logic above; should not reach here.
+      return <></>
+
     case 'agent_result':
       return <AssistantText text={display} active={false} />
     case 'sub_agent_start':
@@ -168,18 +185,18 @@ function UserBubble({ text }: { text: string }): JSX.Element {
   )
 }
 
-/* ── Thought header ("✦ Thought for Xs" + dim reasoning body) ── */
+/* ── Thought block: one "✦ Thinking" header per consecutive reasoning run ── */
 
-function ThoughtHeader({ text, active }: { text: string; active: boolean }): JSX.Element {
+function ThoughtBlock({ text, active }: { text: string; active: boolean }): JSX.Element {
   if (!text.trim()) return <></>
   return (
-    <div className="my-1.5 pl-0.5">
+    <div className="my-2 pl-0.5">
       <div className="mb-1 flex items-center gap-1.5 text-[11.5px] font-medium tracking-wide text-ink-3">
         <Sparkles className="h-[11px] w-[11px]" strokeWidth={1.6} />
         <span>Thinking</span>
       </div>
       <div className="pl-[17px]">
-        <div className={cn('text-[13px] leading-[1.6] text-ink-2', active && 'shimmer-text')}>
+        <div className={cn('text-[13px] leading-[1.6] text-ink-2 whitespace-pre-wrap', active && 'shimmer-text')}>
           {text}
         </div>
       </div>
