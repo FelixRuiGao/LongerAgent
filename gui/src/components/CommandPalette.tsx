@@ -183,7 +183,7 @@ export function CommandPalette(): JSX.Element {
         <Dialog.Content
           className={cn(
             'fixed left-1/2 top-[18%] z-50 w-[640px] max-w-[92vw] -translate-x-1/2',
-            'overflow-hidden rounded-xl border border-border bg-bg-elev shadow-2xl',
+            'overflow-hidden rounded-xl border border-line bg-pane-2 shadow-2xl',
           )}
           onOpenAutoFocus={(e) => {
             e.preventDefault()
@@ -215,13 +215,13 @@ export function CommandPalette(): JSX.Element {
             }}
             placeholder="Type to search commands…"
             className={cn(
-              'block w-full bg-transparent px-5 py-4 text-[14px] text-fg outline-none',
-              'placeholder:text-muted hairline-b border-border/60',
+              'block w-full bg-transparent px-5 py-4 text-[14px] text-ink outline-none',
+              'placeholder:text-ink-4 hairline-b border-line-soft',
             )}
           />
           <ul className="max-h-[420px] overflow-y-auto p-2">
             {filtered.length === 0 ? (
-              <li className="px-3 py-6 text-center text-[12.5px] text-muted">
+              <li className="px-3 py-6 text-center text-[12.5px] text-ink-4">
                 No matching commands
               </li>
             ) : (
@@ -237,28 +237,28 @@ export function CommandPalette(): JSX.Element {
                       onMouseEnter={() => setHighlightIdx(i)}
                       className={cn(
                         'group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition',
-                        active ? 'bg-bg-2 text-fg' : 'text-fg-2 hover:bg-bg-2/60',
+                        active ? 'bg-line-soft text-ink' : 'text-ink-2 hover:bg-line-soft/60',
                       )}
                     >
-                      <cmd.icon className="h-3.5 w-3.5 shrink-0 text-fg-3" />
+                      <cmd.icon className="h-3.5 w-3.5 shrink-0 text-ink-3" />
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-[13px]">{cmd.label}</div>
                         {cmd.hint && (
-                          <div className="truncate font-mono text-[10.5px] text-fg-3">
+                          <div className="truncate font-mono text-[10.5px] text-ink-3">
                             {cmd.hint}
                           </div>
                         )}
                       </div>
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-muted">
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">
                         {cmd.category}
                       </span>
                       {cmd.shortcut && (
-                        <span className="font-mono text-[10px] text-fg-3">
+                        <span className="font-mono text-[10px] text-ink-3">
                           {cmd.shortcut}
                         </span>
                       )}
                       {active && !cmd.shortcut && (
-                        <ChevronRight className="h-3 w-3 text-fg-3" />
+                        <ChevronRight className="h-3 w-3 text-ink-3" />
                       )}
                     </button>
                   </li>
@@ -266,7 +266,7 @@ export function CommandPalette(): JSX.Element {
               })
             )}
           </ul>
-          <div className="hairline-b border-t border-border/60 px-3 py-2 text-[10.5px] font-mono text-muted">
+          <div className="hairline-b border-t border-border/60 px-3 py-2 text-[10.5px] font-mono text-ink-4">
             ↑↓ navigate · ↵ run · esc close
           </div>
         </Dialog.Content>

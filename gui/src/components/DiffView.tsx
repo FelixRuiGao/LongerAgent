@@ -118,14 +118,14 @@ export function DiffView({
   return (
     <div
       className={cn(
-        'mt-1.5 overflow-hidden rounded-md border bg-bg-1/60',
-        isError ? 'border-error/30' : 'border-border',
+        'mt-1.5 overflow-hidden rounded-md border bg-code-bg',
+        isError ? 'border-error/30' : 'border-line-soft',
       )}
     >
       {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/60 bg-bg-2/40">
-        <Icon className={cn('h-3.5 w-3.5', parsed.isNewFile ? 'text-success' : 'text-fg-3')} />
-        <span className="font-mono text-[11.5px] text-fg-2 truncate">{display}</span>
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-line-soft/60 bg-pane-2/40">
+        <Icon className={cn('h-3.5 w-3.5', parsed.isNewFile ? 'text-success' : 'text-ink-3')} />
+        <span className="font-mono text-[11.5px] text-ink-2 truncate">{display}</span>
         <span className="ml-auto inline-flex items-center gap-1.5 font-mono text-[10.5px]">
           {stats.adds > 0 && <span className="text-success">+{stats.adds}</span>}
           {stats.dels > 0 && <span className="text-error">−{stats.dels}</span>}
@@ -145,7 +145,7 @@ export function DiffView({
               if (line.kind === 'hunk') {
                 return (
                   <tr key={i}>
-                    <td colSpan={3} className="px-3 py-1 bg-bg-2/30 text-[10.5px] text-fg-3">
+                    <td colSpan={3} className="px-3 py-1 bg-pane-2/30 text-[10.5px] text-ink-3">
                       {line.text}
                     </td>
                   </tr>
@@ -153,9 +153,9 @@ export function DiffView({
               }
               const tone =
                 line.kind === 'add'
-                  ? 'bg-success/10 text-fg'
+                  ? 'bg-success/10 text-ink'
                   : line.kind === 'del'
-                    ? 'bg-error/10 text-fg-2'
+                    ? 'bg-error/10 text-ink-2'
                     : ''
               const sign =
                 line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ' '
@@ -164,10 +164,10 @@ export function DiffView({
                   ? 'text-success'
                   : line.kind === 'del'
                     ? 'text-error'
-                    : 'text-fg-3'
+                    : 'text-ink-3'
               return (
                 <tr key={i} className={cn('group', tone)}>
-                  <td className="select-none pl-3 pr-2 text-right text-[10.5px] text-fg-3 align-top">
+                  <td className="select-none pl-3 pr-2 text-right text-[10.5px] text-ink-3 align-top">
                     {line.lineNo}
                   </td>
                   <td className={cn('select-none pr-1.5 text-center align-top', signColor)}>
@@ -183,7 +183,7 @@ export function DiffView({
 
       {/* Footer with summary if provided */}
       {resultSummary && (
-        <div className="border-t border-border/60 bg-bg-2/30 px-3 py-1 text-[10.5px] text-fg-3 truncate">
+        <div className="border-t border-line-soft/60 bg-pane-2/30 px-3 py-1 text-[10.5px] text-ink-3 truncate">
           {resultSummary}
         </div>
       )}
