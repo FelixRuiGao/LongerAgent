@@ -197,11 +197,26 @@ function ThoughtBlock({ text, active }: { text: string; active: boolean }): JSX.
       </div>
       <div className="pl-[17px]">
         <div className={cn('text-[13px] leading-[1.6] text-ink-2 whitespace-pre-wrap', active && 'shimmer-text')}>
-          {text}
+          {renderThoughtText(text)}
         </div>
       </div>
     </div>
   )
+}
+
+function renderThoughtText(text: string): (string | JSX.Element)[] {
+  const parts: (string | JSX.Element)[] = []
+  const re = /\*\*(.+?)\*\*/g
+  let last = 0
+  let match: RegExpExecArray | null
+  let key = 0
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) parts.push(text.slice(last, match.index))
+    parts.push(<strong key={key++} className="font-semibold text-ink">{match[1]}</strong>)
+    last = match.index + match[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
 }
 
 /* ── Assistant text (document prose with markdown) ── */
@@ -411,8 +426,12 @@ function pickPrefix(name: string): string {
 }
 
 function truncateResult(text: string): string {
-  const lines = text.split('\n')
-  if (lines.length <= 60) return text
+  // Strip read_file metadata headers like "[Lines 1-25 of 25 | mtime_ms=... | size_bytes=...]"
+  let cleaned = text.replace(/^\[Lines? \d+-\d+ of \d+[^\]]*\]\n?/gm, '')
+  // Strip write_file result summaries
+  cleaned = cleaned.replace(/^OK: Wrote \d+ .+\n?/m, '')
+  const lines = cleaned.split('\n')
+  if (lines.length <= 60) return cleaned
   const head = lines.slice(0, 40).join('\n')
   const tail = lines.slice(-15).join('\n')
   return `${head}\n\n  … ${lines.length - 55} lines hidden …\n\n${tail}`
