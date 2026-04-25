@@ -278,31 +278,21 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   );
   const primary = identifyPrimaryAgent(agents);
 
-  // Load skills (user overrides layered on top of bundled defaults).
+  // Load skills (four-layer: bundled > global > project > workspace)
   const bundledSkills = join(bundledDir, "skills");
   const skillRoots: string[] = [];
   if (existsSync(bundledSkills) && statSync(bundledSkills).isDirectory()) {
     skillRoots.push(bundledSkills);
   }
-  const userSkillsPath = paths.skillsPath;
-  if (
-    userSkillsPath &&
-    userSkillsPath !== bundledSkills &&
-    existsSync(userSkillsPath) &&
-    statSync(userSkillsPath).isDirectory()
-  ) {
-    skillRoots.push(userSkillsPath);
-  }
-  // Project-local skills (highest priority — overrides bundled and user-global)
-  const projectSkillsPath = paths.projectSkillsPath;
-  if (
-    projectSkillsPath &&
-    existsSync(projectSkillsPath) &&
-    statSync(projectSkillsPath).isDirectory()
-  ) {
-    skillRoots.push(projectSkillsPath);
-  }
+  skillRoots.push(...paths.skillRoots);
   const skills = loadSkillsMulti(skillRoots);
+
+  // ── Load hooks (four-layer: global > project > workspace) ──
+  let hooksLoaded: import("./hooks/index.js").HookManifest[] = [];
+  try {
+    const { loadHooksMulti } = await import("./hooks/index.js");
+    hooksLoaded = loadHooksMulti(paths.hookRoots);
+  } catch { /* hooks module optional */ }
 
   // ── Build Session ──
   const contextRatio = settings.context_ratio ?? 1.0;
@@ -318,6 +308,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     store: store as never,
     contextRatio,
   });
+
+  // ── Register hooks with session ──
+  if (hooksLoaded.length > 0) {
+    session.hookRuntime.setHooks(hooksLoaded);
+  }
 
   // ── Restore model selection ──
   const modelState = loadModelSelectionState(homeDir);

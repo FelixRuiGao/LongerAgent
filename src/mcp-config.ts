@@ -1,8 +1,11 @@
 /**
  * MCP server configuration loader.
  *
- * Loads MCP server definitions from ~/.vigil/mcp.json.
- * Format matches the mcp_servers section of the old config.yaml but in JSON.
+ * Loads MCP server definitions from:
+ *   1. ~/.vigil/mcp.json       (global)
+ *   2. {project}/.mcp.json     (project — overrides global by server name)
+ *
+ * Project servers require approval via settings (mcp_approved_project_servers).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -27,14 +30,47 @@ function resolveEnv(value: string): string {
  */
 export function loadMcpServers(homeDir: string): MCPServerConfig[] {
   const mcpPath = join(homeDir, "mcp.json");
-  if (!existsSync(mcpPath)) return [];
+  return parseMcpFile(mcpPath);
+}
+
+/**
+ * Load MCP servers from global + project configs.
+ * Project servers override global by name.
+ * Project servers are marked with `_projectServer = true` for approval gating.
+ */
+export function loadMcpServersWithProject(
+  homeDir: string,
+  projectMcpPath: string | null,
+): MCPServerConfig[] {
+  const global = parseMcpFile(join(homeDir, "mcp.json"));
+  const byName = new Map<string, MCPServerConfig>();
+  for (const s of global) byName.set(s.name, s);
+
+  if (projectMcpPath) {
+    const project = parseMcpFile(projectMcpPath);
+    for (const s of project) {
+      (s as any)._projectServer = true;
+      byName.set(s.name, s);
+    }
+  }
+
+  return [...byName.values()];
+}
+
+function parseMcpFile(filePath: string): MCPServerConfig[] {
+  if (!existsSync(filePath)) return [];
 
   let raw: Record<string, Record<string, unknown>>;
   try {
-    const content = readFileSync(mcpPath, "utf-8");
+    const content = readFileSync(filePath, "utf-8");
     raw = JSON.parse(content) as Record<string, Record<string, unknown>>;
   } catch {
     return [];
+  }
+
+  // Handle both flat format { "server": { ... } } and nested { "mcpServers": { ... } }
+  if (raw["mcpServers"] && typeof raw["mcpServers"] === "object") {
+    raw = raw["mcpServers"] as Record<string, Record<string, unknown>>;
   }
 
   const servers: MCPServerConfig[] = [];
@@ -44,7 +80,11 @@ export function loadMcpServers(homeDir: string): MCPServerConfig[] {
     const rawEnv = cfg["env"] as Record<string, string> | undefined;
     if (rawEnv) {
       for (const [k, v] of Object.entries(rawEnv)) {
-        env[k] = resolveEnv(String(v));
+        try {
+          env[k] = resolveEnv(String(v));
+        } catch (e) {
+          console.warn(`MCP server "${name}": env var resolution failed for ${k}: ${e instanceof Error ? e.message : e}`);
+        }
       }
     }
     servers.push({

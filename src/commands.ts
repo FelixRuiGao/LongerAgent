@@ -1522,6 +1522,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/agents", description: "Show agent list", handler: cmdAgents });
   registry.register({ name: "/permission", description: "Set permission mode", handler: cmdPermission, options: permissionOptions });
   registry.register({ name: "/rewind", description: "Rewind to a previous turn", handler: cmdRewind, options: rewindOptions, aliases: ["/undo"] });
+  registry.register({ name: "/hooks", description: "Show registered hooks", handler: cmdHooks });
   return registry;
 }
 
@@ -1848,4 +1849,43 @@ async function cmdRewind(ctx: CommandContext, args: string): Promise<void> {
 
   ctx.showMessage(`Rewound to turn ${turnIndex}. Removed ${result.removed} log entries.`);
   ctx.autoSave();
+}
+
+// ------------------------------------------------------------------
+// /hooks command
+// ------------------------------------------------------------------
+
+async function cmdHooks(ctx: CommandContext): Promise<void> {
+  const session = ctx.session;
+  const hookRuntime = session.hookRuntime;
+  if (!hookRuntime) {
+    ctx.showMessage("Hook system not available.");
+    return;
+  }
+
+  const hooks = hookRuntime.hooks;
+  if (!hooks || hooks.length === 0) {
+    ctx.showMessage(
+      "No hooks registered.\n\n" +
+      "To add hooks, create a hook.json in:\n" +
+      "  ~/.vigil/hooks/<name>/hook.json (global)\n" +
+      "  {project}/.vigil/hooks/<name>/hook.json (project)",
+    );
+    return;
+  }
+
+  const lines = [`${hooks.length} hook(s) registered:\n`];
+  for (const hook of hooks) {
+    const scope = hook._scope ?? "unknown";
+    const matcher = hook.matcher
+      ? ` [${hook.matcher.toolNames?.join(",") ?? ""}${hook.matcher.agentIds?.join(",") ?? ""}]`
+      : "";
+    lines.push(
+      `  ${hook.name} (${scope})\n` +
+      `    event: ${hook.event}${matcher}\n` +
+      `    command: ${hook.command}${hook.args?.length ? " " + hook.args.join(" ") : ""}\n` +
+      `    failClosed: ${hook.failClosed ?? false}`,
+    );
+  }
+  ctx.showMessage(lines.join("\n"));
 }

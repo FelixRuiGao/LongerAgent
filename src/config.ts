@@ -4,7 +4,8 @@
  */
 
 import { existsSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readOAuthAccessToken, hasOAuthTokens } from "./auth/openai-oauth.js";
 import { loadGitHubTokens, hasGitHubTokens } from "./auth/github-copilot-oauth.js";
@@ -441,31 +442,79 @@ function optionalConfigBooleanField(
 // Config path resolution
 // ------------------------------------------------------------------
 
-/** Default home directory for Vigil configuration. */
+/**
+ * Extension discovery paths across four layers (highest priority first):
+ *
+ *   workspace  — {cwd}/.vigil/         (checked into repo, shared with team)
+ *   project    — ~/.vigil/projects/<hash>/.vigil/  (per-project, not in repo)
+ *   global     — ~/.vigil/             (user-wide defaults)
+ *   bundled    — package assets        (shipped with vigil)
+ */
 export interface ResolvedPaths {
   templatesPath: string | null;
-  projectTemplatesPath: string | null;  // {projectPath}/.vigil/agent_templates/
   promptsPath: string | null;
-  skillsPath: string | null;
-  projectSkillsPath: string | null;     // {projectPath}/.vigil/skills/
-  homeDir: string;                // ~/.vigil/
+  homeDir: string;
+
+  // Four-layer extension discovery roots (each may be null if dir doesn't exist)
+  extensions: {
+    /** {cwd}/.vigil/ — workspace layer (highest priority) */
+    workspace: string | null;
+    /** ~/.vigil/projects/<hash>/.vigil/ — project layer */
+    project: string | null;
+    /** ~/.vigil/ — global layer */
+    global: string;
+    /** bundled assets dir — bundled layer (lowest priority) */
+    bundled: string | null;
+  };
+
+  // Convenience: flattened paths for specific extension types
+  /** Skills roots ordered by priority: [bundled, global, project, workspace] */
+  skillRoots: string[];
+  /** Hooks roots ordered by priority: [global, project, workspace] */
+  hookRoots: { dir: string; scope: "global" | "project" | "workspace" }[];
+  /** Template paths: [bundled, global, project, workspace] — used by loadTemplates */
+  templateRoots: string[];
+  /** Project .mcp.json path (workspace layer) */
+  projectMcpConfigPath: string | null;
+
+  // Legacy compat (used by cli.ts for template loading)
+  projectTemplatesPath: string | null;
+  projectSkillsPath: string | null;
 }
 
 /**
- * Discover templates, prompts, and skills paths.
+ * Discover extension paths across four layers.
  *
- * Discovery chain (highest priority first):
- *   1. CLI flag (--templates)
- *   2. ~/.vigil/
- *   3. Current working directory
+ * Layer priority (highest first):
+ *   workspace  — {cwd}/.vigil/
+ *   project    — ~/.vigil/projects/<hash>/.vigil/
+ *   global     — ~/.vigil/
+ *   bundled    — package assets (resolved separately via getBundledAssetsDir)
  */
 export function resolveAssetPaths(opts?: {
   templatesFlag?: string;
   projectPath?: string;
 }): ResolvedPaths {
   const home = getVigilHomeDir();
+  const projectPath = opts?.projectPath ?? process.cwd();
 
-  // --- Templates ---
+  // Compute project hash dir: ~/.vigil/projects/<name>_<hash>/
+  const slug = makeProjectSlug(projectPath);
+  const projectStoreDir = join(home, "projects", slug);
+
+  // Four extension layer roots
+  const workspaceRoot = join(projectPath, ".vigil");
+  const projectRoot = join(projectStoreDir, ".vigil");
+  const globalRoot = home;
+
+  const extensions = {
+    workspace: isDir(workspaceRoot) ? workspaceRoot : null,
+    project: isDir(projectRoot) ? projectRoot : null,
+    global: globalRoot,
+    bundled: null as string | null, // set by caller from getBundledAssetsDir()
+  };
+
+  // --- Templates (legacy: CLI flag > global > cwd) ---
   let templatesPath: string | null = null;
   if (opts?.templatesFlag) {
     templatesPath = isDir(opts.templatesFlag) ? opts.templatesFlag : null;
@@ -482,52 +531,64 @@ export function resolveAssetPaths(opts?: {
   // --- Prompts ---
   let promptsPath: string | null = null;
   if (templatesPath) {
-    // Look for prompts/ sibling to templates directory
-    const siblingPrompts = join(join(templatesPath, ".."), "prompts");
-    if (isDir(siblingPrompts)) {
-      promptsPath = siblingPrompts;
-    }
+    const siblingPrompts = join(dirname(templatesPath), "prompts");
+    if (isDir(siblingPrompts)) promptsPath = siblingPrompts;
   }
   if (!promptsPath) {
     const homePrompts = join(home, "prompts");
     const cwdPrompts = join(process.cwd(), "prompts");
-    if (isDir(homePrompts)) {
-      promptsPath = homePrompts;
-    } else if (isDir(cwdPrompts)) {
-      promptsPath = cwdPrompts;
-    }
+    if (isDir(homePrompts)) promptsPath = homePrompts;
+    else if (isDir(cwdPrompts)) promptsPath = cwdPrompts;
   }
 
-  // --- Skills ---
-  let skillsPath: string | null = null;
-  if (templatesPath) {
-    // Look for skills/ sibling to templates directory
-    const siblingSkills = join(join(templatesPath, ".."), "skills");
-    if (isDir(siblingSkills)) {
-      skillsPath = siblingSkills;
-    }
-  }
-  if (!skillsPath) {
-    const homeSkills = join(home, "skills");
-    const cwdSkills = join(process.cwd(), "skills");
-    if (isDir(homeSkills)) {
-      skillsPath = homeSkills;
-    } else if (isDir(cwdSkills)) {
-      skillsPath = cwdSkills;
-    }
-  }
+  // --- Skills roots (bundled > global > project > workspace) ---
+  const skillRoots: string[] = [];
+  // bundled added by caller
+  const globalSkills = join(globalRoot, "skills");
+  if (isDir(globalSkills)) skillRoots.push(globalSkills);
+  const projectSkills = join(projectStoreDir, ".vigil", "skills");
+  if (isDir(projectSkills)) skillRoots.push(projectSkills);
+  const workspaceSkills = join(workspaceRoot, "skills");
+  if (isDir(workspaceSkills)) skillRoots.push(workspaceSkills);
 
-  // --- Project-level overrides ({projectPath}/.vigil/) ---
-  let projectTemplatesPath: string | null = null;
-  let projectSkillsPath: string | null = null;
-  if (opts?.projectPath) {
-    const pt = join(opts.projectPath, ".vigil", "agent_templates");
-    if (isDir(pt)) projectTemplatesPath = pt;
-    const ps = join(opts.projectPath, ".vigil", "skills");
-    if (isDir(ps)) projectSkillsPath = ps;
-  }
+  // --- Hooks roots (global > project > workspace) ---
+  const hookRoots: { dir: string; scope: "global" | "project" | "workspace" }[] = [];
+  const globalHooks = join(globalRoot, "hooks");
+  if (isDir(globalHooks)) hookRoots.push({ dir: globalHooks, scope: "global" });
+  const projectHooks = join(projectStoreDir, ".vigil", "hooks");
+  if (isDir(projectHooks)) hookRoots.push({ dir: projectHooks, scope: "project" });
+  const workspaceHooks = join(workspaceRoot, "hooks");
+  if (isDir(workspaceHooks)) hookRoots.push({ dir: workspaceHooks, scope: "workspace" });
 
-  return { templatesPath, projectTemplatesPath, promptsPath, skillsPath, projectSkillsPath, homeDir: home };
+  // --- Template roots (for loadTemplates layered loading) ---
+  const templateRoots: string[] = [];
+  // bundled added by caller
+  if (templatesPath) templateRoots.push(templatesPath);
+  const projectTemplates = join(projectStoreDir, ".vigil", "agent_templates");
+  if (isDir(projectTemplates)) templateRoots.push(projectTemplates);
+  const workspaceTemplates = join(workspaceRoot, "agent_templates");
+  if (isDir(workspaceTemplates)) templateRoots.push(workspaceTemplates);
+
+  // --- Project MCP config ---
+  const mcpPath = join(projectPath, ".mcp.json");
+  const projectMcpConfigPath = existsSync(mcpPath) ? mcpPath : null;
+
+  // Legacy compat fields
+  const projectTemplatesPath = isDir(workspaceTemplates) ? workspaceTemplates : null;
+  const projectSkillsPath = isDir(workspaceSkills) ? workspaceSkills : null;
+
+  return {
+    templatesPath,
+    promptsPath,
+    homeDir: home,
+    extensions,
+    skillRoots,
+    hookRoots,
+    templateRoots,
+    projectMcpConfigPath,
+    projectTemplatesPath,
+    projectSkillsPath,
+  };
 }
 
 function isDir(p: string): boolean {
@@ -536,6 +597,12 @@ function isDir(p: string): boolean {
   } catch {
     return false;
   }
+}
+
+function makeProjectSlug(projectPath: string): string {
+  const name = basename(projectPath) || "root";
+  const h = createHash("sha256").update(projectPath).digest("hex").slice(0, 6);
+  return `${name}_${h}`;
 }
 
 // ------------------------------------------------------------------

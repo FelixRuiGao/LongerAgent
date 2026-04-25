@@ -135,21 +135,13 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   );
   const primary = identifyPrimaryAgent(agents);
 
-  // ── Skills ──
+  // ── Skills (four-layer: bundled > global > project > workspace) ──
   const bundledSkills = join(bundledDir, "skills");
   const skillRoots: string[] = [];
   if (existsSync(bundledSkills) && statSync(bundledSkills).isDirectory()) {
     skillRoots.push(bundledSkills);
   }
-  const userSkillsPath = paths.skillsPath;
-  if (
-    userSkillsPath &&
-    userSkillsPath !== bundledSkills &&
-    existsSync(userSkillsPath) &&
-    statSync(userSkillsPath).isDirectory()
-  ) {
-    skillRoots.push(userSkillsPath);
-  }
+  skillRoots.push(...paths.skillRoots);
   const skills = loadSkillsMulti(skillRoots);
 
   // ── Session ──

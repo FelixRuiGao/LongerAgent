@@ -56,6 +56,7 @@ export interface Session {
   resolveAgentQuestionAsk?(askId: string, decision: AgentQuestionDecision): void;
   resolveApprovalAsk?(askId: string, choiceIndex: number): void;
   permissionMode?: string;
+  hookRuntime?: { hooks: readonly any[]; getAdditionalContext(): string | null };
   getGlobalPreferences?(): any;
   getRewindTargets?(): Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }>;
   rewind?(toTurnIndex: number): { removed: number; error?: string };

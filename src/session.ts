@@ -79,6 +79,7 @@ import {
 } from "./tool-runtime.js";
 import { BackgroundShellManager } from "./background-shell-manager.js";
 import { PermissionAdvisor, PermissionRuleStore, classifyTool, type PermissionMode } from "./permissions/index.js";
+import { HookRuntime, type HookEvent, type HookPayload } from "./hooks/index.js";
 import { assembleFullSystemPrompt } from "./prompt-assembler.js";
 import {
   argOptionalString,
@@ -483,6 +484,9 @@ export class Session {
   /** Permission advisor — classifies tools and enforces permission mode. */
   private _permissionAdvisor!: PermissionAdvisor;
   private _permissionRuleStore!: PermissionRuleStore;
+
+  /** Hook runtime — fires events and evaluates hook commands. */
+  readonly hookRuntime = new HookRuntime();
 
   _createdAt: string;
   private _title: string | undefined;
@@ -2833,10 +2837,9 @@ export class Session {
   private _beforeToolExecute = async (
     ctx: ToolPreflightContext,
   ): Promise<ToolPreflightDecision | void> => {
+    // 1. Permission gate check
     const decision = await this.toolGate.evaluate(ctx);
     switch (decision.kind) {
-      case "allow":
-        return undefined;
       case "deny":
         return { kind: "deny", message: decision.message };
       case "ask": {
@@ -2869,6 +2872,23 @@ export class Session {
         throw new AskPendingError(ask);
       }
     }
+
+    // 2. PreToolUse hooks (run after permission gate allows)
+    if (this.hookRuntime.hooks.length > 0) {
+      const hookPayload: HookPayload = {
+        event: "PreToolUse",
+        timestamp: Date.now(),
+        toolName: ctx.toolName,
+        toolArgs: ctx.toolArgs,
+        toolCallId: ctx.toolCallId,
+      };
+      const hookResult = await this.hookRuntime.evaluate("PreToolUse", hookPayload);
+      if (hookResult.decision === "deny") {
+        return { kind: "deny", message: hookResult.denyReason ?? "Denied by hook" };
+      }
+    }
+
+    return undefined;
   };
 
 
@@ -3238,6 +3258,23 @@ export class Session {
       }
       throw err;
     }
+    // Fire UserPromptSubmit hooks (can deny or modify the prompt)
+    if (this.hookRuntime.hooks.length > 0) {
+      this.hookRuntime.clearTurnContext();
+      const hookResult = await this.hookRuntime.evaluate("UserPromptSubmit", {
+        event: "UserPromptSubmit",
+        timestamp: Date.now(),
+        userPrompt: typeof userContent === "string" ? userContent : userInput,
+      });
+      if (hookResult.decision === "deny") {
+        this.appendStatusMessage(
+          `Prompt blocked by hook: ${hookResult.denyReason ?? "denied"}`,
+          "hook_deny",
+        );
+        return "";
+      }
+    }
+
     // Assign context_id to user message (metadata only, no visible §{id}§ tag in content)
     const userCtxId = this._allocateContextId();
     this._lastTurnEndStatus = null;
@@ -6178,7 +6215,10 @@ export class Session {
     // 8. Kill all shells
     this._forceKillAllShells();
 
-    // 9. Close MCP connections
+    // 9. Fire Stop hooks (fire-and-forget)
+    this.hookRuntime.fireAndForget("Stop", { event: "Stop", timestamp: Date.now() });
+
+    // 10. Close MCP connections
     if (this._mcpManager) {
       try {
         await this._mcpManager.closeAll();
