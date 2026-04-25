@@ -266,7 +266,7 @@ export function CommandPalette(): JSX.Element {
               })
             )}
           </ul>
-          <div className="hairline-b border-t border-border/60 px-3 py-2 text-[10.5px] font-mono text-ink-4">
+          <div className="hairline-b border-t border-line-soft px-3 py-2 text-[10.5px] font-mono text-ink-4">
             ↑↓ navigate · ↵ run · esc close
           </div>
         </Dialog.Content>

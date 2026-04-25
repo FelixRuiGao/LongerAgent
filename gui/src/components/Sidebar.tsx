@@ -26,7 +26,13 @@ export function Sidebar(): JSX.Element {
   const activeState = activeTab ? perTab[activeTab.tabId] : undefined
   const activeModelName = activeState?.meta?.modelConfigName || activeTab?.selectedModel || ''
 
-  const groups = groupByWorkDir(tabs)
+  const filteredTabs = query.trim()
+    ? tabs.filter((t) => {
+        const hay = `${t.title ?? ''} ${t.displayName ?? ''} ${t.workDir}`.toLowerCase()
+        return hay.includes(query.trim().toLowerCase())
+      })
+    : tabs
+  const groups = groupByWorkDir(filteredTabs)
 
   const onNewSession = async (): Promise<void> => {
     if (creating) return
