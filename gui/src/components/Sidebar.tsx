@@ -22,6 +22,10 @@ export function Sidebar(): JSX.Element {
   const [creating, setCreating] = useState(false)
   const [query, setQuery] = useState('')
 
+  const activeTab = tabs.find((t) => t.tabId === activeTabId)
+  const activeState = activeTab ? perTab[activeTab.tabId] : undefined
+  const activeModelName = activeState?.meta?.modelConfigName || activeTab?.selectedModel || ''
+
   const groups = groupByWorkDir(tabs)
 
   const onNewSession = async (): Promise<void> => {
@@ -93,7 +97,7 @@ export function Sidebar(): JSX.Element {
       <div className="border-t border-line-soft px-3 py-3">
         <div className="flex items-center gap-2.5">
           <div
-            className="mono grid h-7 w-7 shrink-0 place-items-center rounded-[9px] text-[11px] font-semibold text-[#ececec]"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-[9px] text-[11px] font-semibold text-[#ececec]"
             style={{ background: 'linear-gradient(135deg, #2a2d34, #4a4e57)' }}
           >
             fg
@@ -102,8 +106,8 @@ export function Sidebar(): JSX.Element {
             <div className="text-[12.5px] font-medium leading-tight text-ink">
               Felix Gao
             </div>
-            <div className="text-[11px] leading-tight text-ink-3">
-              Pro
+            <div className="truncate text-[11px] leading-tight text-ink-3">
+              {activeModelName || 'Pro'}
             </div>
           </div>
           <button className="text-ink-3 hover:text-ink">
