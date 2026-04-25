@@ -22,6 +22,7 @@ import {
 import { cn } from '@/lib/cn.js'
 import { Markdown } from '@/components/Markdown.js'
 import { shortenSummary } from '@/lib/path.js'
+import { DiffView } from '@/components/DiffView.js'
 
 interface LogEntry {
   id: string
@@ -235,13 +236,18 @@ function ToolPair({ call, result, active, workDir }: ToolPairProps): JSX.Element
 
   const resultMeta = result?.meta as Record<string, unknown> | undefined
   const resultContent = result?.content as { content?: string } | undefined
-  const resultText = (resultContent?.content as string | undefined) ?? result?.display ?? ''
+  const resultText = (resultContent?.content as string | undefined) ?? ''
+  // For file_modify tools, the diff lives in result.display, not content.
+  const resultDisplay = result?.display ?? ''
   const isError = resultMeta?.['isError'] === true
   const running = active || !result
+  const isFileModify = toolName === 'write_file' || toolName === 'edit_file'
 
-  // Auto-hide tool result by default; expand on click.
-  const [expanded, setExpanded] = useState(false)
-  const canExpand = !!result && resultText.trim().length > 0
+  // For file-modify tools, expand by default (the diff IS the content).
+  // For everything else, collapse by default.
+  const [expanded, setExpanded] = useState(isFileModify)
+  const canExpand =
+    !!result && (resultText.trim().length > 0 || resultDisplay.trim().length > 0)
   const togglable = canExpand && !running
 
   return (
@@ -283,7 +289,18 @@ function ToolPair({ call, result, active, workDir }: ToolPairProps): JSX.Element
           )}
         </button>
 
-        {expanded && result && (
+        {expanded && result && isFileModify && (
+          <DiffView
+            text={resultDisplay}
+            workDir={workDir}
+            isError={isError}
+            resultSummary={shortenSummary(
+              resultText.replace(/\s*\[mtime_ms=\d+\]/g, ''),
+              workDir,
+            )}
+          />
+        )}
+        {expanded && result && !isFileModify && (
           <ToolResultBody toolName={toolName} text={resultText} isError={isError} />
         )}
       </div>
