@@ -200,7 +200,11 @@ function ProjectGroup({
                   {t.title || t.displayName || 'New session'}
                 </span>
 
-                {/* Time ago / close */}
+                <span className="shrink-0 text-[11px] tabular-nums text-ink-4 group-hover:hidden">
+                  {timeAgo(t.createdAt)}
+                </span>
+
+                {/* Close button (replaces time on hover) */}
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
@@ -222,6 +226,17 @@ function ProjectGroup({
       )}
     </div>
   )
+}
+
+function timeAgo(ts: number): string {
+  const seconds = Math.floor((Date.now() - ts) / 1000)
+  if (seconds < 60) return 'now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  return `${days}d`
 }
 
 function groupByWorkDir(tabs: readonly SessionTab[]): Array<[string, SessionTab[]]> {

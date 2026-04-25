@@ -51,7 +51,11 @@ export function Composer({
   }
 
   const meta = state?.meta
+  const status = state?.status
   const modelName = meta?.modelConfigName ?? tab.selectedModel ?? ''
+  const tokens = status && status.contextBudget >= 10_000
+    ? `${fmt(status.lastInputTokens)} / ${fmt(status.contextBudget)}`
+    : null
 
   return (
     <div className="relative bg-pane px-6 pb-3.5">
@@ -119,6 +123,11 @@ export function Composer({
             <Paperclip className="h-3 w-3" strokeWidth={1.6} />
           </StatusPill>
           <div className="flex-1" />
+          {tokens && (
+            <span className="tabular-nums text-[11px] text-ink-4">
+              {tokens}
+            </span>
+          )}
           <StatusPill>
             <Zap className="h-[11px] w-[11px]" strokeWidth={1.8} />
             <span className="whitespace-nowrap">{modelName || 'no model'}</span>
@@ -139,6 +148,13 @@ export function Composer({
       </div>
     </div>
   )
+}
+
+function fmt(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0'
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`
+  return String(n)
 }
 
 function StatusPill({
