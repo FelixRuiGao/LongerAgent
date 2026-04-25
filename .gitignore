@@ -24,6 +24,7 @@ dejavu-fonts-ttf-2.37/
 .junie/
 hitgrid_*.txt
 buffer_dump/
+GUI_Plan.md
 crash-diag.log
 tmp_repos/
 experiments/

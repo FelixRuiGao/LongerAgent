@@ -16,7 +16,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getVigilHomeDir } from "./home-path.js";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 // child_process — now only used by BackgroundShellManager
 import * as yaml from "js-yaml";
 import { countTokens as gptCountTokens, encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
@@ -2843,42 +2843,63 @@ export class Session {
     });
   }
 
+  /** Returns true if the path is strictly inside the session artifacts dir. */
+  private _isInsideArtifactsDir(rawPath: unknown): boolean {
+    if (typeof rawPath !== "string" || !rawPath) return false;
+    const artifactsDir = this._getArtifactsDirIfAvailable();
+    if (!artifactsDir) return false;
+    const absPath = isAbsolute(rawPath) ? rawPath : resolve(this._projectRoot, rawPath);
+    const rel = relative(artifactsDir, absPath);
+    if (!rel) return false; // exact match means writing the artifacts dir itself
+    if (rel.startsWith("..")) return false;
+    if (isAbsolute(rel)) return false;
+    return true;
+  }
+
   private _beforeToolExecute = async (
     ctx: ToolPreflightContext,
   ): Promise<ToolPreflightDecision | void> => {
-    // 1. Permission gate check
-    const decision = await this.toolGate.evaluate(ctx);
-    switch (decision.kind) {
-      case "deny":
-        return { kind: "deny", message: decision.message };
-      case "ask": {
-        const assessment = await classifyToolAsync(ctx.toolName, ctx.toolArgs);
-        const offers = this._permissionAdvisor["_buildOffers"](assessment);
-        const options = offers.map((o: any) => o.label);
-        options.push("Deny");
+    // 0. Artifacts-dir bypass: write_file/edit_file inside session artifacts/
+    //    don't need approval (Fermi-style auto-allow for agent-owned scratch space).
+    const isFileWrite = ctx.toolName === "write_file" || ctx.toolName === "edit_file";
+    const skipPermissionGate =
+      isFileWrite && this._isInsideArtifactsDir((ctx.toolArgs as Record<string, unknown>)["path"]);
 
-        const ask: ApprovalRequest = {
-          id: `approval-${randomUUID().slice(0, 8)}`,
-          kind: "approval",
-          createdAt: new Date().toISOString(),
-          source: { agentId: ctx.agentName },
-          summary: decision.question,
-          roundIndex: undefined,
-          payload: {
-            toolCallId: ctx.toolCallId,
-            toolName: ctx.toolName,
-            toolSummary: ctx.summary,
-            permissionClass: assessment.permissionClass,
-            offers: offers.map((o: any) => ({
-              type: o.type,
-              label: o.label,
-              scope: o.scope,
-              rule: o.rule,
-            })),
-          },
-          options,
-        };
-        throw new AskPendingError(ask);
+    // 1. Permission gate check (skip for artifacts writes)
+    if (!skipPermissionGate) {
+      const decision = await this.toolGate.evaluate(ctx);
+      switch (decision.kind) {
+        case "deny":
+          return { kind: "deny", message: decision.message };
+        case "ask": {
+          const assessment = await classifyToolAsync(ctx.toolName, ctx.toolArgs);
+          const offers = this._permissionAdvisor["_buildOffers"](assessment);
+          const options = offers.map((o: any) => o.label);
+          options.push("Deny");
+
+          const ask: ApprovalRequest = {
+            id: `approval-${randomUUID().slice(0, 8)}`,
+            kind: "approval",
+            createdAt: new Date().toISOString(),
+            source: { agentId: ctx.agentName },
+            summary: decision.question,
+            roundIndex: undefined,
+            payload: {
+              toolCallId: ctx.toolCallId,
+              toolName: ctx.toolName,
+              toolSummary: ctx.summary,
+              permissionClass: assessment.permissionClass,
+              offers: offers.map((o: any) => ({
+                type: o.type,
+                label: o.label,
+                scope: o.scope,
+                rule: o.rule,
+              })),
+            },
+            options,
+          };
+          throw new AskPendingError(ask);
+        }
       }
     }
 
@@ -2923,10 +2944,245 @@ export class Session {
         return this._turnInner(pending.userInput ?? "", options);
       }
 
+      // Drain any pending tool_calls (including the just-approved one and any
+      // siblings that were emitted in parallel but never reached). This is the
+      // single, canonical execution path post-approval. Stops on suspension.
+      const suspended = await this._drainPendingToolCalls();
+      if (suspended) {
+        // A new approval ask was raised; the TUI handles it, then resume()
+        // is called again.
+        return "";
+      }
+
       const textAccumulator = { text: "" };
       const reasoningAccumulator = { text: "" };
       return this._runTurnActivationLoop(options?.signal, textAccumulator, reasoningAccumulator);
     });
+  }
+
+  /**
+   * Drain pending tool_calls in the current turn (in emission order).
+   * For each: gate → execute → append tool_result, updating tool_call meta.
+   * Returns true if a new approval ask was raised (suspends the loop).
+   *
+   * This is the single canonical path for executing tool_calls outside of
+   * the streaming tool-loop — used after approval resume and to handle
+   * orphan parallel tool_calls.
+   */
+  private async _drainPendingToolCalls(): Promise<boolean> {
+    while (true) {
+      const next = this._findNextPendingToolCall();
+      if (!next) return false;
+
+      // Mark as running in tool_call meta so the display shows shimmer.
+      this._updateToolCallExecState(next.toolCallId, "running");
+
+      const ctx: ToolPreflightContext = {
+        agentName: next.agentName,
+        toolName: next.toolName,
+        toolArgs: next.toolArgs,
+        toolCallId: next.toolCallId,
+        summary: `${next.agentName} is calling ${next.toolName}`,
+      };
+
+      let denyMessage: string | undefined;
+      let allowOnce = false;
+      try {
+        // Skip the permission gate if this tool_call was already approved
+        // (allow-once grant was set in resolveApprovalAsk before resume).
+        allowOnce = this._permissionAdvisor["_allowOnceGrants"].has(next.toolCallId);
+        if (!allowOnce) {
+          const decision = await this._beforeToolExecute(ctx);
+          if (decision && decision.kind === "deny") {
+            denyMessage = decision.message;
+          }
+        } else {
+          // Gate already passed; still run hooks
+          if (this.hookRuntime.hooks.length > 0) {
+            const hookResult = await this.hookRuntime.evaluate("PreToolUse", {
+              event: "PreToolUse",
+              timestamp: Date.now(),
+              toolName: next.toolName,
+              toolArgs: next.toolArgs,
+              toolCallId: next.toolCallId,
+            });
+            if (hookResult.decision === "deny") {
+              denyMessage = hookResult.denyReason ?? "Denied by hook";
+            } else if (hookResult.updatedInput) {
+              Object.assign(next.toolArgs, hookResult.updatedInput);
+            }
+          }
+        }
+      } catch (e) {
+        if ((e as { name?: string })?.name === "AskPendingError") {
+          const ask = (e as { ask: ApprovalRequest }).ask;
+          const askContextId = this._findToolCallContextId(next.toolCallId, next.roundIndex);
+          this._updateToolCallExecState(next.toolCallId, "not_started");
+          this._activeAsk = ask;
+          this._emitAskRequestedProgress(this._activeAsk);
+          this._appendEntry(createAskRequest(
+            this._nextLogId("ask_request"),
+            this._turnCount,
+            this._activeAsk.payload,
+            this._activeAsk.id,
+            this._activeAsk.kind,
+            next.toolCallId,
+            next.roundIndex,
+            askContextId,
+          ), false);
+          this._pendingTurnState = { stage: "activation" };
+          this.onSaveRequest?.();
+          return true;
+        }
+        throw e;
+      }
+
+      // Execute (or deny)
+      const contextId = this._findToolCallContextId(next.toolCallId, next.roundIndex)
+        ?? this._allocateContextId();
+      const execStartMs = Date.now();
+      let resultContent = "";
+      let isError = false;
+      let toolMetadata: Record<string, unknown> = {};
+
+      if (denyMessage) {
+        resultContent = `ERROR: ${denyMessage}`;
+        isError = true;
+      } else {
+        const executor = this._toolExecutors[next.toolName];
+        try {
+          if (!executor) {
+            resultContent = `ERROR: No executor for tool '${next.toolName}'`;
+            isError = true;
+          } else {
+            const result = await executor(next.toolArgs, { signal: undefined });
+            if (typeof result === "string") {
+              resultContent = result;
+            } else if (result instanceof ToolResult) {
+              resultContent = result.content;
+              toolMetadata = { ...result.metadata };
+              if (result.contentBlocks) {
+                toolMetadata._contentBlocks = result.contentBlocks;
+              }
+            } else {
+              resultContent = String(result);
+            }
+            isError = resultContent.startsWith("ERROR:");
+          }
+        } catch (e) {
+          resultContent = `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+          isError = true;
+        }
+      }
+
+      // Build preview (matches tool-loop's logic)
+      const previewSrc = toolMetadata["tui_preview"];
+      let previewText: string | undefined;
+      let previewDim: boolean | undefined;
+      if (previewSrc && typeof previewSrc === "object") {
+        const text = (previewSrc as Record<string, unknown>)["text"];
+        if (typeof text === "string" && text.trim()) {
+          previewText = text;
+          previewDim = (previewSrc as Record<string, unknown>)["dim"] === true ? true : undefined;
+        }
+      }
+      if (!previewText && !isError) {
+        const lines = resultContent.split("\n");
+        previewText = lines.length > 20
+          ? lines.slice(0, 20).join("\n") + `\n... (${lines.length - 20} more lines)`
+          : resultContent;
+        previewDim = true;
+      }
+
+      this._appendEntry(createToolResultEntry(
+        this._nextLogId("tool_result"),
+        this._turnCount,
+        next.roundIndex,
+        {
+          toolCallId: next.toolCallId,
+          toolName: next.toolName,
+          content: resultContent,
+          toolSummary: `${next.toolName} ${isError ? "failed" : "completed"}`,
+        },
+        {
+          isError,
+          contextId,
+          toolMetadata: Object.keys(toolMetadata).length > 0 ? toolMetadata : undefined,
+          execStartMs,
+          previewText,
+          previewDim,
+        },
+      ));
+      this._updateToolCallExecState(next.toolCallId, isError ? "failed" : "completed");
+
+      if (this.hookRuntime.hooks.length > 0) {
+        const event = isError ? "PostToolUseFailure" : "PostToolUse";
+        this.hookRuntime.fireAndForget(event, {
+          event,
+          timestamp: Date.now(),
+          toolName: next.toolName,
+          toolCallId: next.toolCallId,
+          agentId: next.agentName,
+        });
+      }
+
+      this.onSaveRequest?.();
+    }
+  }
+
+  /**
+   * Find the next pending tool_call in the current turn (no matching result),
+   * in log/emission order. Returns null when all are resolved.
+   */
+  private _findNextPendingToolCall(): {
+    toolCallId: string;
+    toolName: string;
+    toolArgs: Record<string, unknown>;
+    roundIndex: number;
+    agentName: string;
+  } | null {
+    const resultIds = new Set<string>();
+    for (const entry of this._log) {
+      if (entry.type !== "tool_result") continue;
+      if (entry.discarded) continue;
+      if (entry.turnIndex !== this._turnCount) continue;
+      const meta = entry.meta as Record<string, unknown>;
+      const id = String(meta["toolCallId"] ?? "");
+      if (id) resultIds.add(id);
+    }
+
+    for (const entry of this._log) {
+      if (entry.type !== "tool_call") continue;
+      if (entry.discarded) continue;
+      if (entry.turnIndex !== this._turnCount) continue;
+      const meta = entry.meta as Record<string, unknown>;
+      const toolCallId = String(meta["toolCallId"] ?? "");
+      if (!toolCallId || resultIds.has(toolCallId)) continue;
+      const content = entry.content as { name?: string; arguments?: Record<string, unknown> };
+      return {
+        toolCallId,
+        toolName: String(content.name ?? meta["toolName"] ?? ""),
+        toolArgs: content.arguments ?? {},
+        roundIndex: entry.roundIndex ?? 0,
+        agentName: String(meta["agentName"] ?? this.primaryAgent.name),
+      };
+    }
+    return null;
+  }
+
+  /** Update tool_call entry's toolExecState meta in-place. */
+  private _updateToolCallExecState(
+    toolCallId: string,
+    state: "not_started" | "running" | "completed" | "failed",
+  ): void {
+    for (const entry of this._log) {
+      if (entry.type !== "tool_call") continue;
+      const meta = entry.meta as Record<string, unknown>;
+      if (String(meta["toolCallId"] ?? "") !== toolCallId) continue;
+      meta["toolExecState"] = state;
+      this._touchLog();
+      return;
+    }
   }
 
   private async _runTurnActivationLoop(
@@ -4278,7 +4534,8 @@ export class Session {
         { isError: true, contextId },
       ), false);
     } else {
-      // Apply the offer
+      // Apply the offer. The approved tool_call's grant is consumed in
+      // _drainPendingToolCalls during resume.
       if (offer?.type === "tool_once") {
         this._permissionAdvisor.grantAllowOnce(payload.toolCallId);
       } else if (offer?.type === "tool_pattern" && offer.rule) {
@@ -4297,9 +4554,7 @@ export class Session {
 
     this._activeAsk = null;
     this._emitAskResolvedProgress(askId, choiceLabel, "approval");
-    this._pendingTurnState = isDeny
-      ? { stage: "activation" }
-      : { stage: "activation" };
+    this._pendingTurnState = { stage: "activation" };
 
     this.onSaveRequest?.();
   }

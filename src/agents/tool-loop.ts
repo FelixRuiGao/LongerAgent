@@ -862,7 +862,6 @@ export async function asyncRunToolLoop(
     };
 
     const pendingToolCalls = new Map<string, PendingToolCallState>();
-    const startedExecutionPromises = new Set<Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null>>();
 
     const ensurePendingToolCall = (callId: string, name: string): PendingToolCallState => {
       let pending = pendingToolCalls.get(callId);
@@ -1328,24 +1327,6 @@ export async function asyncRunToolLoop(
       return promise;
     };
 
-    const trackExecutionPromise = (
-      promise: Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null>,
-    ): void => {
-      startedExecutionPromises.add(promise);
-      void promise.catch(() => {});
-    };
-
-    const startExecutionIfNeeded = (
-      callId: string,
-      fatalParseError?: string,
-    ): Promise<{ suspendedAsk?: { ask: AskRequest; toolCallId: string; roundIndex: number } } | null> | null => {
-      const pending = pendingToolCalls.get(callId);
-      if (!pending || !pending.closedCall) return null;
-      const promise = executeResolvedToolCall(callId, pending.name, pending.closedCall.arguments, fatalParseError);
-      trackExecutionPromise(promise);
-      return promise;
-    };
-
     const closeCommittedToolCall = (tc: ToolCall): void => {
       const pending = ensurePendingToolCall(tc.id, tc.name);
       pending.rawArguments = tc.rawArguments;
@@ -1362,22 +1343,19 @@ export async function asyncRunToolLoop(
       if (closedStreamable) {
         pending.sections = closedStreamable.sections;
         pending.canonicalArgs = closedStreamable.canonicalArgs;
+        // When provider sends full args at once without partial deltas,
+        // recordPartialToolCall is never called — backfill stream metadata here.
+        if (closedStreamable.language) pending.streamLanguage = closedStreamable.language;
+        if (closedStreamable.streamMode) pending.streamMode = closedStreamable.streamMode;
         probeEditContext(pending, closedStreamable);
       }
       pending.tuiVisibility = resolvePendingToolVisibility(pending, true);
       pending.streamPhase = "closed";
       syncToolCallEntry(tc.id);
-
-      if (!pending.executionPromise) {
-        const promise = startExecutionIfNeeded(tc.id, tc.parseError ?? undefined);
-        if (promise) {
-          void promise.then((result) => {
-            if (result?.suspendedAsk) {
-              suspendedAskResult = result.suspendedAsk;
-            }
-          }, () => {});
-        }
-      }
+      // Note: do NOT start execution here. Tool execution is sequential in
+      // emission order, drained after streaming completes (see post-streaming
+      // drain below). This is required for correct approval semantics —
+      // a pending approval on tool b must block c, d, etc.
     };
 
     let wrappedToolCallPartial: ((callId: string, name: string, rawArguments: string) => void) | undefined;
@@ -1553,28 +1531,23 @@ export async function asyncRunToolLoop(
       ));
     }
 
-    // Ensure every committed tool call is executing before we decide
-    // whether to continue to the next provider round.
+    // Sequential drain: execute committed tool calls IN EMISSION ORDER.
+    // Maps preserve insertion order, so iterating pendingToolCalls gives us
+    // the order tool_calls were emitted by the model. On any suspendedAsk,
+    // we stop — remaining tool_calls become orphans (still in log with
+    // toolExecState: "not_started") and Session resumes them after approval.
     for (const [callId, pending] of pendingToolCalls) {
-      if (!pending.name || !pending.closedCall || pending.executionPromise) continue;
-      const promise = startExecutionIfNeeded(callId, pending.closedCall.parseError ?? undefined);
-      if (promise) {
-        void promise.then((result) => {
-          if (result?.suspendedAsk) {
-            suspendedAskResult = result.suspendedAsk;
-          }
-        }, () => {});
-      }
-    }
-
-    // Strict barrier: wait for all started tool executions to settle before next provider call.
-    const activeExecutions = [...startedExecutionPromises];
-    if (activeExecutions.length > 0) {
-      const results = await Promise.all(activeExecutions);
-      for (const result of results) {
-        if (result?.suspendedAsk) {
-          suspendedAskResult = result.suspendedAsk;
-        }
+      if (!pending.name || !pending.closedCall) continue;
+      if (pending.execPhase === "completed" || pending.execPhase === "failed") continue;
+      const result = await executeResolvedToolCall(
+        callId,
+        pending.name,
+        pending.closedCall.arguments,
+        pending.closedCall.parseError ?? undefined,
+      );
+      if (result?.suspendedAsk) {
+        suspendedAskResult = result.suspendedAsk;
+        break;
       }
     }
     pendingToolCalls.clear();
