@@ -53,20 +53,34 @@ export function Transcript({
         if (typeof callId === 'string') resultByCallId.set(callId, e as ToolResultEntry)
       }
     }
+    type ToolPair = { call: ToolCallEntry; result: ToolResultEntry | null }
     type Item =
       | { kind: 'entry'; entry: LogEntry }
       | { kind: 'tool'; call: ToolCallEntry; result: ToolResultEntry | null }
       | { kind: 'reasoning'; entries: LogEntry[] }
+      | { kind: 'explore'; pairs: ToolPair[] }
+
     const out: Item[] = []
     for (const e of visible) {
       if (e.type === 'tool_call') {
         const callId = (e.meta as Record<string, unknown> | undefined)?.['toolCallId']
         const result = typeof callId === 'string' ? resultByCallId.get(callId) ?? null : null
-        out.push({ kind: 'tool', call: e as ToolCallEntry, result })
+        const toolName = (e.meta as Record<string, unknown> | undefined)?.['toolName'] as string ?? ''
+        const pair: ToolPair = { call: e as ToolCallEntry, result }
+
+        if (isExploreTool(toolName)) {
+          const last = out[out.length - 1]
+          if (last && last.kind === 'explore') {
+            last.pairs.push(pair)
+          } else {
+            out.push({ kind: 'explore', pairs: [pair] })
+          }
+        } else {
+          out.push({ kind: 'tool', ...pair })
+        }
       } else if (e.type === 'tool_result') {
         // rendered with its call
       } else if (e.type === 'reasoning') {
-        // Merge consecutive reasoning entries under one header
         const last = out[out.length - 1]
         if (last && last.kind === 'reasoning') {
           last.entries.push(e)
@@ -93,12 +107,34 @@ export function Transcript({
 
   return (
     <div className="mx-auto max-w-[760px] px-8 py-6">
-      {items.map((item, idx) => {
+      {items.map((item) => {
         if (item.kind === 'reasoning') {
           const lastEntry = item.entries[item.entries.length - 1]!
           const active = lastEntry.id === activeId
           const combined = item.entries.map((e) => e.display ?? '').filter(Boolean).join('\n')
           return <ThoughtBlock key={item.entries[0]!.id} text={combined} active={active} />
+        }
+        if (item.kind === 'explore') {
+          // Single explore tool → render as normal ToolRow
+          if (item.pairs.length === 1) {
+            const p = item.pairs[0]!
+            return (
+              <ToolRow
+                key={p.call.id}
+                call={p.call}
+                result={p.result}
+                active={p.call.id === activeId}
+                workDir={workDir}
+              />
+            )
+          }
+          return (
+            <ExploreGroup
+              key={item.pairs[0]!.call.id}
+              pairs={item.pairs}
+              workDir={workDir}
+            />
+          )
         }
         if (item.kind === 'tool') {
           const active = item.call.id === activeId
@@ -413,6 +449,111 @@ function InterruptedRow({ text }: { text: string }): JSX.Element {
 }
 
 /* ── Helpers ── */
+
+/* ── Explore group: consecutive read-only tools bundled ── */
+
+const EXPLORE_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'grep', 'web_search', 'web_fetch'])
+
+function isExploreTool(name: string): boolean {
+  return EXPLORE_TOOLS.has(name)
+}
+
+function ExploreGroup({
+  pairs,
+  workDir,
+}: {
+  pairs: Array<{ call: ToolCallEntry; result: ToolResultEntry | null }>
+  workDir?: string
+}): JSX.Element {
+  const [open, setOpen] = useState(true)
+
+  // Count by category
+  let reads = 0
+  let searches = 0
+  for (const p of pairs) {
+    const tn = ((p.call.meta as Record<string, unknown> | undefined)?.['toolName'] as string) ?? ''
+    if (tn === 'grep' || tn === 'web_search') searches++
+    else reads++
+  }
+  const parts: string[] = []
+  if (reads > 0) parts.push(`${reads} file${reads > 1 ? 's' : ''}`)
+  if (searches > 0) parts.push(`${searches} search${searches > 1 ? 'es' : ''}`)
+
+  return (
+    <div className="my-2">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-[13px] text-ink-2"
+      >
+        <span className="font-semibold text-ink">Explored</span>
+        <span>{parts.join(', ')}</span>
+        <ChevronRight
+          className={cn('h-3 w-3 text-ink-3 transition-transform', open && 'rotate-90')}
+          strokeWidth={2}
+        />
+      </button>
+      {open && (
+        <div className="mt-1.5 flex flex-col gap-0.5 pl-0.5">
+          {pairs.map((p) => (
+            <ExploreItem key={p.call.id} call={p.call} result={p.result} workDir={workDir} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ExploreItem({
+  call,
+  result,
+  workDir,
+}: {
+  call: ToolCallEntry
+  result: ToolResultEntry | null
+  workDir?: string
+}): JSX.Element {
+  const meta = call.meta as Record<string, unknown> | undefined
+  const toolName = (meta?.['toolName'] as string) ?? 'tool'
+  const display = call.display ?? toolName
+  const isError = (result?.meta as Record<string, unknown> | undefined)?.['isError'] === true
+
+  // Build the description line: "Read file.ts L1-50" / "Grepped pattern in dir"
+  const desc = formatExploreDesc(toolName, display, workDir)
+
+  return (
+    <div className="text-[13px] leading-[1.6] text-ink-3">
+      {desc}
+      {isError && <span className="text-error"> failed</span>}
+    </div>
+  )
+}
+
+function formatExploreDesc(toolName: string, display: string, workDir?: string): string {
+  const cleaned = shortenSummary(display, workDir)
+  // Strip the tool name prefix from display since we add our own verb
+  const space = cleaned.indexOf(' ')
+  const args = space > 0 ? cleaned.slice(space + 1) : cleaned
+
+  switch (toolName) {
+    case 'read_file': {
+      // "read_file path" → "Read path"
+      // Parse line range if present: "Read file L1-50"
+      return `Read ${args}`
+    }
+    case 'list_dir':
+      return `Listed ${args || '.'}`
+    case 'glob':
+      return `Glob ${args}`
+    case 'grep':
+      return `Grepped ${args}`
+    case 'web_search':
+      return `Searched ${args}`
+    case 'web_fetch':
+      return `Fetched ${args}`
+    default:
+      return cleaned
+  }
+}
 
 function pickPrefix(name: string): string {
   if (name === 'grep') return 'Q'
