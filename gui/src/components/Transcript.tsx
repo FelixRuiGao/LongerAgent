@@ -9,9 +9,8 @@
  * - File edits → inline pill chips with +/- counts
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Sparkles,
   ChevronRight,
   AlertTriangle,
   File,
@@ -98,8 +97,8 @@ export function Transcript({
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-center">
-          <p className="text-[13px] text-ink-3">Send a message to begin.</p>
-          <p className="mt-1 text-[12px] text-ink-4">The agent will work in this directory and may modify files.</p>
+          <p className="text-[15px] text-ink-3">Send a message to begin.</p>
+          <p className="mt-1 text-[16px] text-ink-4">The agent will work in this directory and may modify files.</p>
         </div>
       </div>
     )
@@ -115,15 +114,14 @@ export function Transcript({
           return <ThoughtBlock key={item.entries[0]!.id} text={combined} active={active} />
         }
         if (item.kind === 'explore') {
-          // Single explore tool → render as normal ToolRow
+          // Single explore tool → render as plain dim text line (same as grouped items)
           if (item.pairs.length === 1) {
             const p = item.pairs[0]!
             return (
-              <ToolRow
+              <ExploreItem
                 key={p.call.id}
                 call={p.call}
                 result={p.result}
-                active={p.call.id === activeId}
                 workDir={workDir}
               />
             )
@@ -202,7 +200,7 @@ function EntryRow({ entry, active }: { entry: LogEntry; active: boolean }): JSX.
     case 'ask_resolution':
       return <></>
     default:
-      return <div className="mono text-[11px] text-ink-4">[{entry.type}] {display}</div>
+      return <div className="mono text-[15px] text-ink-4">[{entry.type}] {display}</div>
   }
 }
 
@@ -212,7 +210,7 @@ function UserBubble({ text }: { text: string }): JSX.Element {
   return (
     <div className="my-3.5 flex justify-end">
       <div
-        className="max-w-[72%] whitespace-pre-wrap rounded-2xl px-4 py-[11px] text-[13.5px] leading-[1.55]"
+        className="max-w-[72%] whitespace-pre-wrap rounded-2xl px-4 py-[11px] text-[15.5px] leading-[1.55]"
         style={{ background: 'var(--color-bubble)', color: 'var(--color-bubble-ink)' }}
       >
         {text}
@@ -224,18 +222,39 @@ function UserBubble({ text }: { text: string }): JSX.Element {
 /* ── Thought block: one "✦ Thinking" header per consecutive reasoning run ── */
 
 function ThoughtBlock({ text, active }: { text: string; active: boolean }): JSX.Element {
+  const [open, setOpen] = useState(active)
+  // Auto-collapse when thinking finishes (active goes false)
+  const prevActive = useRef(active)
+  if (prevActive.current && !active) {
+    // Was active, now done — will collapse on next render
+  }
+  useEffect(() => {
+    if (prevActive.current && !active) setOpen(false)
+    prevActive.current = active
+  }, [active])
+  // Auto-open when active
+  useEffect(() => {
+    if (active) setOpen(true)
+  }, [active])
+
   if (!text.trim()) return <></>
   return (
-    <div className="my-2 pl-0.5">
-      <div className="mb-1 flex items-center gap-1.5 text-[11.5px] font-medium tracking-wide text-ink-3">
-        <Sparkles className="h-[11px] w-[11px]" strokeWidth={1.6} />
-        <span>Thinking</span>
-      </div>
-      <div className="pl-[17px]">
-        <div className={cn('text-[13px] leading-[1.6] text-ink-2 whitespace-pre-wrap', active && 'shimmer-text')}>
+    <div className="my-2">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-[15px]"
+      >
+        <span className="font-medium text-ink-3">Thinking</span>
+        <ChevronRight
+          className={cn('h-3 w-3 text-ink-4 transition-transform', open && 'rotate-90')}
+          strokeWidth={2}
+        />
+      </button>
+      {open && (
+        <div className={cn('mt-1 text-[15px] leading-[1.6] text-ink-4 whitespace-pre-wrap', active && 'shimmer-text')}>
           {renderThoughtText(text)}
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -248,7 +267,7 @@ function renderThoughtText(text: string): (string | JSX.Element)[] {
   let key = 0
   while ((match = re.exec(text)) !== null) {
     if (match.index > last) parts.push(text.slice(last, match.index))
-    parts.push(<strong key={key++} className="font-semibold text-ink">{match[1]}</strong>)
+    parts.push(<strong key={key++} className="font-semibold">{match[1]}</strong>)
     last = match.index + match[0].length
   }
   if (last < text.length) parts.push(text.slice(last))
@@ -304,12 +323,12 @@ function ToolRow({
           canExpand && 'cursor-pointer hover:border-line',
         )}
       >
-        <span className="mono w-3.5 shrink-0 text-center text-[11px] text-ink-3">
+        <span className="mono w-3.5 shrink-0 text-center text-[15px] text-ink-3">
           {running ? <span className="pulse-ring" /> : prefix}
         </span>
         <span
           className={cn(
-            'mono flex-1 truncate text-[12px] leading-[1.4]',
+            'mono flex-1 truncate text-[16px] leading-[1.4]',
             running ? 'shimmer-text' : 'text-code-ink',
           )}
         >
@@ -328,7 +347,7 @@ function ToolRow({
       {open && result && (
         <div
           className={cn(
-            'mono my-1 rounded-[10px] border border-line-soft bg-code-bg px-3.5 py-3 text-[11.5px] leading-[1.6] text-ink-2',
+            'mono my-1 rounded-[10px] border border-line-soft bg-code-bg px-3.5 py-3 text-[15.5px] leading-[1.6] text-ink-2',
             'max-h-[400px] overflow-auto whitespace-pre',
             isError && 'border-error/30 text-error',
           )}
@@ -363,16 +382,10 @@ function FileEditPill({
   const resultContent = result?.content as { content?: string } | undefined
   const resultText = (resultContent?.content ?? '').replace(/\s*\[mtime_ms=\d+\]/g, '')
 
-  // Parse +/- from result text
-  const addsMatch = resultDisplay.match(/\+(\d+)/)
-  const delsMatch = resultDisplay.match(/-(\d+)/)
-  const adds = addsMatch ? parseInt(addsMatch[1]!, 10) : 0
-  const dels = delsMatch ? parseInt(delsMatch[1]!, 10) : 0
-
-  // Count actual diff lines as fallback
+  // Count actual diff lines (lines like " 3 +code" or " 3 -code")
   const diffLines = resultDisplay.split('\n')
-  const actualAdds = adds || diffLines.filter((l) => /^\s*\d+\s*\+/.test(l)).length
-  const actualDels = dels || diffLines.filter((l) => /^\s*\d+\s*-/.test(l)).length
+  const actualAdds = diffLines.filter((l) => /^\s*\d+\s+\+/.test(l)).length
+  const actualDels = diffLines.filter((l) => /^\s*\d+\s+-/.test(l)).length
 
   return (
     <div className="my-1 inline-block">
@@ -385,12 +398,12 @@ function FileEditPill({
         )}
       >
         <File className="h-3 w-3 text-ink-3" strokeWidth={1.6} />
-        <span className="mono text-[12px] text-ink">{shortPath}</span>
+        <span className="text-[14px] text-ink">{shortPath}</span>
         {actualAdds > 0 && (
-          <span className="mono text-[11px] text-diff-add-ink">+{actualAdds}</span>
+          <span className="text-[13px] text-diff-add-ink">+{actualAdds}</span>
         )}
         {actualDels > 0 && (
-          <span className="mono text-[11px] text-diff-rm-ink">−{actualDels}</span>
+          <span className="text-[13px] text-diff-rm-ink">−{actualDels}</span>
         )}
       </button>
       {showDiff && result && (
@@ -408,14 +421,14 @@ function FileEditPill({
 /* ── Misc rows ── */
 
 function SubAgentRow({ text }: { text: string }): JSX.Element {
-  return <div className="mono my-0.5 text-[11.5px] text-ink-3">{text}</div>
+  return <div className="mono my-0.5 text-[15.5px] text-ink-3">{text}</div>
 }
 
 function CompactMarker({ text }: { text: string }): JSX.Element {
   return (
     <div className="my-3 flex items-center gap-3">
       <div className="h-px flex-1 bg-line-soft" />
-      <span className="text-[10.5px] font-medium uppercase tracking-[0.16em] text-ink-4">
+      <span className="text-[14.5px] font-medium uppercase tracking-[0.16em] text-ink-4">
         {text || 'compact'}
       </span>
       <div className="h-px flex-1 bg-line-soft" />
@@ -424,14 +437,14 @@ function CompactMarker({ text }: { text: string }): JSX.Element {
 }
 
 function StatusRow({ text }: { text: string }): JSX.Element {
-  return <div className="text-center text-[11.5px] italic text-ink-4">{text}</div>
+  return <div className="text-center text-[15.5px] italic text-ink-4">{text}</div>
 }
 
 function ErrorRow({ text }: { text: string }): JSX.Element {
   return (
     <div className="my-1.5 flex items-start gap-2 rounded-[10px] border border-error/30 bg-error/5 px-3 py-2">
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-error" />
-      <div className="flex-1 text-[12px] text-error whitespace-pre-wrap">{text}</div>
+      <div className="flex-1 text-[16px] text-error whitespace-pre-wrap">{text}</div>
     </div>
   )
 }
@@ -440,7 +453,7 @@ function InterruptedRow({ text }: { text: string }): JSX.Element {
   return (
     <div className="my-3 flex items-center gap-3">
       <div className="h-px flex-1 border-t border-dashed border-line-soft" />
-      <span className="text-[10.5px] uppercase tracking-[0.14em] text-ink-3">
+      <span className="text-[14.5px] uppercase tracking-[0.14em] text-ink-3">
         {text || 'Interrupted'}
       </span>
       <div className="h-px flex-1 border-t border-dashed border-line-soft" />
@@ -458,6 +471,34 @@ function isExploreTool(name: string): boolean {
   return EXPLORE_TOOLS.has(name)
 }
 
+const EXPLORE_DISPLAY: Record<string, string> = {
+  read_file: 'Read',
+  list_dir: 'List',
+  glob: 'Glob',
+  grep: 'Search',
+  web_search: 'Search',
+  web_fetch: 'Fetch',
+}
+
+const EXPLORE_UNIT: Record<string, string> = {
+  Read: 'file',
+  List: 'dir',
+  Glob: 'pattern',
+  Search: 'query',
+  Fetch: 'page',
+}
+
+function exploreDisplayName(toolName: string): string {
+  return EXPLORE_DISPLAY[toolName] ?? 'Op'
+}
+
+function exploreUnit(name: string, count: number): string {
+  const singular = EXPLORE_UNIT[name] ?? 'op'
+  if (count === 1) return singular
+  if (singular.endsWith('y')) return singular.slice(0, -1) + 'ies'
+  return singular + 's'
+}
+
 function ExploreGroup({
   pairs,
   workDir,
@@ -467,28 +508,27 @@ function ExploreGroup({
 }): JSX.Element {
   const [open, setOpen] = useState(true)
 
-  // Count by category
-  let reads = 0
-  let searches = 0
+  // Count by display name (matching TUI: Read/List/Glob/Search)
+  const counts = new Map<string, number>()
   for (const p of pairs) {
     const tn = ((p.call.meta as Record<string, unknown> | undefined)?.['toolName'] as string) ?? ''
-    if (tn === 'grep' || tn === 'web_search') searches++
-    else reads++
+    const name = exploreDisplayName(tn)
+    counts.set(name, (counts.get(name) ?? 0) + 1)
   }
-  const parts: string[] = []
-  if (reads > 0) parts.push(`${reads} file${reads > 1 ? 's' : ''}`)
-  if (searches > 0) parts.push(`${searches} search${searches > 1 ? 'es' : ''}`)
+  const summary = [...counts.entries()]
+    .map(([name, count]) => `${name} ${count} ${exploreUnit(name, count)}`)
+    .join(', ')
 
   return (
     <div className="my-2">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 text-[13px] text-ink-2"
+        className="flex items-center gap-1.5 text-[15px]"
       >
-        <span className="font-semibold text-ink">Explored</span>
-        <span>{parts.join(', ')}</span>
+        <span className="font-medium text-ink-3">Explore</span>
+        <span className="text-ink-4">({summary})</span>
         <ChevronRight
-          className={cn('h-3 w-3 text-ink-3 transition-transform', open && 'rotate-90')}
+          className={cn('h-3 w-3 text-ink-4 transition-transform', open && 'rotate-90')}
           strokeWidth={2}
         />
       </button>
@@ -521,9 +561,9 @@ function ExploreItem({
   const desc = formatExploreDesc(toolName, display, workDir)
 
   return (
-    <div className="text-[13px] leading-[1.6] text-ink-3">
+    <div className="text-[15px] leading-[1.6] text-ink-4">
       {desc}
-      {isError && <span className="text-error"> failed</span>}
+      {isError && ' failed'}
     </div>
   )
 }

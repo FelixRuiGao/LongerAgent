@@ -59,9 +59,9 @@ export function Sidebar(): JSX.Element {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search sessions"
-            className="flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-4"
+            className="flex-1 bg-transparent text-[14.5px] text-ink outline-none placeholder:text-ink-4"
           />
-          <span className="mono text-[10px] text-ink-4">⌘K</span>
+          <span className="mono text-[12px] text-ink-4">⌘K</span>
         </div>
         <button
           onClick={onNewSession}
@@ -81,7 +81,7 @@ export function Sidebar(): JSX.Element {
       {/* Project tree */}
       <div className="flex-1 overflow-y-auto pt-1">
         {groups.length === 0 ? (
-          <div className="px-4 py-6 text-[12px] text-ink-3">
+          <div className="px-4 py-6 text-[14px] text-ink-3">
             No sessions yet. Click + to begin.
           </div>
         ) : (
@@ -103,16 +103,16 @@ export function Sidebar(): JSX.Element {
       <div className="border-t border-line-soft px-3 py-3">
         <div className="flex items-center gap-2.5">
           <div
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-[9px] text-[11px] font-semibold text-[#ececec]"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-[9px] text-[15px] font-semibold text-[#ececec]"
             style={{ background: 'linear-gradient(135deg, #2a2d34, #4a4e57)' }}
           >
             fg
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-[12.5px] font-medium leading-tight text-ink">
+            <div className="text-[14.5px] font-medium leading-tight text-ink">
               Felix Gao
             </div>
-            <div className="truncate text-[11px] leading-tight text-ink-3">
+            <div className="truncate text-[13px] leading-tight text-ink-3">
               {activeModelName || 'Pro'}
             </div>
           </div>
@@ -153,7 +153,7 @@ function ProjectGroup({
           className={cn('h-3 w-3 opacity-80 transition-transform', !expanded && '-rotate-90')}
           strokeWidth={2}
         />
-        <span className="flex-1 text-left text-[12px] font-semibold text-ink-2">
+        <span className="flex-1 text-left text-[14px] font-semibold text-ink-2">
           {name}
         </span>
       </button>
@@ -199,14 +199,14 @@ function ProjectGroup({
 
                 <span
                   className={cn(
-                    'flex-1 truncate text-[12.5px] leading-tight',
+                    'flex-1 truncate text-[14.5px] leading-tight',
                     active ? 'font-medium' : 'font-normal',
                   )}
                 >
                   {t.title || t.displayName || 'New session'}
                 </span>
 
-                <span className="shrink-0 text-[11px] tabular-nums text-ink-4 group-hover:hidden">
+                <span className="shrink-0 text-[13px] tabular-nums text-ink-4 group-hover:hidden">
                   {timeAgo(t.createdAt)}
                 </span>
 

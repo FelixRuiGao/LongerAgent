@@ -215,13 +215,13 @@ export function CommandPalette(): JSX.Element {
             }}
             placeholder="Type to search commands…"
             className={cn(
-              'block w-full bg-transparent px-5 py-4 text-[14px] text-ink outline-none',
+              'block w-full bg-transparent px-5 py-4 text-[16px] text-ink outline-none',
               'placeholder:text-ink-4 hairline-b border-line-soft',
             )}
           />
           <ul className="max-h-[420px] overflow-y-auto p-2">
             {filtered.length === 0 ? (
-              <li className="px-3 py-6 text-center text-[12.5px] text-ink-4">
+              <li className="px-3 py-6 text-center text-[14.5px] text-ink-4">
                 No matching commands
               </li>
             ) : (
@@ -242,18 +242,18 @@ export function CommandPalette(): JSX.Element {
                     >
                       <cmd.icon className="h-3.5 w-3.5 shrink-0 text-ink-3" />
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-[13px]">{cmd.label}</div>
+                        <div className="truncate text-[15px]">{cmd.label}</div>
                         {cmd.hint && (
-                          <div className="truncate font-mono text-[10.5px] text-ink-3">
+                          <div className="truncate font-mono text-[12.5px] text-ink-3">
                             {cmd.hint}
                           </div>
                         )}
                       </div>
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-ink-4">
+                      <span className="font-mono text-[12px] uppercase tracking-wider text-ink-4">
                         {cmd.category}
                       </span>
                       {cmd.shortcut && (
-                        <span className="font-mono text-[10px] text-ink-3">
+                        <span className="font-mono text-[12px] text-ink-3">
                           {cmd.shortcut}
                         </span>
                       )}
@@ -266,7 +266,7 @@ export function CommandPalette(): JSX.Element {
               })
             )}
           </ul>
-          <div className="hairline-b border-t border-line-soft px-3 py-2 text-[10.5px] font-mono text-ink-4">
+          <div className="hairline-b border-t border-line-soft px-3 py-2 text-[14.5px] font-mono text-ink-4">
             ↑↓ navigate · ↵ run · esc close
           </div>
         </Dialog.Content>

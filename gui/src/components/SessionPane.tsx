@@ -26,7 +26,7 @@ export function SessionPane({ tab }: { tab: SessionTab }): JSX.Element {
   if (tab.status === 'starting') {
     return (
       <div className="flex h-full items-center justify-center text-ink-3">
-        <span className="shimmer-text text-[13px]">Starting session…</span>
+        <span className="shimmer-text text-[15px]">Starting session…</span>
       </div>
     )
   }
@@ -34,8 +34,8 @@ export function SessionPane({ tab }: { tab: SessionTab }): JSX.Element {
     return (
       <div className="flex h-full items-center justify-center px-6">
         <div className="max-w-md rounded-xl border border-error/30 bg-error/5 p-5">
-          <div className="text-[13px] font-medium text-error">Session failed to start</div>
-          <pre className="mt-2 whitespace-pre-wrap text-[11.5px] text-ink-3">
+          <div className="text-[15px] font-medium text-error">Session failed to start</div>
+          <pre className="mt-2 whitespace-pre-wrap text-[15.5px] text-ink-3">
             {tab.errorMessage ?? 'Unknown error'}
           </pre>
         </div>
@@ -50,7 +50,7 @@ export function SessionPane({ tab }: { tab: SessionTab }): JSX.Element {
       {/* Thread header — project name + tool buttons */}
       <div className="flex shrink-0 items-center gap-3 border-b border-line-soft px-6 py-2.5">
         <Layers className="h-3.5 w-3.5 text-ink-3" strokeWidth={1.6} />
-        <span className="text-[13.5px] font-semibold text-ink">{name}</span>
+        <span className="text-[15.5px] font-semibold text-ink">{name}</span>
         <div className="flex-1" />
         <HeaderBtn><Terminal className="h-3 w-3" strokeWidth={1.6} /></HeaderBtn>
         <HeaderBtn><MoreHorizontal className="h-3 w-3" strokeWidth={1.6} /></HeaderBtn>

@@ -70,7 +70,7 @@ export function Composer({
         {/* Scroll-to-bottom pill */}
         {disabled && (
           <div className="absolute -top-8 left-1/2 -translate-x-1/2">
-            <span className="inline-flex items-center gap-1 rounded-full bg-pane-2 border border-line px-2 py-0.5 text-[11px] text-ink-3">
+            <span className="inline-flex items-center gap-1 rounded-full bg-pane-2 border border-line px-2 py-0.5 text-[15px] text-ink-3">
               <span className="pulse-ring" />
               <span>Working…</span>
             </span>
@@ -91,7 +91,7 @@ export function Composer({
             }}
             placeholder="Type / for commands"
             rows={1}
-            className="flex-1 resize-none bg-transparent py-1 text-[14px] leading-[1.5] text-ink outline-none placeholder:text-ink-4"
+            className="flex-1 resize-none bg-transparent py-1 text-[16px] leading-[1.5] text-ink outline-none placeholder:text-ink-4"
             style={{ minHeight: 22, maxHeight: 140, overflowY: 'auto' }}
           />
           {disabled ? (
@@ -124,7 +124,7 @@ export function Composer({
           </StatusPill>
           <div className="flex-1" />
           {tokens && (
-            <span className="tabular-nums text-[11px] text-ink-4">
+            <span className="tabular-nums text-[13px] text-ink-4">
               {tokens}
             </span>
           )}
@@ -167,7 +167,7 @@ function StatusPill({
   return (
     <button
       onClick={onClick}
-      className="inline-flex items-center gap-[5px] rounded-lg px-2.5 py-1 text-[11.5px] font-medium text-ink-3 transition hover:bg-line-soft hover:text-ink"
+      className="inline-flex items-center gap-[5px] rounded-lg px-2.5 py-1 text-[13.5px] font-medium text-ink-3 transition hover:bg-line-soft hover:text-ink"
     >
       {children}
     </button>

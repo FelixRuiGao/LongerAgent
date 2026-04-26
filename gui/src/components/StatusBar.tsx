@@ -14,7 +14,7 @@ export function StatusBar({ tab, state }: { tab: SessionTab; state: TabState | n
   return (
     <div className="flex items-center gap-2.5 border-y border-dashed border-line-soft px-8 py-2">
       <span className="pulse-ring" />
-      <span className="truncate text-[12.5px] text-ink-2">{label}…</span>
+      <span className="truncate text-[14.5px] text-ink-2">{label}…</span>
     </div>
   )
 }

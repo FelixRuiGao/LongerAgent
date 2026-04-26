@@ -197,7 +197,7 @@ button, input, textarea {
 
 .markdown-body {
   color: var(--color-ink);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.65;
 }
 .markdown-body > *:first-child { margin-top: 0; }
@@ -213,9 +213,9 @@ button, input, textarea {
   color: var(--color-ink);
   margin: 0.8rem 0 0.35rem;
 }
-.markdown-body h1 { font-size: 16px; }
-.markdown-body h2 { font-size: 14.5px; }
-.markdown-body h3 { font-size: 13.5px; }
+.markdown-body h1 { font-size: 18px; }
+.markdown-body h2 { font-size: 16.5px; }
+.markdown-body h3 { font-size: 15.5px; }
 
 .markdown-body ul, .markdown-body ol {
   margin: 0 0 0.6rem;
@@ -272,7 +272,7 @@ button, input, textarea {
 .markdown-body pre > code {
   display: block;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 13.5px;
   line-height: 1.55;
   color: var(--color-code-ink);
   background: transparent;

@@ -100,14 +100,14 @@ export function RightPane({ tab }: { tab: SessionTab }): JSX.Element {
               key={t.id}
               onClick={() => setActiveTab(t.id)}
               className={cn(
-                'inline-flex items-center gap-[5px] rounded-[9px] px-3 py-1.5 text-[12px] font-medium transition',
+                'inline-flex items-center gap-[5px] rounded-[9px] px-3 py-1.5 text-[14px] font-medium transition',
                 on ? 'bg-pane-2 text-ink' : 'text-ink-3 hover:text-ink',
               )}
             >
               {t.icon}
               {t.label}
               {t.badge > 0 && (
-                <span className={cn('mono rounded-full px-[5px] py-px text-[9.5px] text-ink-3', on && 'bg-line')}>
+                <span className={cn('mono rounded-full px-[5px] py-px text-[11.5px] text-ink-3', on && 'bg-line')}>
                   {t.badge}
                 </span>
               )}
@@ -140,8 +140,8 @@ function PlanPanel({ plan }: { plan: PlanCheckpoint[] }): JSX.Element {
   if (plan.length === 0) {
     return (
       <div className="px-3.5 py-4">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Goal</div>
-        <div className="mt-1.5 text-[12.5px] leading-[1.55] text-ink-3">
+        <div className="text-[15px] font-semibold uppercase tracking-wider text-ink-3">Goal</div>
+        <div className="mt-1.5 text-[14.5px] leading-[1.55] text-ink-3">
           No plan yet — write to plan.md to track progress.
         </div>
       </div>
@@ -150,7 +150,7 @@ function PlanPanel({ plan }: { plan: PlanCheckpoint[] }): JSX.Element {
 
   return (
     <div className="px-3.5 py-4">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Checkpoints</div>
+      <div className="text-[15px] font-semibold uppercase tracking-wider text-ink-3">Checkpoints</div>
       <div className="mt-2 flex flex-col gap-0.5">
         {plan.map((c, i) => {
           const status = normalizeStatus(c)
@@ -171,7 +171,7 @@ function PlanPanel({ plan }: { plan: PlanCheckpoint[] }): JSX.Element {
               </div>
               <div
                 className={cn(
-                  'flex-1 text-[12.5px] leading-[1.5]',
+                  'flex-1 text-[14.5px] leading-[1.5]',
                   status === 'done' && 'text-ink-3 line-through decoration-ink-4',
                   status === 'todo' && 'text-ink-3',
                   status === 'in_progress' && 'text-ink',
@@ -191,7 +191,7 @@ function PlanPanel({ plan }: { plan: PlanCheckpoint[] }): JSX.Element {
 
 function AgentsPanel({ agents, workDir }: { agents: ChildSnapshot[]; workDir: string }): JSX.Element {
   if (agents.length === 0) {
-    return <div className="px-3.5 py-4 text-[12px] text-ink-3">No sub-agents in this session.</div>
+    return <div className="px-3.5 py-4 text-[14px] text-ink-3">No sub-agents in this session.</div>
   }
   return (
     <div className="space-y-2 px-3 py-3">
@@ -203,18 +203,18 @@ function AgentsPanel({ agents, workDir }: { agents: ChildSnapshot[]; workDir: st
         return (
           <div key={a.id} className="rounded-xl border border-line-soft bg-pane-2 px-3.5 py-3">
             <div className="flex items-center gap-2 mb-1.5">
-              <span className="mono rounded-md bg-line-soft px-[7px] py-0.5 text-[9.5px] font-semibold uppercase tracking-wider text-ink-2">
+              <span className="mono rounded-md bg-line-soft px-[7px] py-0.5 text-[11.5px] font-semibold uppercase tracking-wider text-ink-2">
                 {a.template}
               </span>
-              <span className="mono flex-1 text-[12px] text-ink">#{a.numericId}</span>
+              <span className="mono flex-1 text-[16px] text-ink">#{a.numericId}</span>
               <span className="h-1.5 w-1.5 rounded-full" style={{ background: statusColor }} />
             </div>
             {a.lastToolCallSummary && (
-              <div className="truncate text-[12px] text-ink-2 leading-[1.45]">
+              <div className="truncate text-[16px] text-ink-2 leading-[1.45]">
                 {shortenSummary(a.lastToolCallSummary, workDir)}
               </div>
             )}
-            <div className="mt-1.5 flex justify-between text-[11px]">
+            <div className="mt-1.5 flex justify-between text-[15px]">
               <span className="text-ink-3">{a.lifecycle}</span>
               <span className="mono text-ink-3">
                 {a.lifetimeToolCallCount} tools · {formatTokens(a.lastTotalTokens)}
@@ -231,19 +231,19 @@ function AgentsPanel({ agents, workDir }: { agents: ChildSnapshot[]; workDir: st
 
 function GitPanel({ recentTools }: { recentTools: Array<{ toolName: string; text: string }> }): JSX.Element {
   if (recentTools.length === 0) {
-    return <div className="px-3.5 py-4 text-[12px] text-ink-3">No file changes yet.</div>
+    return <div className="px-3.5 py-4 text-[16px] text-ink-3">No file changes yet.</div>
   }
   return (
     <div className="px-3 py-3">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3 mb-2 px-0.5">Recent activity</div>
+      <div className="text-[15px] font-semibold uppercase tracking-wider text-ink-3 mb-2 px-0.5">Recent activity</div>
       <div className="flex flex-col gap-px">
         {recentTools.map((r, i) => (
           <div key={i} className="flex items-center gap-2 rounded-[10px] px-2.5 py-2 hover:bg-pane-2">
-            <span className="mono grid h-4 w-4 shrink-0 place-items-center rounded-[5px] bg-line-soft text-[9.5px] font-semibold text-ink-2">
+            <span className="mono grid h-4 w-4 shrink-0 place-items-center rounded-[5px] bg-line-soft text-[15.5px] font-semibold text-ink-2">
               {r.toolName === 'write_file' || r.toolName === 'edit_file' ? 'M' : '›'}
             </span>
             <div className="min-w-0 flex-1">
-              <div className="mono truncate text-[12px] text-ink">{r.text}</div>
+              <div className="mono truncate text-[16px] text-ink">{r.text}</div>
             </div>
           </div>
         ))}

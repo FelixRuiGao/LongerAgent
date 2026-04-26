@@ -132,12 +132,12 @@ function ApprovalCard({ tab, ask }: { tab: SessionTab; ask: ApprovalAsk }): JSX.
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
-                <span className="text-[12.5px] font-medium text-ink">Approval needed</span>
-                <span className="mono text-[10px] uppercase tracking-wider text-ink-3">
+                <span className="text-[14.5px] font-medium text-ink">Approval needed</span>
+                <span className="mono text-[12px] uppercase tracking-wider text-ink-3">
                   {ask.payload.permissionClass.replaceAll('_', ' ')}
                 </span>
               </div>
-              <div className="mt-0.5 text-[12px] text-ink-2">{ask.payload.toolSummary}</div>
+              <div className="mt-0.5 text-[16px] text-ink-2">{ask.payload.toolSummary}</div>
             </div>
           </div>
 
@@ -166,20 +166,20 @@ function ApprovalCard({ tab, ask }: { tab: SessionTab; ask: ApprovalAsk }): JSX.
                     )}>
                       {isDeny ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
                     </span>
-                    <span className="flex-1 truncate text-[12.5px]">{label}</span>
+                    <span className="flex-1 truncate text-[14.5px]">{label}</span>
                     {offer?.scope && (
-                      <span className="mono text-[10px] uppercase tracking-wider text-ink-3">
+                      <span className="mono text-[12px] uppercase tracking-wider text-ink-3">
                         {offer.scope}
                       </span>
                     )}
-                    {active && <span className="mono text-[10px] text-ink-4">↵</span>}
+                    {active && <span className="mono text-[12px] text-ink-4">↵</span>}
                   </button>
                 </li>
               )
             })}
           </ul>
 
-          <div className="flex items-center justify-between border-t border-line-soft px-4 py-2 text-[10.5px] text-ink-4">
+          <div className="flex items-center justify-between border-t border-line-soft px-4 py-2 text-[14.5px] text-ink-4">
             <span className="mono inline-flex items-center gap-2">
               <ChevronUp className="h-3 w-3" />
               <ChevronDown className="h-3 w-3" />
@@ -219,18 +219,18 @@ function QuestionCard({ tab, ask }: { tab: SessionTab; ask: AgentQuestionAsk }):
     <div className="px-8 pb-2 pt-1">
       <div className="mx-auto max-w-[760px]">
         <div className="rounded-xl border border-line bg-pane-2 p-4">
-          <div className="text-[12.5px] font-medium text-ink">{ask.summary}</div>
+          <div className="text-[14.5px] font-medium text-ink">{ask.summary}</div>
           <div className="mt-3 space-y-3">
             {ask.payload.questions.map((q, qi) => (
               <div key={qi}>
-                <div className="text-[12.5px] text-ink-2">{q.question}</div>
+                <div className="text-[14.5px] text-ink-2">{q.question}</div>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {q.options.map((opt, oi) => (
                     <button
                       key={oi}
                       onClick={() => setAnswers((a) => a.map((v, idx) => (idx === qi ? oi : v)))}
                       className={cn(
-                        'rounded-[10px] px-2.5 py-1 text-[11.5px] transition',
+                        'rounded-[10px] px-2.5 py-1 text-[15.5px] transition',
                         answers[qi] === oi
                           ? 'bg-ink text-pane'
                           : 'bg-line-soft text-ink-2 hover:bg-line',
@@ -247,7 +247,7 @@ function QuestionCard({ tab, ask }: { tab: SessionTab; ask: AgentQuestionAsk }):
             <button
               onClick={() => void submit()}
               disabled={submitting}
-              className="rounded-[10px] bg-ink px-3 py-1.5 text-[11.5px] font-medium text-pane hover:bg-ink-2 disabled:opacity-50"
+              className="rounded-[10px] bg-ink px-3 py-1.5 text-[15.5px] font-medium text-pane hover:bg-ink-2 disabled:opacity-50"
             >
               Submit
             </button>
