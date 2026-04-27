@@ -7,6 +7,13 @@ import type { DisplayTheme } from "../theme/index.js";
 import type { AskPanelProps } from "../types.js";
 import { PanelSurface } from "../primitives/panel-surface.js";
 
+function formatAskSource(ask: AskPanelProps["ask"]): string {
+  const sourceName = ask.source.agentName || ask.source.agentId || "Main agent";
+  const lower = sourceName.toLowerCase();
+  const isMain = lower === "primary" || lower === "main" || lower === "root";
+  return isMain ? "Source: Main agent" : `Source: Sub-Agent ${sourceName}`;
+}
+
 export function AskPanelView({
   ask,
   error,
@@ -26,10 +33,11 @@ export function AskPanelView({
 }: AskPanelProps & { theme: DisplayTheme }): React.ReactNode {
   if (ask.kind === "approval") {
     const options = ask.options ?? [];
-    const panelHeight = 2 + options.length + 1 + (error ? 1 : 0) + 2;
+    const panelHeight = 3 + options.length + 1 + (error ? 1 : 0) + 2;
     return (
       <PanelSurface colors={theme.colors} spacing={theme.spacing} height={panelHeight}>
         <text fg={theme.colors.yellow} content={`⚠ ${ask.summary}`} />
+        <text fg={theme.colors.dim} content={formatAskSource(ask)} />
         <text content="" />
         {options.map((label, index) => {
           const isSelected = index === selectedIndex;
@@ -62,7 +70,7 @@ export function AskPanelView({
 
   if (reviewMode) {
     const reviewContentLines =
-      1 +
+      2 +
       questions.reduce((total, question, index) => {
         const answer = questionAnswers.get(index);
         const noteKey = answer ? `${index}-${answer.optionIndex}` : "";
@@ -76,6 +84,7 @@ export function AskPanelView({
     return (
       <PanelSurface colors={theme.colors} spacing={theme.spacing} height={panelHeight}>
         <text fg={theme.colors.green} content="Review your answers" />
+        <text fg={theme.colors.dim} content={formatAskSource(ask)} />
         {questions.map((question, index) => {
           const answer = questionAnswers.get(index);
           const selected = answer ? question.options[answer.optionIndex] : undefined;
@@ -116,12 +125,13 @@ export function AskPanelView({
     return total + 1 + (option.description ? 1 : 0) + (note ? 1 : 0);
   }, 0);
   const inlineLines = customInputMode || noteInputMode ? 3 : 0;
-  const panelContentLines = 1 + optionContentLines + inlineLines + 1 + (error ? 1 : 0);
+  const panelContentLines = 2 + optionContentLines + inlineLines + 1 + (error ? 1 : 0);
   const panelHeight = panelContentLines + 2;
 
   return (
     <PanelSurface colors={theme.colors} spacing={theme.spacing} height={panelHeight}>
       <text fg={theme.colors.yellow} content={`Question ${currentQuestionIndex + 1}/${totalQuestions}: ${question.question}`} />
+      <text fg={theme.colors.dim} content={formatAskSource(ask)} />
       {question.options.map((option, index) => {
         const isSelected = index === selectedIndex;
         const isAnswered = existingAnswer?.optionIndex === index;

@@ -300,7 +300,7 @@ export function createAgentResult(
     tuiVisible: true,
     displayKind: "agent_result",
     display: "",
-    apiRole: "user",
+    apiRole: null,
     content,
     meta,
   });

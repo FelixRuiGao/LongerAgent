@@ -160,6 +160,7 @@ import {
   resolvePersistedModelSelection,
   type PersistedModelSelection,
 } from "./model-selection.js";
+import { describeModel } from "./model-presentation.js";
 import {
   type ContextThresholds,
   DEFAULT_THRESHOLDS,
@@ -734,7 +735,26 @@ export class Session {
     const logRevision = typeof (session as any).getLogRevision === "function"
       ? (session as any).getLogRevision() as number
       : 0;
-    const phase = currentTurnRunning ? sessionPhase : "idle";
+    const pendingAsk = typeof (session as any).getPendingAsk === "function"
+      ? (session as any).getPendingAsk() as PendingAskUi | null
+      : null;
+    const hasPendingResume = typeof (session as any).hasPendingTurnToResume === "function"
+      ? Boolean((session as any).hasPendingTurnToResume())
+      : false;
+    const phase = pendingAsk || hasPendingResume
+      ? "waiting"
+      : currentTurnRunning
+        ? sessionPhase
+        : "idle";
+    const modelConfig = session.primaryAgent?.modelConfig;
+    const modelDescriptor = modelConfig
+      ? describeModel({
+          configName: modelConfig.name,
+          providerId: modelConfig.provider,
+          selectionKey: modelConfig.model,
+          modelId: modelConfig.model,
+        })
+      : null;
     const outcome =
       handle.lastOutcome !== "none"
         ? handle.lastOutcome
@@ -765,8 +785,11 @@ export class Session {
       // Child page chrome fields
       inputTokens: session.lastInputTokens,
       contextBudget: session.contextBudget,
-      modelConfigName: session.primaryAgent?.modelConfig?.name ?? "",
-      modelProvider: session.primaryAgent?.modelConfig?.provider ?? "",
+      modelConfigName: modelConfig?.name ?? "",
+      modelProvider: modelConfig?.provider ?? "",
+      modelDisplayLabel: modelDescriptor?.scopedLabel ?? modelConfig?.model ?? "",
+      pendingAskId: pendingAsk?.id ?? null,
+      pendingAskKind: pendingAsk?.kind ?? null,
       activeLogEntryId: session.activeLogEntryId,
       turnElapsed: handle.startTime > 0 && currentTurnRunning
         ? (performance.now() - handle.startTime) / 1000
@@ -1139,15 +1162,15 @@ export class Session {
     switch (msg.type) {
       case "user_input":
         display = msg.content.slice(0, 200);
-        content = msg.content;
+        content = `<user-message>\n${msg.content}\n</user-message>`;
         break;
       case "peer_message":
         display = `[Message from ${msg.sender}]`;
-        content = `[Message from ${msg.sender}]\n${msg.content}`;
+        content = `<sub-agent-message from="${msg.sender}">\n${msg.content}\n</sub-agent-message>`;
         break;
       case "system_notice":
         display = `[System] ${msg.content.slice(0, 100)}`;
-        content = `[System] ${msg.content}`;
+        content = `<system-message>\n${msg.content}\n</system-message>`;
         break;
     }
     // v2 log (source of truth)
@@ -1202,13 +1225,13 @@ export class Session {
     for (const msg of messages) {
       switch (msg.type) {
         case "user_input":
-          sections.push(msg.content);
+          sections.push(`<user-message>\n${msg.content}\n</user-message>`);
           break;
         case "peer_message":
-          sections.push(`[Message from ${msg.sender}]\n${msg.content}`);
+          sections.push(`<sub-agent-message from="${msg.sender}">\n${msg.content}\n</sub-agent-message>`);
           break;
         case "system_notice":
-          sections.push(`[System] ${msg.content}`);
+          sections.push(`<system-message>\n${msg.content}\n</system-message>`);
           break;
       }
     }
@@ -2793,7 +2816,13 @@ export class Session {
   }
 
   getPendingAsk(): PendingAskUi | null {
-    return toPendingAskUi(this._activeAsk);
+    const ownAsk = toPendingAskUi(this._activeAsk);
+    if (ownAsk) return ownAsk;
+    for (const handle of this._childSessions.values()) {
+      const childAsk = handle.session.getPendingAsk();
+      if (childAsk) return childAsk;
+    }
+    return null;
   }
 
   hasPendingTurnToResume(): boolean {
@@ -3055,7 +3084,7 @@ export class Session {
             resultContent = `ERROR: No executor for tool '${next.toolName}'`;
             isError = true;
           } else {
-            const result = await executor(next.toolArgs, { signal: undefined });
+            const result = await executor(next.toolArgs, { signal: this._currentTurnSignal });
             if (typeof result === "string") {
               resultContent = result;
             } else if (result instanceof ToolResult) {
@@ -4498,7 +4527,15 @@ export class Session {
    */
   resolveApprovalAsk(askId: string, choiceIndex: number): void {
     const ask = this._activeAsk;
-    if (!ask) throw new Error("No active ask to resolve.");
+    if (!ask) {
+      const child = this._findChildWithPendingAsk(askId);
+      if (!child) throw new Error("No active ask to resolve.");
+      child.session.resolveApprovalAsk(askId, choiceIndex);
+      this._resumeChildPendingTurn(child);
+      this._notifyLogListeners();
+      this.onSaveRequest?.();
+      return;
+    }
     if (ask.id !== askId) throw new Error(`Ask id mismatch (active=${ask.id}, got=${askId}).`);
     if (ask.kind !== "approval") throw new Error(`Ask kind mismatch (active=${ask.kind}, expected=approval).`);
 
@@ -4557,6 +4594,14 @@ export class Session {
     this._pendingTurnState = { stage: "activation" };
 
     this.onSaveRequest?.();
+  }
+
+  private _findChildWithPendingAsk(askId: string): ChildSessionHandle | null {
+    for (const handle of this._childSessions.values()) {
+      const ask = handle.session.getPendingAsk();
+      if (ask?.id === askId) return handle;
+    }
+    return null;
   }
 
   private _execShowContext(args: Record<string, unknown>): ToolResult {
@@ -5370,6 +5415,29 @@ export class Session {
     );
   }
 
+  private _resumeChildPendingTurn(handle: ChildSessionHandle): void {
+    if (handle.turnPromise) return;
+    if (!handle.session.hasPendingTurnToResume()) return;
+
+    handle.startTime = performance.now();
+    handle.status = "working";
+    handle.lifecycle = "running";
+    handle.phase = "waiting";
+    handle.lastActivityAt = Date.now();
+    handle.suspended = false;
+    handle.terminationCause = undefined;
+    const abortController = new AbortController();
+    handle.abortController = abortController;
+    handle.settlePromise = new Promise<void>((resolve) => {
+      handle.settleResolve = resolve;
+    });
+    handle.turnPromise = handle.session.resumePendingTurn({ signal: abortController.signal });
+    void handle.turnPromise.then(
+      () => this._finishChildTurn(handle, undefined),
+      (error: unknown) => this._finishChildTurn(handle, error),
+    );
+  }
+
   private _finishChildTurn(handle: ChildSessionHandle, error?: unknown): void {
     // Zombie callback guard: if close/suspend already handled this handle, bail out.
     if (handle.suspended) {
@@ -5380,6 +5448,24 @@ export class Session {
     }
 
     handle.elapsed = handle.startTime > 0 ? (performance.now() - handle.startTime) / 1000 : 0;
+
+    if (!error && (handle.session.getPendingAsk() || handle.session.hasPendingTurnToResume())) {
+      handle.abortController = null;
+      handle.turnPromise = null;
+      handle.lifecycle = "running";
+      handle.status = "working";
+      handle.phase = "waiting";
+      handle.lastOutcome = "none";
+      handle.lastActivityAt = Date.now();
+      this._saveChildSession(handle);
+      this._notifyLogListeners();
+      this.onSaveRequest?.();
+      const resolve = handle.settleResolve;
+      handle.settleResolve = null;
+      resolve?.();
+      return;
+    }
+
     handle.abortController = null;
     handle.turnPromise = null;
     handle.lastActivityAt = Date.now();
@@ -5431,6 +5517,12 @@ export class Session {
       agentResult.fullOutputPath,
     ), false);
     this._agentResultSeq += 1;
+    this._deliverMessage({
+      type: "peer_message",
+      sender: handle.id,
+      content: agentResult.content,
+      timestamp: Date.now(),
+    });
     handle.terminationCause = undefined;
 
     // Lifecycle transition: oneshot → archived, persistent → idle

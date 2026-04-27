@@ -37,6 +37,9 @@ export interface ChildSessionSnapshot {
   contextBudget: number;
   modelConfigName: string;
   modelProvider: string;
+  modelDisplayLabel?: string;
+  pendingAskId?: string | null;
+  pendingAskKind?: "agent_question" | "approval" | null;
   activeLogEntryId: string | null;
   turnElapsed: number;
   cacheReadTokens: number;

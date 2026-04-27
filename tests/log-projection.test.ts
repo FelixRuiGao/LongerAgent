@@ -421,6 +421,66 @@ describe("projectToTuiEntries", () => {
 // ------------------------------------------------------------------
 
 describe("projectToApiMessages", () => {
+  it("keeps tool results immediately after tool calls when agent_result lands before wait result", () => {
+    const legacyAgentResult = createAgentResult(
+      "ar-001",
+      1,
+      "worker-1",
+      1,
+      "explorer",
+      "completed",
+      "natural",
+      1000,
+      "[Agent \"worker-1\" completed]\nDone",
+      "Done",
+      "agent-result-ctx",
+    );
+    legacyAgentResult.apiRole = "user";
+
+    const entries: LogEntry[] = [
+      createSystemPrompt("sys-001", "prompt"),
+      createTurnStart("ts-001", 1),
+      createUserMessage("user-001", 1, "spawn a worker", "spawn a worker", "u1"),
+      createReasoning("rsn-001", 1, 0, "waiting", "waiting", undefined, "r1"),
+      createToolCall(
+        "tc-001",
+        1,
+        0,
+        "wait 60s",
+        { id: "wait:2", name: "wait", arguments: { seconds: 60 } },
+        { toolCallId: "wait:2", toolName: "wait", agentName: "main", contextId: "r1" },
+      ),
+      legacyAgentResult,
+      createToolResult(
+        "tr-001",
+        1,
+        0,
+        {
+          toolCallId: "wait:2",
+          toolName: "wait",
+          content: "Waited - sub-session changed.",
+          toolSummary: "main is waiting",
+        },
+        { isError: false, contextId: "r1" },
+      ),
+    ];
+
+    const msgs = projectToApiMessages(entries);
+    const assistantIndex = msgs.findIndex((message) =>
+      message.role === "assistant" && Array.isArray((message as any).tool_calls)
+    );
+
+    expect(assistantIndex).toBeGreaterThan(-1);
+    expect(msgs[assistantIndex + 1]).toMatchObject({
+      role: "tool_result",
+      tool_call_id: "wait:2",
+    });
+    expect(msgs[assistantIndex + 2]).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("worker-1"),
+    });
+  });
+
   it("projects basic conversation", () => {
     const entries = basicLog();
     const msgs = projectToApiMessages(entries);
@@ -430,7 +490,7 @@ describe("projectToApiMessages", () => {
     expect(msgs[2]).toMatchObject({ role: "assistant", content: "Hi there!" });
   });
 
-  it("projects agent_result entries through the normal user-role path", () => {
+  it("keeps agent_result entries out of API projection", () => {
     const msgs = projectToApiMessages([
       createSystemPrompt("sys-001", "prompt"),
       createAgentResult(
@@ -448,14 +508,7 @@ describe("projectToApiMessages", () => {
       ),
     ]);
 
-    expect(msgs).toEqual([
-      { role: "system", content: "prompt" },
-      {
-        role: "user",
-        content: "[Agent \"reviewer-1\" interrupted by the user]\n(no output)",
-        _context_id: "c-ar-1",
-      },
-    ]);
+    expect(msgs).toEqual([{ role: "system", content: "prompt" }]);
   });
 
   it("uses provided systemPrompt override", () => {

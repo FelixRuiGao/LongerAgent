@@ -63,16 +63,23 @@ function lifecycleLabel(lifecycle: string): string {
   }
 }
 
+function agentStatusLabel(agent: ChildSessionSnapshot): string {
+  if (agent.pendingAskKind === "approval") return "approval";
+  if (agent.pendingAskKind === "agent_question") return "asking";
+  return lifecycleLabel(agent.lifecycle);
+}
+
 function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSessionSnapshot[]; colors: ConversationPalette; onAgentClick?: (agentId: string) => void }): React.ReactNode {
   return (
     <box flexDirection="column" gap={0} flexGrow={1}>
       {agents.map((agent) => {
         const isActive = agent.lifecycle === "running";
-        const statusColor = isActive ? colors.workingStatus : "#5a6078";
+        const isWaitingForAsk = Boolean(agent.pendingAskKind);
+        const statusColor = isWaitingForAsk ? colors.waitingStatus : isActive ? colors.workingStatus : "#5a6078";
         const nameColor = isActive ? colors.text : "#7a8098";
         const descColor = isActive ? colors.dim : "#5a6078";
         const icon = lifecycleIcon(agent.lifecycle);
-        const label = lifecycleLabel(agent.lifecycle);
+        const label = agentStatusLabel(agent);
         const statsLine = `└ ${agent.lifetimeToolCallCount} tools, ${formatCompactTokensShort(agent.lastTotalTokens)} tokens`;
 
         return (

@@ -37,8 +37,15 @@ function lifecycleLabel(lifecycle: string): string {
   }
 }
 
-function lifecycleColor(lifecycle: string, colors: DisplayThemeColorTokens): string {
-  switch (lifecycle) {
+function agentStatusLabel(agent: ChildSessionSnapshot): string {
+  if (agent.pendingAskKind === "approval") return "approval";
+  if (agent.pendingAskKind === "agent_question") return "asking";
+  return lifecycleLabel(agent.lifecycle);
+}
+
+function lifecycleColor(agent: ChildSessionSnapshot, colors: DisplayThemeColorTokens): string {
+  if (agent.pendingAskKind) return colors.waitingStatus;
+  switch (agent.lifecycle) {
     case "running": return colors.workingStatus;
     case "idle": return colors.green;
     default: return colors.muted;
@@ -62,8 +69,8 @@ function AgentRow({
   onClick: () => void;
 }): React.ReactNode {
   const icon = lifecycleIcon(agent.lifecycle);
-  const label = lifecycleLabel(agent.lifecycle);
-  const statusColor = lifecycleColor(agent.lifecycle, colors);
+  const label = agentStatusLabel(agent);
+  const statusColor = lifecycleColor(agent, colors);
   // Selected row: dark text on accent background (accent = #ffb703 golden)
   const SELECTED_FG = "#1a1620";
   const fg = selected ? SELECTED_FG : colors.text;

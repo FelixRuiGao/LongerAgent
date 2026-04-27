@@ -655,10 +655,19 @@ export function projectToApiMessages(
       const turnIdx = entry.turnIndex;
       const assistantEntries: LogEntry[] = [];
       const toolResultEntries: LogEntry[] = [];
+      const deferredUserEntries: LogEntry[] = [];
 
       while (i < windowEntries.length) {
         const candidate = windowEntries[i];
-        if (candidate.turnIndex !== turnIdx || candidate.roundIndex !== roundIdx) break;
+        if (candidate.turnIndex !== turnIdx) break;
+        if (candidate.roundIndex !== roundIdx) {
+          if (candidate.type === "agent_result" && candidate.apiRole === "user") {
+            deferredUserEntries.push(candidate);
+            i++;
+            continue;
+          }
+          break;
+        }
         if (candidate.apiRole === "assistant" || candidate.type === "reasoning") {
           assistantEntries.push(candidate);
         } else if (candidate.apiRole === "tool_result") {
@@ -690,6 +699,16 @@ export function projectToApiMessages(
 
       for (const trEntry of toolResultEntries) {
         emitToolResult(trEntry);
+      }
+      for (const userEntry of deferredUserEntries) {
+        let content = resolveImageRefs(userEntry.content, options?.resolveImageRef);
+        const ctxId = (userEntry.meta as Record<string, unknown>)["contextId"];
+        if (ctxId !== undefined && annotations?.has(String(ctxId))) {
+          content = prependAnnotation(content, annotations.get(String(ctxId))!);
+        }
+        const userMsg: InternalMessage = { role: "user", content };
+        if (ctxId !== undefined) userMsg["_context_id"] = ctxId;
+        messages.push(userMsg);
       }
     } else if (entry.apiRole === "user") {
       let content = resolveImageRefs(entry.content, options?.resolveImageRef);

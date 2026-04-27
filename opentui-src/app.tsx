@@ -2664,7 +2664,7 @@ export function OpenTuiApp({
     ? (childSnapshot.running ? "decoding" : "idle")
     : phase;
   const effectiveElapsed = childSnapshot ? childSnapshot.turnElapsed : turnElapsed;
-  const effectiveModelName = childSnapshot ? (childSnapshot.modelConfigName || modelName) : modelName;
+  const effectiveModelName = childSnapshot ? (childSnapshot.modelDisplayLabel || childSnapshot.modelConfigName || modelName) : modelName;
   const effectiveModelColor = childSnapshot
     ? (theme.presentation.modelProviderColors[childSnapshot.modelProvider] ?? modelNameColor)
     : modelNameColor;
@@ -2741,7 +2741,13 @@ export function OpenTuiApp({
         }
         void handleSubmit(getSerializedComposerInput());
       }}
-      onModelClick={() => void handleSubmit("/model")}
+      onModelClick={() => {
+        if (selectedChildId) {
+          showHint("Sub-Agent models are fixed by their template or tier and cannot be changed manually.");
+          return;
+        }
+        void handleSubmit("/model");
+      }}
       onPermissionClick={cyclePermissionMode}
       onAgentIndicatorClick={openAgentList}
       runningAgentCount={runningAgentCount}
