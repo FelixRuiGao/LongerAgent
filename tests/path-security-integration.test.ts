@@ -53,23 +53,6 @@ describe("path security integration", () => {
     }
   });
 
-  it("rejects spawn_file call files outside SESSION_ARTIFACTS", async () => {
-    const artifactsDir = makeTempDir("fermi-artifacts-");
-    try {
-      const fakeSession = Object.create(Session.prototype) as any;
-      fakeSession._resolveSessionArtifacts = () => artifactsDir;
-
-      const result = await (Session.prototype as any)._execSpawnFile.call(
-        fakeSession,
-        { file: "../outside.yaml" },
-      );
-
-      expect(result.content).toContain("must be within SESSION_ARTIFACTS");
-    } finally {
-      rmSync(artifactsDir, { recursive: true, force: true });
-    }
-  });
-
   it("rejects spawn with missing template", async () => {
     const fakeSession = Object.create(Session.prototype) as any;
     fakeSession._resolveSessionArtifacts = () => "/tmp/fake";
@@ -100,7 +83,7 @@ describe("path security integration", () => {
       mkdirSync(validTemplate, { recursive: true });
       writeFileSync(
         join(validTemplate, "agent.yaml"),
-        "type: agent\nname: test\nsystem_prompt: hello\nmax_tool_rounds: 100\n",
+        "type: agent\nname: test\nsystem_prompt: hello\ntool_tier: read_only\nmax_tool_rounds: 100\n",
         "utf-8",
       );
 
@@ -131,7 +114,7 @@ describe("path security integration", () => {
       mkdirSync(externalDir, { recursive: true });
       writeFileSync(
         join(externalDir, "agent.yaml"),
-        "type: agent\nname: ext\nsystem_prompt: hello\nmax_tool_rounds: 100\n",
+        "type: agent\nname: ext\nsystem_prompt: hello\ntool_tier: read_only\nmax_tool_rounds: 100\n",
         "utf-8",
       );
 

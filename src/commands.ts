@@ -18,6 +18,7 @@ import { setDotenvKey } from "./dotenv.js";
 import { fetchModelsFromServer } from "./model-discovery.js";
 import {
   getThinkingLevels,
+  getTierEligibleThinkingLevels,
 } from "./config.js";
 import {
   PROVIDER_PRESETS,
@@ -1461,18 +1462,30 @@ async function cmdTier(ctx: CommandContext, args: string): Promise<void> {
     resolvedModelId = selectedConfigName;
   }
 
-  // Determine thinking level for the chosen model
-  const levels = getThinkingLevels(resolvedModelId);
-  let thinkingLevel: string | undefined;
+  // Determine thinking level for the chosen model. Required when the model
+  // supports thinking; "none" otherwise. Picker offers tier-eligible levels
+  // only (native "off" / "none" filtered out). Cancelling aborts the save.
+  let thinkingLevel: string;
 
-  if (levels.length > 0) {
-    const thinkingChoice = await ctx.promptSelect({
-      message: `Thinking level for ${level} tier`,
-      options: levels.map((l) => ({ label: l, value: l })),
-    });
-    if (thinkingChoice) {
-      thinkingLevel = thinkingChoice;
+  if (getThinkingLevels(resolvedModelId).length === 0) {
+    thinkingLevel = "none";
+  } else {
+    const eligible = getTierEligibleThinkingLevels(resolvedModelId);
+    if (eligible.length === 0) {
+      ctx.showMessage(
+        `Tier '${level}' cancelled: model '${resolvedModelId}' has no eligible thinking levels (only off/none).`,
+      );
+      return;
     }
+    const thinkingChoice = await ctx.promptSelect({
+      message: `Thinking level for ${level} tier (required)`,
+      options: eligible.map((l) => ({ label: l, value: l })),
+    });
+    if (!thinkingChoice) {
+      ctx.showMessage(`Tier '${level}' configuration cancelled (thinking level required).`);
+      return;
+    }
+    thinkingLevel = thinkingChoice;
   }
 
   // Build the tier entry
@@ -1492,8 +1505,7 @@ async function cmdTier(ctx: CommandContext, args: string): Promise<void> {
   }
 
   const displayLabel = describeTierModel(session, tierEntry);
-  const thinkingSuffix = thinkingLevel ? ` [${thinkingLevel}]` : "";
-  ctx.showMessage(`Tier '${level}' set to: ${displayLabel}${thinkingSuffix}`);
+  ctx.showMessage(`Tier '${level}' set to: ${displayLabel} [${thinkingLevel}]`);
 }
 
 // ------------------------------------------------------------------

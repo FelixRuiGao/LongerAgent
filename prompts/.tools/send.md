@@ -2,7 +2,7 @@
 
 Send a message to a persistent sub-agent. Async — returns immediately with a confirmation, not a reply.
 
-- `to` (required): Target agent ID, or `"all"` (broadcast to all persistent agents).
+- `to` (required): Target agent ID.
 - `content` (required): Message content.
 - The target agent auto-activates if idle.
 - One-shot sub-sessions cannot receive messages.

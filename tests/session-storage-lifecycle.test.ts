@@ -771,7 +771,7 @@ describe("session storage lifecycle", () => {
         settlePromise: null,
         settleResolve: null,
       });
-      (session as any)._activeShells.set("shell-1", {
+      (session as any)._shellManager._activeShells.set("shell-1", {
         id: "shell-1",
         process: { kill: killShell },
         command: "pnpm dev",
@@ -795,7 +795,7 @@ describe("session storage lifecycle", () => {
       expect(finishedAbort.signal.aborted).toBe(false);
       expect((session as any)._childSessions.size).toBe(2);
       expect(killShell).toHaveBeenCalledWith("SIGTERM");
-      expect((session as any)._activeShells.size).toBe(0);
+      expect((session as any)._shellManager._activeShells.size).toBe(0);
       expect((session as any)._inbox).toEqual([]);
       expect(woke).toBe(true);
       expect((session as any)._waitHandle).toBeNull();

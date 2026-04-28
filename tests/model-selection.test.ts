@@ -50,6 +50,7 @@ describe("runtime model resolution", () => {
       provider: "openai-codex",
       selection_key: "gpt-5.3-codex",
       model_id: "gpt-5.3-codex",
+      thinking_level: "high",
     });
 
     expect(resolved.selectedConfigName).toBe("runtime-openai-codex-gpt-5-3-codex");

@@ -236,6 +236,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     mcpServers: configInputs.mcpServers,
     modelTiers: settings.model_tiers,
     agentModels: settings.agent_models,
+    subAgentInheritMcp: settings.sub_agent_inherit_mcp,
+    subAgentInheritHooks: settings.sub_agent_inherit_hooks,
   });
 
   // Refresh OAuth tokens if any model uses them (before building providers)

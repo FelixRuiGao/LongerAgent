@@ -43,7 +43,7 @@ describe("background shell tools", () => {
     const root = makeTempDir("fermi-shell-root-");
     const session = makeSession(root);
     try {
-      const started = (session as any)._execBashBackground({
+      const started = (session as any)._shellManager.execBashBackground({
         id: "demo",
         command: "printf 'hello\\n'; sleep 0.2; printf 'done\\n'",
       }) as ToolResult;
@@ -56,7 +56,7 @@ describe("background shell tools", () => {
       expect(waited.content).toContain("[demo]");
       expect(waited.content).toContain("exited");
 
-      const output = (session as any)._execBashOutput({ id: "demo" }) as ToolResult;
+      const output = (session as any)._shellManager.execBashOutput({ id: "demo" }) as ToolResult;
       expect(output.content).toContain("hello");
       expect(output.content).toContain("done");
       expect(output.content).toContain("status:");
@@ -71,14 +71,14 @@ describe("background shell tools", () => {
     const session = makeSession(root);
     try {
       const command = "i=1; while [ $i -le 120 ]; do printf 'line-%03d\\n' \"$i\"; i=$((i+1)); done";
-      (session as any)._execBashBackground({ id: "burst", command });
+      (session as any)._shellManager.execBashBackground({ id: "burst", command });
       await (session as any)._execAwaitEvent({ seconds: 15 });
 
-      const first = (session as any)._execBashOutput({ id: "burst", max_chars: 120 }) as ToolResult;
+      const first = (session as any)._shellManager.execBashOutput({ id: "burst", max_chars: 120 }) as ToolResult;
       expect(first.content).toContain("line-001");
       expect(first.content).toContain("[Truncated here because unread output exceeded");
 
-      const second = (session as any)._execBashOutput({ id: "burst", max_chars: 120 }) as ToolResult;
+      const second = (session as any)._shellManager.execBashOutput({ id: "burst", max_chars: 120 }) as ToolResult;
       expect(second.content).toContain("(No new output since the last read.)");
     } finally {
       await session.close();

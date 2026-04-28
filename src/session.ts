@@ -80,6 +80,7 @@ import {
 import { BackgroundShellManager } from "./background-shell-manager.js";
 import { PermissionAdvisor, PermissionRuleStore, classifyTool, classifyToolAsync, initBashParser, type PermissionMode } from "./permissions/index.js";
 import { HookRuntime, type HookEvent, type HookPayload } from "./hooks/index.js";
+import type { HookManifest } from "./hooks/types.js";
 import { assembleFullSystemPrompt } from "./prompt-assembler.js";
 import {
   argOptionalString,
@@ -873,8 +874,18 @@ export class Session {
     promptCacheKey?: string;
     /** Permission mode for this session. Default: "reversible". */
     permissionMode?: PermissionMode;
+    /** Shared rule store for child sessions. If omitted, a new store is created. */
+    permissionRuleStore?: PermissionRuleStore;
+    /** Pre-loaded hook manifests. Each session keeps its own runtime; hooks are copied in. */
+    hooks?: readonly HookManifest[];
   }) {
     this.primaryAgent = opts.primaryAgent;
+    // Default thinking level: highest available for this model (or "none" for non-thinking).
+    // Resolves once at construction so the field is consistent before any setter call.
+    this._thinkingLevel = this._resolveThinkingLevelForModel(
+      this.primaryAgent.modelConfig.model,
+      "",
+    );
     this.config = opts.config;
     this.agentTemplates = opts.agentTemplates ?? {};
     this._skills = opts.skills ?? new Map();
@@ -909,7 +920,7 @@ export class Session {
     });
 
     // Permission system
-    this._permissionRuleStore = new PermissionRuleStore(this._projectRoot);
+    this._permissionRuleStore = opts.permissionRuleStore ?? new PermissionRuleStore(this._projectRoot);
     this._permissionAdvisor = new PermissionAdvisor({
       ruleStore: this._permissionRuleStore,
       sessionMode: opts.permissionMode ?? "reversible",
@@ -918,6 +929,9 @@ export class Session {
 
     this._createdAt = new Date().toISOString();
     this._promptCacheKey = opts.promptCacheKey ?? randomUUID();
+    if (opts.hooks && opts.hooks.length > 0) {
+      this.hookRuntime.setHooks([...opts.hooks]);
+    }
     this._initConversation();
     this._toolExecutors = this._buildToolExecutors();
     this._ensureCommTools();
@@ -1725,6 +1739,7 @@ export class Session {
       onTurnOutput: this._turnOutputTarget,
       toolExecutorOverrides: this._toolExecutorOverrides,
       deferQueuedMessageInjectionOnTurnExit: this._deferQueuedMessageInjectionOnTurnExit,
+      permissionRuleStore: this._permissionRuleStore,
     });
     shadow.applyGlobalPreferences(this.getGlobalPreferences());
     return shadow;
@@ -3536,7 +3551,7 @@ export class Session {
   /** Inner turn logic, called from within the turn lock. */
   private async _turnInner(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[] }): Promise<string> {
     this._ensureSessionStorageReady();
-    if (this._capabilities.includeSkillTools || this._capabilities.includeSpawnTool) {
+    if (this._mcpManager) {
       await this._ensureMcp();
     }
 
@@ -5380,6 +5395,11 @@ export class Session {
       deferQueuedMessageInjectionOnTurnExit: true,
       promptCacheKey: taskId,
       permissionMode: this.permissionMode,
+      progress: this._progress,
+      contextRatio: this._contextRatio,
+      permissionRuleStore: this._permissionRuleStore,
+      mcpManager: this.config.subAgentInheritMcp ? this._mcpManager : undefined,
+      hooks: this.config.subAgentInheritHooks ? this.hookRuntime.hooks : undefined,
     });
     childSession.onSaveRequest = () => this._saveChildSession(handle);
     handle.session = childSession;
@@ -5823,9 +5843,9 @@ export class Session {
       }
 
       const handle = this._createChildSession(taskId, templateLabel, mode, agent);
-      if (tierThinkingLevel) {
-        handle.session.thinkingLevel = tierThinkingLevel;
-      }
+      // Tier/pin wins; otherwise inherit parent's preferred level. Setter resolves
+      // against the child's model and persists _preferredThinkingLevel into log meta.
+      handle.session.thinkingLevel = tierThinkingLevel ?? this._preferredThinkingLevel;
       this._childSessions.set(taskId, handle);
       spawned.push(taskId);
       spawnedInfo.push({ numericId: handle.numericId, taskId, template: templateLabel, task: taskDesc });
@@ -6358,6 +6378,12 @@ export class Session {
   private _applySubAgentConstraints(agent: Agent): void {
     // Strip comm tools — send is re-added later for interactive/team agents
     agent.tools = agent.tools.filter((t) => !COMM_TOOL_NAMES.has(t.name));
+    // Strip MCP tools when sub-agent inheritance is disabled. Parent's _ensureMcp
+    // attached MCP tool defs to template agents; without an executor in the child
+    // session the model would see them and fail on call.
+    if (!this.config.subAgentInheritMcp) {
+      agent.tools = agent.tools.filter((t) => !t.name.startsWith("mcp__"));
+    }
     // Lifecycle-specific constraints are injected via _buildSubAgentSystemPrompt,
     // not here — to avoid one-shot language leaking into interactive agents.
   }

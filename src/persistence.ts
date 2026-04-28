@@ -560,12 +560,13 @@ export interface LocalProviderConfig {
 // New settings types (replaces GlobalTuiPreferences)
 // ------------------------------------------------------------------
 
-/** A single sub-agent model tier entry: stable model identity + optional thinking level. */
+/** A single sub-agent model tier entry: stable model identity + thinking level. */
 export interface ModelTierEntry {
   provider: string;
   selection_key: string;
   model_id: string;
-  thinking_level?: string;
+  /** Required. Use one of the model's available levels, or "none" for non-thinking models. */
+  thinking_level: string;
 }
 
 /** Per-template model pin: locks a specific agent template to a fixed model. */
@@ -597,6 +598,12 @@ export interface FermiSettings {
   // -- Permissions --
   /** Default permission mode: "read_only" | "reversible" | "yolo". */
   permission_mode?: string;
+
+  // -- Sub-agent inheritance --
+  /** Sub-agents inherit the parent's MCP servers/tools. Default: true. */
+  sub_agent_inherit_mcp?: boolean;
+  /** Sub-agents inherit the parent's hooks. Default: true. */
+  sub_agent_inherit_hooks?: boolean;
 
   // -- Skills --
   disabled_skills?: string[];
@@ -1302,6 +1309,8 @@ export function mergeSettings(global: FermiSettings, local: FermiSettings): Ferm
   if (local.context_ratio !== undefined) merged.context_ratio = local.context_ratio;
   if (local.accent_color !== undefined) merged.accent_color = local.accent_color;
   if (local.permission_mode !== undefined) merged.permission_mode = local.permission_mode;
+  if (local.sub_agent_inherit_mcp !== undefined) merged.sub_agent_inherit_mcp = local.sub_agent_inherit_mcp;
+  if (local.sub_agent_inherit_hooks !== undefined) merged.sub_agent_inherit_hooks = local.sub_agent_inherit_hooks;
 
   // Arrays — local replaces
   if (local.disabled_skills !== undefined) merged.disabled_skills = local.disabled_skills;
@@ -1370,6 +1379,8 @@ export function saveSettings(settings: FermiSettings, filePath: string): void {
   if (settings.disabled_skills !== undefined) clean.disabled_skills = settings.disabled_skills;
   if (settings.mcp_servers !== undefined) clean.mcp_servers = settings.mcp_servers;
   if (settings.agent_models !== undefined) clean.agent_models = settings.agent_models;
+  if (settings.sub_agent_inherit_mcp !== undefined) clean.sub_agent_inherit_mcp = settings.sub_agent_inherit_mcp;
+  if (settings.sub_agent_inherit_hooks !== undefined) clean.sub_agent_inherit_hooks = settings.sub_agent_inherit_hooks;
   writeFileSync(tmp, JSON.stringify(clean, null, 2));
   renameSync(tmp, filePath);
 }

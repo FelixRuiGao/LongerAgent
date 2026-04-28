@@ -162,8 +162,6 @@ function formatToolCallArgs(toolName: string, args: Record<string, unknown>): st
       return `"${String(args["pattern"] ?? "")}"`;
     case "spawn":
       return `${String(args["id"] ?? "")} [${String(args["template"] ?? args["template_path"] ?? "")}]`;
-    case "spawn_file":
-      return `"${String(args["file"] ?? "")}"`;
     case "ask": {
       const qs = args["questions"] as Array<Record<string, unknown>> | undefined;
       if (qs?.length) return truncateText(String(qs[0]?.question ?? ""), 30).slice(1, -1);

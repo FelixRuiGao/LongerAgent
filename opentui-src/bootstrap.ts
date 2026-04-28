@@ -88,6 +88,9 @@ export async function bootstrapOpenTuiRuntime(opts?: {
     localProviders,
     mcpServers,
     modelTiers: settings.model_tiers,
+    agentModels: settings.agent_models,
+    subAgentInheritMcp: settings.sub_agent_inherit_mcp,
+    subAgentInheritHooks: settings.sub_agent_inherit_hooks,
   });
 
   // ── OAuth token refresh ──

@@ -134,12 +134,6 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     text: (args) => str(args.id),
     inlineResult: false,
   },
-  spawn_file: {
-    category: "orchestrate",
-    displayName: "Spawn",
-    text: (args) => str(args.file),
-    inlineResult: false,
-  },
   kill_agent: {
     category: "orchestrate",
     displayName: "Kill",

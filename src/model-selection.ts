@@ -8,6 +8,7 @@ import {
 } from "./provider-presets.js";
 import { isManagedProvider } from "./managed-provider-credentials.js";
 import { describeModel } from "./model-presentation.js";
+import { getThinkingLevels, getTierEligibleThinkingLevels } from "./config.js";
 import type { AgentModelEntry, ModelTierEntry } from "./persistence.js";
 
 export type ModelEntryLike = {
@@ -165,17 +166,15 @@ export function toStableModelIdentity(
 
 export function createModelTierEntry(
   identity: StableModelIdentity,
-  thinkingLevel?: string,
+  thinkingLevel: string,
 ): ModelTierEntry {
-  const entry: ModelTierEntry = {
+  validateThinkingLevelForModel(identity.modelId, thinkingLevel, "Tier entry");
+  return {
     provider: identity.provider,
     selection_key: identity.selectionKey,
     model_id: identity.modelId,
+    thinking_level: thinkingLevel,
   };
-  if (thinkingLevel && thinkingLevel !== "off" && thinkingLevel !== "none") {
-    entry.thinking_level = thinkingLevel;
-  }
-  return entry;
 }
 
 export function resolveConfigNameForModelIdentity(
@@ -222,6 +221,42 @@ export function resolveModelIdentity(
   return resolveModelSelection(session, `${identity.provider}:${identity.selectionKey || identity.modelId}`);
 }
 
+/**
+ * Validate that `thinking_level` is a valid sub-agent tier value for the model.
+ *
+ * Rules:
+ *   - Non-thinking model (no native levels): must be exactly "none" (sentinel).
+ *   - Thinking-capable model: must be one of `getTierEligibleThinkingLevels(model)`,
+ *     i.e. the native list with "off" / "none" filtered out. Tiers always have
+ *     thinking enabled — main-agent thinking-off is a separate, main-only choice.
+ *
+ * Source label is included in the error so callers know which entry point
+ * produced the bad value. Used by createModelTierEntry (save path) and
+ * resolveModelTierEntry / resolveAgentModelEntry (resolve path). Direct
+ * settings.json edits are caught at resolve time.
+ */
+export function validateThinkingLevelForModel(modelId: string, thinkingLevel: string, source: string): void {
+  if (!thinkingLevel) {
+    throw new Error(`${source}: missing thinking_level. Re-configure the entry.`);
+  }
+  const native = getThinkingLevels(modelId);
+  if (native.length === 0) {
+    if (thinkingLevel !== "none") {
+      throw new Error(
+        `${source}: model '${modelId}' does not support thinking, but thinking_level is '${thinkingLevel}'.`,
+      );
+    }
+    return;
+  }
+  const eligible = getTierEligibleThinkingLevels(modelId);
+  if (!eligible.includes(thinkingLevel)) {
+    throw new Error(
+      `${source}: thinking_level '${thinkingLevel}' is not a valid sub-agent thinking level for model '${modelId}'. ` +
+      `Valid: ${eligible.join(", ")}.`,
+    );
+  }
+}
+
 export function resolveModelTierEntry(
   session: any,
   entry: ModelTierEntry,
@@ -231,9 +266,15 @@ export function resolveModelTierEntry(
     selectionKey: entry.selection_key || entry.model_id,
     modelId: entry.model_id,
   });
+  const modelConfig = session.config.getModel(resolved.selectedConfigName);
+  validateThinkingLevelForModel(
+    modelConfig.model || entry.model_id,
+    entry.thinking_level,
+    `Model tier`,
+  );
   return {
     ...resolved,
-    modelConfig: session.config.getModel(resolved.selectedConfigName),
+    modelConfig,
     thinkingLevel: entry.thinking_level,
   };
 }
@@ -247,9 +288,15 @@ export function resolveAgentModelEntry(
     selectionKey: entry.selection_key || entry.model_id,
     modelId: entry.model_id,
   });
+  const modelConfig = session.config.getModel(resolved.selectedConfigName);
+  validateThinkingLevelForModel(
+    modelConfig.model || entry.model_id,
+    entry.thinking_level,
+    `Agent model pin`,
+  );
   return {
     ...resolved,
-    modelConfig: session.config.getModel(resolved.selectedConfigName),
+    modelConfig,
     thinkingLevel: entry.thinking_level,
   };
 }

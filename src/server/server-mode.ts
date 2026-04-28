@@ -100,6 +100,8 @@ export async function runServerMode(opts: ServerModeOptions): Promise<void> {
     mcpServers,
     modelTiers: settings.model_tiers,
     agentModels: settings.agent_models,
+    subAgentInheritMcp: settings.sub_agent_inherit_mcp,
+    subAgentInheritHooks: settings.sub_agent_inherit_hooks,
   });
 
   // OAuth token refresh — best-effort, don't fail bootstrap if it fails

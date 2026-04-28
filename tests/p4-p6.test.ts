@@ -86,13 +86,13 @@ describe("P4 shell governance", () => {
     }
   });
 
-  it("does not trigger ask preflight for external cwd", () => {
+  it("does not trigger ask preflight for external cwd", async () => {
     const projectRoot = makeTempDir("fermi-p4-preflight-proj-");
     const externalRoot = makeTempDir("fermi-p4-preflight-ext-");
     try {
       const session = makeSession(projectRoot);
 
-      const preflight = (session as any)._beforeToolExecute({
+      const preflight = await (session as any)._beforeToolExecute({
         agentName: "Primary",
         toolName: "bash",
         toolArgs: { command: "pwd", cwd: externalRoot },

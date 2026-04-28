@@ -192,13 +192,9 @@ Fetch content from a URL and return it as readable text. HTML pages are converte
 - Use `web_search` to discover URLs; use `web_fetch` to read specific pages.
 - Results may be truncated for very large pages (~100K char limit).
 
-## `spawn` and `spawn_file`
+## `spawn`
 
-Launch sub-sessions for bounded, parallel subtasks.
-
-### `spawn` — single agent (preferred)
-
-Spawn a single agent directly:
+Launch a sub-session for a bounded subtask.
 
 ```
 spawn(
@@ -211,38 +207,7 @@ spawn(
 
 Required parameters: `id`, `template` (or `template_path`), `task`, `mode`.
 
-### `spawn_file` — multiple agents
-
-For spawning multiple agents, write a YAML call file and reference it:
-
-```
-spawn_file(file="spawn-tasks.yaml")
-```
-
-Call file format:
-
-```yaml
-agents:
-  - id: explorer-1
-    template: explorer
-    mode: oneshot
-    task: |
-      Explore the providers/ directory at {PROJECT_ROOT}/src/providers/ ...
-  - id: explorer-2
-    template: explorer
-    mode: oneshot
-    task: |
-      Explore the tools/ directory at {PROJECT_ROOT}/src/tools/ ...
-```
-
-The `file` parameter is resolved relative to `{SESSION_ARTIFACTS}` automatically.
-
-### Choosing Between Modes
-
-| Scenario | Tool |
-|----------|------|
-| Single agent (most cases) | **`spawn`** — one tool call, no file needed |
-| Multiple parallel agents | **`spawn_file`** — list all tasks in one YAML |
+To run multiple agents in parallel, issue several `spawn(...)` calls in the same response.
 
 ### Available Pre-defined Templates
 
@@ -354,7 +319,7 @@ Packs and individual tool names can be mixed: `tools: [read, bash, time]`
 spawn(id="analyst-1", template_path="my-template", mode="oneshot", task="Analyze the database schema at ...")
 ```
 
-The template persists in `{SESSION_ARTIFACTS}` for the entire session — you can reuse it across multiple `spawn` / `spawn_file` calls without recreating it.
+The template persists in `{SESSION_ARTIFACTS}` for the entire session — you can reuse it across multiple `spawn` calls without recreating it.
 
 ### Writing Effective Sub-Agent Prompts
 
@@ -404,7 +369,7 @@ The quality of sub-agent results depends almost entirely on your prompt. A well-
 
 **Default to delegation.** If the investigation spans a codebase you haven't seen, or requires searching across many files to locate the answer, spawn a sub-agent. Your job is to orchestrate and execute — not to manually read through codebases.
 
-> Three independent areas to understand? **Spawn 3 explorers in parallel.** Use a call file with all tasks, or spawn them inline one by one.
+> Three independent areas to understand? **Spawn 3 explorers in parallel** — issue three `spawn(...)` calls in the same response.
 
 > Need one function signature in a file you already know? **Use `read_file` directly.**
 

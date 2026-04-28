@@ -19,7 +19,6 @@ import {
   MANAGED_PROVIDER_CREDENTIAL_SPECS,
   isManagedProvider,
 } from "./managed-provider-credentials.js";
-import { resolveConfigNameForModelIdentity } from "./model-selection.js";
 import type { AgentModelEntry, LocalProviderConfig, ModelTierEntry } from "./persistence.js";
 
 export { FERMI_HOME_DIR } from "./home-path.js";
@@ -271,6 +270,17 @@ export function getThinkingLevels(model: string): string[] {
   return KNOWN_THINKING_LEVELS[model]
     ?? KNOWN_THINKING_LEVELS[normalizeModelId(model)]
     ?? [];
+}
+
+/**
+ * Tier-eligible thinking levels: native levels with "off" / "none" filtered out.
+ *
+ * Sub-agent tiers must always have thinking enabled — "off" / "none" defeat the
+ * purpose of giving a tier its own configuration. Main-agent flow may still pick
+ * "off" / "none" via getThinkingLevels (user override is sovereign there).
+ */
+export function getTierEligibleThinkingLevels(model: string): string[] {
+  return getThinkingLevels(model).filter((l) => l !== "off" && l !== "none");
 }
 
 /** Return the highest (last) thinking level for a model, or undefined if not a thinking model. */
@@ -648,6 +658,8 @@ export class Config {
   private _mcpServers: MCPServerConfig[];
   private _modelTiers: { high?: ModelTierEntry; medium?: ModelTierEntry; low?: ModelTierEntry } = {};
   private _agentModels: Record<string, AgentModelEntry> = {};
+  private _subAgentInheritMcp: boolean;
+  private _subAgentInheritHooks: boolean;
 
   constructor(opts: {
     providerEnvVars?: Record<string, string>;
@@ -655,14 +667,26 @@ export class Config {
     mcpServers?: MCPServerConfig[];
     modelTiers?: { high?: ModelTierEntry; medium?: ModelTierEntry; low?: ModelTierEntry };
     agentModels?: Record<string, AgentModelEntry>;
+    subAgentInheritMcp?: boolean;
+    subAgentInheritHooks?: boolean;
   }) {
     this._mcpServers = opts.mcpServers ?? [];
     this._agentModels = opts.agentModels ?? {};
     this._modelTiers = opts.modelTiers ?? {};
+    this._subAgentInheritMcp = opts.subAgentInheritMcp ?? true;
+    this._subAgentInheritHooks = opts.subAgentInheritHooks ?? true;
     this._populateFromPreferences(
       opts.providerEnvVars ?? {},
       opts.localProviders ?? {},
     );
+  }
+
+  get subAgentInheritMcp(): boolean {
+    return this._subAgentInheritMcp;
+  }
+
+  get subAgentInheritHooks(): boolean {
+    return this._subAgentInheritHooks;
   }
 
   /**
@@ -919,62 +943,9 @@ export class Config {
     return this._modelTiers;
   }
 
-  /**
-   * Resolve a model tier level to a ModelConfig.
-   * Returns `{ modelConfig, thinkingLevel }` on success.
-   * Throws if the tier is not configured or the model can't be resolved.
-   */
-  resolveModelTier(level: "high" | "medium" | "low"): { modelConfig: ModelConfig; thinkingLevel?: string } {
-    const tier = this._modelTiers[level];
-    if (!tier) {
-      throw new Error(`Model tier '${level}' is not configured.`);
-    }
-
-    const configName = resolveConfigNameForModelIdentity(this, {
-      provider: tier.provider,
-      selectionKey: tier.selection_key,
-      modelId: tier.model_id,
-    });
-    if (!configName) {
-      throw new Error(
-        `Model tier '${level}' references '${tier.provider}:${tier.selection_key}' ` +
-        `(${tier.model_id}) but that model is not currently configured.`,
-      );
-    }
-
-    const modelConfig = this.getModel(configName);
-    return { modelConfig, thinkingLevel: tier.thinking_level };
-  }
-
   // -- Agent model pins --
 
   get agentModels(): Record<string, AgentModelEntry> {
     return this._agentModels;
-  }
-
-  /**
-   * Resolve a pinned agent model by template name.
-   * Returns `{ modelConfig, thinkingLevel }` if the template has a pin.
-   * Returns `null` if no pin is configured for this template.
-   * Throws if a pin exists but the referenced model can't be resolved.
-   */
-  resolveAgentModel(templateName: string): { modelConfig: ModelConfig; thinkingLevel?: string } | null {
-    const entry = this._agentModels[templateName];
-    if (!entry) return null;
-
-    const configName = resolveConfigNameForModelIdentity(this, {
-      provider: entry.provider,
-      selectionKey: entry.selection_key,
-      modelId: entry.model_id,
-    });
-    if (!configName) {
-      throw new Error(
-        `agent_models['${templateName}'] references '${entry.provider}:${entry.selection_key}' ` +
-        `(${entry.model_id}) but that model is not currently configured.`,
-      );
-    }
-
-    const modelConfig = this.getModel(configName);
-    return { modelConfig, thinkingLevel: entry.thinking_level };
   }
 }

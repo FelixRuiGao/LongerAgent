@@ -247,9 +247,6 @@ describe("Phase 2 tool validation and grep limits", () => {
     const killBad = Session.prototype["_execKillAgent"].call(fake, { ids: "a" });
     expect(killBad.content).toContain("invalid arguments for kill_agent");
 
-    const spawnBad = await Session.prototype["_execSpawnFile"].call(fake, { file: 123 });
-    expect(spawnBad.content).toContain("invalid arguments for spawn_file");
-
     const askBad = Session.prototype["_execAsk"].call(fake, { questions: "bad" });
     expect(askBad.content).toContain("Error: 'questions' must be an array of 1-4 items.");
   });

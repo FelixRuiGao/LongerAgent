@@ -37,7 +37,7 @@ import {
   ensureManagedProviderCredential,
   type CredentialPromptAdapter,
 } from "./provider-credential-flow.js";
-import { Config, getThinkingLevels } from "./config.js";
+import { Config, getThinkingLevels, getTierEligibleThinkingLevels } from "./config.js";
 import { buildModelPickerTree, labelModelPickerNode, type ModelPickerTreeNode } from "./model-picker-tree.js";
 import { createModelTierEntry, parseProviderModelTarget } from "./model-selection.js";
 import { describeModel } from "./model-presentation.js";
@@ -575,7 +575,9 @@ async function stepSelectThinkingLevel(modelId: string, label: string): Promise<
   const levels = getThinkingLevels(modelId);
   if (levels.length === 0) return undefined;
 
-  // Build choices: "off" first (if not already in the list), then the model's levels
+  // Main-agent picker: offer all native levels, plus a synthetic "off" if neither
+  // "off" nor "none" is already in the list. Tier picker uses its own helper —
+  // see stepConfigureTiers below.
   const choices: Array<{ name: string; value: string }> = [];
   if (!levels.includes("off") && !levels.includes("none")) {
     choices.push({ name: "off", value: "off" });
@@ -622,8 +624,27 @@ async function stepConfigureTiers(
       continue;
     }
 
-    // Thinking level for this tier model
-    const thinkingLevel = await stepSelectThinkingLevel(picked.modelId, `  ${tierName} tier`);
+    // Tier-eligible levels exclude native "off" / "none" — sub-agent tiers
+    // always have thinking enabled.
+    let thinkingLevel: string;
+    if (getThinkingLevels(picked.modelId).length === 0) {
+      thinkingLevel = "none";
+    } else {
+      const eligible = getTierEligibleThinkingLevels(picked.modelId);
+      if (eligible.length === 0) {
+        console.log(`    Model has no eligible thinking levels (only off/none). Skipping ${tierName} tier.\n`);
+        continue;
+      }
+      const picked2 = await select({
+        message: `  ${tierName} tier: Thinking level (required)`,
+        choices: eligible.map((l) => ({ name: l, value: l })),
+      });
+      if (!picked2) {
+        console.log(`    No thinking level selected for ${tierName} tier. Skipping.\n`);
+        continue;
+      }
+      thinkingLevel = picked2;
+    }
 
     tiers[tierName] = createModelTierEntry({
       provider: picked.providerId,

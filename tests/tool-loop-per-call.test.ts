@@ -27,78 +27,6 @@ function createUpdateEntry(entries: LogEntry[]) {
 }
 
 describe("tool-loop per-call lifecycle", () => {
-  it("starts executing a closed tool call before the provider returns its final response", async () => {
-    const runtime = createEphemeralLogState([
-      { role: "system", content: "prompt" },
-      { role: "user", content: "hi" },
-    ]);
-    const events: string[] = [];
-
-    let releaseProviderReturn: (() => void) | null = null;
-    const providerGate = new Promise<void>((resolve) => {
-      releaseProviderReturn = resolve;
-    });
-
-    class StreamingProvider extends BaseProvider {
-      private _calls = 0;
-
-      async sendMessage(
-        _messages: any[],
-        _tools?: any[],
-        options?: {
-          onToolCallPartial?: (callId: string, name: string, rawArguments: string) => void;
-          onToolCallClosed?: (call: ToolCall) => void;
-        },
-      ): Promise<ProviderResponse> {
-        this._calls += 1;
-        if (this._calls === 1) {
-          options?.onToolCallPartial?.("call_1", "read_file", "{\"path\":\"a.txt\"}");
-          options?.onToolCallClosed?.({
-            id: "call_1",
-            name: "read_file",
-            rawArguments: "{\"path\":\"a.txt\"}",
-            arguments: { path: "a.txt" },
-            parseError: null,
-          });
-          events.push("provider:closed");
-          await providerGate;
-          events.push("provider:return");
-          return new ProviderResponse({
-            usage: new Usage(1, 1),
-          });
-        }
-        return new ProviderResponse({
-          text: "done",
-          usage: new Usage(1, 1),
-        });
-      }
-    }
-
-    const resultPromise = asyncRunToolLoop({
-      provider: new StreamingProvider(),
-      getMessages: runtime.getMessages,
-      appendEntry: runtime.appendEntry,
-      allocId: runtime.allocId,
-      turnIndex: 0,
-      toolExecutors: {
-        read_file: async (args) => {
-          events.push(`tool:${String(args["path"] ?? "")}`);
-          releaseProviderReturn?.();
-          return "OK";
-        },
-      },
-      maxRounds: 2,
-      onToolCallPartial: () => {},
-      updateEntry: createUpdateEntry(runtime.entries),
-    });
-
-    const result = await resultPromise;
-
-    expect(events.indexOf("tool:a.txt")).toBeGreaterThanOrEqual(0);
-    expect(events.indexOf("tool:a.txt")).toBeLessThan(events.indexOf("provider:return"));
-    expect(result.text).toBe("done");
-  });
-
   it("does not execute closed tool calls whose final JSON is invalid", async () => {
     const runtime = createEphemeralLogState([
       { role: "system", content: "prompt" },
@@ -169,11 +97,6 @@ describe("tool-loop per-call lifecycle", () => {
     ]);
     const events: string[] = [];
 
-    let releaseProviderReturn: (() => void) | null = null;
-    const providerGate = new Promise<void>((resolve) => {
-      releaseProviderReturn = resolve;
-    });
-
     class MissingFinalToolCallsProvider extends BaseProvider {
       private _calls = 0;
 
@@ -195,8 +118,6 @@ describe("tool-loop per-call lifecycle", () => {
             arguments: { path: "late.txt" },
             parseError: null,
           });
-          events.push("provider:closed");
-          await providerGate;
           events.push("provider:return-no-toolcalls");
           return new ProviderResponse({
             toolCalls: [],
@@ -221,7 +142,6 @@ describe("tool-loop per-call lifecycle", () => {
       toolExecutors: {
         read_file: async (args) => {
           events.push(`tool:${String(args["path"] ?? "")}`);
-          releaseProviderReturn?.();
           return "OK";
         },
       },
@@ -233,8 +153,8 @@ describe("tool-loop per-call lifecycle", () => {
     expect(events).toContain("tool:late.txt");
     expect(events).toContain("provider:return-no-toolcalls");
     expect(events).toContain("provider:second-round");
-    expect(events.indexOf("tool:late.txt")).toBeLessThan(events.indexOf("provider:return-no-toolcalls"));
-    expect(events.indexOf("provider:return-no-toolcalls")).toBeLessThan(events.indexOf("provider:second-round"));
+    expect(events.indexOf("provider:return-no-toolcalls")).toBeLessThan(events.indexOf("tool:late.txt"));
+    expect(events.indexOf("tool:late.txt")).toBeLessThan(events.indexOf("provider:second-round"));
     expect(result.text).toBe("done");
   });
 

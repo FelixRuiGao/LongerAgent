@@ -103,7 +103,7 @@ describe("manual summarize / compact commands", () => {
     const projectRoot = makeTempDir("fermi-manual-blocked-");
     try {
       const session = makeSession(projectRoot) as any;
-      session._activeShells.set("dev", {
+      session._shellManager._activeShells.set("dev", {
         id: "dev",
         process: null,
         command: "pnpm dev",

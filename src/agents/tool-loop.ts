@@ -146,8 +146,6 @@ export function generateToolCallDisplay(
       return compactDisplayValue(toolArgs["query"]) ? `${toolName} ${compactDisplayValue(toolArgs["query"])}` : toolName;
     case "spawn":
       return id ? `${toolName} ${id}` : toolName;
-    case "spawn_file":
-      return file ? `${toolName} ${file}` : toolName;
     case "kill_agent":
       return ids ? `${toolName} ${ids}` : toolName;
     case "await_event":
