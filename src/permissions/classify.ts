@@ -41,7 +41,7 @@ const READ_TOOLS = new Set([
   "read_file", "list_dir", "glob", "grep",
   "web_fetch", "web_search", "$web_search",
   "show_context", "distill_context",
-  "ask", "check_status", "wait", "send",
+  "ask", "check_status", "await_event", "send",
   "bash_output", "skill", "time",
 ]);
 

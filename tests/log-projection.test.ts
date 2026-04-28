@@ -375,7 +375,7 @@ describe("projectToTuiEntries", () => {
     expect(tui.map((entry) => entry.kind)).toEqual(["user", "status"]);
   });
 
-  it("ignores legacy sub-agent completion entries between waits", () => {
+  it("ignores legacy sub-agent completion entries between await_event calls", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "investigate", "investigate", "c1"),
@@ -383,9 +383,9 @@ describe("projectToTuiEntries", () => {
         "tc-001",
         1,
         0,
-        "wait 120s",
-        { id: "wait:1", name: "wait", arguments: { seconds: 120 } },
-        { toolCallId: "wait:1", toolName: "wait", agentName: "main" },
+        "await_event 120s",
+        { id: "await_event:1", name: "await_event", arguments: { seconds: 120 } },
+        { toolCallId: "await_event:1", toolName: "await_event", agentName: "main" },
       ),
       createSubAgentEnd("sae-001", 1, "done", 6, "investigate-other-packages", 89.4, 49),
       createReasoning("rsn-001", 1, 1, "thinking", "thinking", { state: "r1" }),
@@ -394,9 +394,9 @@ describe("projectToTuiEntries", () => {
         "tc-002",
         1,
         1,
-        "wait 120s",
-        { id: "wait:2", name: "wait", arguments: { seconds: 120 } },
-        { toolCallId: "wait:2", toolName: "wait", agentName: "main" },
+        "await_event 120s",
+        { id: "await_event:2", name: "await_event", arguments: { seconds: 120 } },
+        { toolCallId: "await_event:2", toolName: "await_event", agentName: "main" },
       ),
       createSubAgentEnd("sae-002", 1, "done", 2, "investigate-opencode", 95.4, 34),
       createReasoning("rsn-002", 1, 2, "thinking again", "thinking again", { state: "r2" }),
@@ -421,7 +421,7 @@ describe("projectToTuiEntries", () => {
 // ------------------------------------------------------------------
 
 describe("projectToApiMessages", () => {
-  it("keeps tool results immediately after tool calls when agent_result lands before wait result", () => {
+  it("keeps tool results immediately after tool calls when agent_result lands before await_event result", () => {
     const legacyAgentResult = createAgentResult(
       "ar-001",
       1,
@@ -446,9 +446,9 @@ describe("projectToApiMessages", () => {
         "tc-001",
         1,
         0,
-        "wait 60s",
-        { id: "wait:2", name: "wait", arguments: { seconds: 60 } },
-        { toolCallId: "wait:2", toolName: "wait", agentName: "main", contextId: "r1" },
+        "await_event 60s",
+        { id: "await_event:2", name: "await_event", arguments: { seconds: 60 } },
+        { toolCallId: "await_event:2", toolName: "await_event", agentName: "main", contextId: "r1" },
       ),
       legacyAgentResult,
       createToolResult(
@@ -456,10 +456,10 @@ describe("projectToApiMessages", () => {
         1,
         0,
         {
-          toolCallId: "wait:2",
-          toolName: "wait",
+          toolCallId: "await_event:2",
+          toolName: "await_event",
           content: "Waited - sub-session changed.",
-          toolSummary: "main is waiting",
+          toolSummary: "main is awaiting runtime events",
         },
         { isError: false, contextId: "r1" },
       ),
@@ -473,7 +473,7 @@ describe("projectToApiMessages", () => {
     expect(assistantIndex).toBeGreaterThan(-1);
     expect(msgs[assistantIndex + 1]).toMatchObject({
       role: "tool_result",
-      tool_call_id: "wait:2",
+      tool_call_id: "await_event:2",
     });
     expect(msgs[assistantIndex + 2]).toMatchObject({
       role: "user",
@@ -588,7 +588,7 @@ describe("projectToApiMessages", () => {
   it("handles no_reply", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
-      createUserMessage("user-001", 1, "wait", "wait", "c1"),
+      createUserMessage("user-001", 1, "await", "await", "c1"),
       createNoReply("nr-001", 1, 0, "<NO_REPLY>"),
     ];
     const msgs = projectToApiMessages(entries);
@@ -684,21 +684,21 @@ describe("projectToApiMessages", () => {
   it("rejects API projections that put user messages before pending tool results", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
-      createUserMessage("user-001", 1, "wait", "wait", "c1"),
+      createUserMessage("user-001", 1, "await", "await", "c1"),
       createToolCall(
         "tc-001",
         1,
         0,
-        "wait 15s",
-        { id: "wait:1", name: "wait", arguments: { seconds: 15 } },
-        { toolCallId: "wait:1", toolName: "wait", agentName: "main", contextId: "r1" },
+        "await_event 15s",
+        { id: "await_event:1", name: "await_event", arguments: { seconds: 15 } },
+        { toolCallId: "await_event:1", toolName: "await_event", agentName: "main", contextId: "r1" },
       ),
       createUserMessage("user-002", 1, "side channel", "side channel", "c2"),
       createToolResult(
         "tr-001",
         1,
         0,
-        { toolCallId: "wait:1", toolName: "wait", content: "done", toolSummary: "main is waiting" },
+        { toolCallId: "await_event:1", toolName: "await_event", content: "done", toolSummary: "main is awaiting runtime events" },
         { isError: false, contextId: "r1" },
       ),
     ];

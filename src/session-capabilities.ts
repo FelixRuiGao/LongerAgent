@@ -2,7 +2,7 @@ export interface SessionCapabilities {
   includeSpawnTool: boolean;
   includeKillTool: boolean;
   includeCheckStatusTool: boolean;
-  includeWaitTool: boolean;
+  includeAwaitEventTool: boolean;
   includeShowContextTool: boolean;
   includeDistillContextTool: boolean;
   includeAskTool: boolean;
@@ -13,7 +13,7 @@ export const ROOT_SESSION_CAPABILITIES: SessionCapabilities = {
   includeSpawnTool: true,
   includeKillTool: true,
   includeCheckStatusTool: true,
-  includeWaitTool: true,
+  includeAwaitEventTool: true,
   includeShowContextTool: true,
   includeDistillContextTool: true,
   includeAskTool: true,
@@ -24,7 +24,7 @@ export const CHILD_SESSION_CAPABILITIES: SessionCapabilities = {
   includeSpawnTool: false,
   includeKillTool: false,
   includeCheckStatusTool: false,
-  includeWaitTool: true,
+  includeAwaitEventTool: true,
   includeShowContextTool: false,
   includeDistillContextTool: false,
   includeAskTool: false,

@@ -15,4 +15,4 @@ Ask the user 1-4 structured questions, each with 1-4 concrete options. The syste
 **Understanding responses:**
 - **Option selected** — proceed with that choice.
 - **Custom input** — the user typed a free-text answer instead of picking an option. Treat it as their specific instruction.
-- **Discuss further** — treat it as a normal answer meaning the user wants to continue the discussion before making a final commitment. Use any other answers normally. Briefly address the discussion points, then wait for the user's next message.
+- **Discuss further** — treat it as a normal answer meaning the user wants to continue the discussion before making a final commitment. Use any other answers normally. Briefly address the discussion points, then return control to the user.

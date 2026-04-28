@@ -225,7 +225,7 @@ export class BackgroundShellManager {
         `Started background shell '${shellId}'.\n` +
         `cwd: ${cwd}\n` +
         `log: ${logPath}\n` +
-        `Use \`bash_output(id="${shellId}")\` to inspect logs and \`wait(shell="${shellId}", seconds=60)\` to wait for exit.`,
+        `Use \`bash_output(id="${shellId}")\` to inspect logs and \`await_event(seconds=60)\` to await shell exit.`,
     });
   }
 

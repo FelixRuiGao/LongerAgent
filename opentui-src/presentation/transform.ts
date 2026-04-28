@@ -515,7 +515,7 @@ export function presentationTransform(
     const entry = entries[i];
     const kind = entry.entry.kind;
 
-    // 1. Skip hidden tools (wait) and plan file operations
+    // 1. Skip hidden tools and plan file operations
     if (kind === "tool_call") {
       const toolName = getToolName(entry);
       const isPlanOp = isPlanFileOperation(entry, entries[i + 1]);

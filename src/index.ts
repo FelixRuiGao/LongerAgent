@@ -125,7 +125,7 @@ export {
   SPAWN_TOOL,
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
-  WAIT_TOOL,
+  AWAIT_EVENT_TOOL,
   DISTILL_CONTEXT_TOOL,
   ASK_TOOL,
 } from "./tools/comm.js";

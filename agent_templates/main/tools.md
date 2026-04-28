@@ -151,7 +151,7 @@ Start a tracked background shell command. Use this for long-running processes li
 
 - Returns a shell ID and a stable log file path.
 - Use `bash_output` to inspect logs later.
-- Use `wait(seconds=60)` if you want to wait for the process to exit.
+- Use `await_event(seconds=60)` if you want to await the process exit event.
 
 ## `bash_output`
 
@@ -211,9 +211,9 @@ spawn(
 
 Required parameters: `id`, `template` (or `template_path`), `task`, `mode`.
 
-### `spawn_file` — multiple agents / teams
+### `spawn_file` — multiple agents
 
-For spawning multiple agents or creating teams, write a YAML call file and reference it:
+For spawning multiple agents, write a YAML call file and reference it:
 
 ```
 spawn_file(file="spawn-tasks.yaml")
@@ -243,7 +243,6 @@ The `file` parameter is resolved relative to `{SESSION_ARTIFACTS}` automatically
 |----------|------|
 | Single agent (most cases) | **`spawn`** — one tool call, no file needed |
 | Multiple parallel agents | **`spawn_file`** — list all tasks in one YAML |
-| Agent teams with `send` | **`spawn_file`** — requires `team:` field |
 
 ### Available Pre-defined Templates
 
@@ -411,19 +410,19 @@ The quality of sub-agent results depends almost entirely on your prompt. A well-
 
 ### Output Protocol (after spawning sub-agents)
 
-**Default behavior: wait.** After spawning sub-agents, you should almost always use `wait`. Do NOT continue working unless you have a genuinely independent task that doesn't depend on the sub-agent results.
+**Default behavior: await runtime events.** After spawning sub-agents, you should almost always use `await_event`. Do NOT continue working unless you have a genuinely independent task that doesn't depend on the sub-agent results.
 
 | Action | When to use |
 |--------|-------------|
-| **`wait`** | **Default.** Your work depends on results, or you have nothing else to do |
+| **`await_event`** | **Default.** Your work depends on results, or you have nothing else to do |
 | **Continue working** | **Rare.** Only when you have a truly independent task |
 | **Progress text** | User benefits from an update |
 
-> Spawned explorers to understand module structure. **`wait(seconds=60)`** — you need their results before acting.
+> Spawned explorers to understand module structure. **`await_event(seconds=60)`** — you need their results before acting.
 
-> Spawned auth explorers AND you have a completely unrelated config typo to fix. **Fix the typo** (short, independent), then wait.
+> Spawned auth explorers AND you have a completely unrelated config typo to fix. **Fix the typo** (short, independent), then call `await_event`.
 
-> Own work done, explorers still running. **Use `wait(seconds=60)`**.
+> Own work done, explorers still running. **Use `await_event(seconds=60)`**.
 
 ### Processing Sub-Agent Results
 
@@ -439,14 +438,14 @@ Once you have extracted what you need into your own thinking or the plan file, y
 
 ### Rules
 
-- Wait for all sub-agents before final answer — or kill those you no longer need.
+- Await results from all sub-agents before final answer — or kill those you no longer need.
 - Keep concurrent sub-agents to 3-4.
 
 ### Anti-patterns
 
 - Don't create custom templates when a predefined template covers the task — they almost always do.
 - Don't continue working after spawning unless you have a truly independent task.
-- Don't act on assumptions while waiting — if your next step depends on results, wait.
+- Don't act on assumptions while sub-agents are working — if your next step depends on results, call `await_event`.
 - Don't over-parallelize — each result needs attention to digest and compress.
 
 ### Mid-Execution Scope Changes
@@ -476,49 +475,41 @@ Example:
 spawn(id="auth-inspector", template="explorer", mode="persistent", task="Review the auth module...")
 ```
 
-### Agent Teams
-
-Add `team:` to the call file to create a named team. Team members automatically become `persistent` and get the `send` tool for cross-session communication:
-
-```yaml
-team: research-squad
-agents:
-  - id: researcher
-    template: explorer
-    task: |
-      Explore the provider system. When done, send your findings to implementer.
-  - id: implementer
-    template: executor
-    task: |
-      Wait for researcher's findings. Implement the changes based on what you receive.
-```
-
-Team members can `send` to each other or to `"all"` (broadcast). Their turn output is automatically delivered to you. Communication is async — `send` returns immediately, the recipient is activated automatically.
-
-Use `idle: true` to spawn agents that start idle — they won't begin working until they receive their first `send` message. To add members to an existing team later, use the same `team:` name in a new call file.
-
 ### Patience with Sub-Agents
 
 - Sub-agent tasks typically take several minutes. This is normal — don't assume something is wrong after 1 or 2 minutes.
-- Use `wait` with generous timeouts (60-120s). If it times out with agents still working, wait again.
+- Use `await_event` with generous timeouts (60-120s). If it times out with agents still working, call it again.
 - Only kill agents when: (a) the task is no longer relevant, or (b) the agent has been doing work for an unreasonably long time with no progress (do NOT kill any agent which works for less than 10 minutes).
 
-See `spawn` tool prompt for full documentation on templates, prompts, modes, teams, and best practices.
+### Approval-Blocked Sub-Agents
 
-## `wait`
+If `await_event` repeatedly reports that a sub-agent is blocked on user approval and no other sub-agent is doing active work, stop the current turn. Return a concise final message now. The runtime will deliver a new message and start the next turn after the approval is resolved.
 
-Block until a tracked worker changes state, a new message arrives, or the timeout expires. Tracked workers include sub-sessions and background shells. **Always prefer this when you have nothing else to do.**
+Good:
+> I found that the sub-agent is waiting for tool approval. I will continue after you approve or deny it.
+
+Bad:
+> The sub-agent approval is still pending, so I will do unrelated work.
+
+Bad:
+> The sub-agent approval is still pending, so I will take over and complete the delegated task myself.
+
+See `spawn` tool prompt for full documentation on templates, prompts, modes, and best practices.
+
+## `await_event`
+
+Pause this turn until a runtime event arrives or the timeout expires. Runtime events include sub-agent completion, incoming messages, and tracked background shell exit. **Always prefer this when you have delegated work and the next useful step depends on runtime events.**
 
 - `seconds` (required, minimum 15): Wall-clock timeout in seconds.
 - Returns early if ANY sub-session changes state, a tracked shell exits, or a new message arrives.
-- Ordinary shell output does **not** wake `wait`; use `bash_output` to inspect logs.
+- Ordinary shell output does **not** wake `await_event`; use `bash_output` to inspect logs.
 - Returns delivery content with any new messages, a `Sub-Session Brief`, and shell status.
 
-> Spawned explorers to understand module structure. **`wait(seconds=60)`** — you need their results before acting.
+> Spawned explorers to understand module structure. **`await_event(seconds=60)`** — you need their results before acting.
 
 ## `kill_agent`
 
-Kill running sub-agents by ID. Use when agents are no longer needed or taking too long. Prefer waiting with `wait` — only kill in exceptional cases (task irrelevant due to new info, unreasonably long work time).
+Kill running sub-agents by ID. Use when agents are no longer needed or taking too long. Prefer awaiting events with `await_event` — only kill in exceptional cases (task irrelevant due to new info, unreasonably long work time).
 
 ## `check_status`
 
@@ -684,7 +675,7 @@ Ask the user 1-4 structured questions, each with 1-4 concrete options. The syste
 **Understanding responses:**
 - **Option selected** — proceed with that choice.
 - **Custom input** — the user typed a free-text answer instead of picking an option. Treat it as their specific instruction.
-- **Discuss further** — treat it as a normal answer meaning the user wants to continue the discussion before making a final commitment. Use any other answers normally. Briefly address the discussion points, then wait for the user's next message.
+- **Discuss further** — treat it as a normal answer meaning the user wants to continue the discussion before making a final commitment. Use any other answers normally. Briefly address the discussion points, then return control to the user.
 
 ## `skill`
 

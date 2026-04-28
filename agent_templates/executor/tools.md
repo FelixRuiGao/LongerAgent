@@ -151,7 +151,7 @@ Start a tracked background shell command. Use this for long-running processes li
 
 - Returns a shell ID and a stable log file path.
 - Use `bash_output` to inspect logs later.
-- Use `wait(seconds=60)` if you want to wait for the process to exit.
+- Use `await_event(seconds=60)` if you want to await the process exit event.
 
 ## `bash_output`
 
@@ -192,12 +192,12 @@ Fetch content from a URL and return it as readable text. HTML pages are converte
 - Use `web_search` to discover URLs; use `web_fetch` to read specific pages.
 - Results may be truncated for very large pages (~100K char limit).
 
-## `wait`
+## `await_event`
 
-`wait(seconds)`
+`await_event(seconds)`
 
-Block until a new message arrives or the timeout expires. Available when you are part of a team.
+Pause until a new runtime event arrives or the timeout expires.
 
 - `seconds` (required, minimum 15): Wall-clock timeout in seconds.
-- Returns early when a teammate's message arrives.
-- After sending a request to a teammate, call `wait` — do not loop `send`.
+- Returns early when a new message arrives.
+- After sending a request to a persistent sub-agent, call `await_event` — do not loop `send`.

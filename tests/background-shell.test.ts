@@ -49,8 +49,8 @@ describe("background shell tools", () => {
       }) as ToolResult;
       expect(started.content).toContain("Started background shell 'demo'");
 
-      const waited = await (session as any)._execWait({ seconds: 15 }) as ToolResult;
-      // wait wakes on system_notice (shell exit) and/or shell-state racers; shell lines use
+      const waited = await (session as any)._execAwaitEvent({ seconds: 15 }) as ToolResult;
+      // await_event wakes on system_notice (shell exit) and/or shell-state racers; shell lines use
       // _buildShellReport() which does not prefix "# Shell" (that header is show_context only).
       expect(waited.content).toMatch(/Waited —/);
       expect(waited.content).toContain("[demo]");
@@ -72,7 +72,7 @@ describe("background shell tools", () => {
     try {
       const command = "i=1; while [ $i -le 120 ]; do printf 'line-%03d\\n' \"$i\"; i=$((i+1)); done";
       (session as any)._execBashBackground({ id: "burst", command });
-      await (session as any)._execWait({ seconds: 15 });
+      await (session as any)._execAwaitEvent({ seconds: 15 });
 
       const first = (session as any)._execBashOutput({ id: "burst", max_chars: 120 }) as ToolResult;
       expect(first.content).toContain("line-001");

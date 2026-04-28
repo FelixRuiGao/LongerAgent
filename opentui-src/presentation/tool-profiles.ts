@@ -193,9 +193,9 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     text: () => "",
     inlineResult: false,
   },
-  wait: {
+  await_event: {
     category: "orchestrate",
-    displayName: "Wait",
+    displayName: "Await Event",
     text: (args) => {
       const s = args.seconds;
       return typeof s === "number" ? `${s}s` : "";

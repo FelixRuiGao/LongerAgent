@@ -19,7 +19,7 @@ import {
   SPAWN_TOOL,
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
-  WAIT_TOOL,
+  AWAIT_EVENT_TOOL,
   SHOW_CONTEXT_TOOL,
   DISTILL_CONTEXT_TOOL,
   ASK_TOOL,
@@ -112,7 +112,7 @@ export function ensureCommTools(
   if (capabilities.includeSpawnTool) wanted.push(SPAWN_TOOL);
   if (capabilities.includeKillTool) wanted.push(KILL_AGENT_TOOL);
   if (capabilities.includeCheckStatusTool) wanted.push(CHECK_STATUS_TOOL);
-  if (capabilities.includeWaitTool) wanted.push(WAIT_TOOL);
+  if (capabilities.includeAwaitEventTool) wanted.push(AWAIT_EVENT_TOOL);
   if (capabilities.includeShowContextTool) wanted.push(SHOW_CONTEXT_TOOL);
   if (capabilities.includeDistillContextTool) wanted.push(DISTILL_CONTEXT_TOOL);
   if (capabilities.includeAskTool) wanted.push(ASK_TOOL);

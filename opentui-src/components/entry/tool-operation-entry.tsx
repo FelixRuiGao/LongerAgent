@@ -29,7 +29,7 @@ const BAR_COLORS: Record<ToolCategory, string> = {
 const TOOL_STREAM_MAX_LINES = 10;
 
 // Tool call arg / result body two-tier dim palette (matches AgentRows done state).
-const ARG_COLOR = "#7a8098";    // L=54 — brighter: tool args, path, suffix, wait timeout
+const ARG_COLOR = "#7a8098";    // L=54 — brighter: tool args, path, suffix, event timeout
 const RESULT_COLOR = "#5a6078"; // L=41 — darker:  tool result body content
 const PATH_TOOL_NAMES = new Set(["Read", "Edit", "Write", "List"]);
 
@@ -154,8 +154,8 @@ function ToolOperationEntryInner(
       ? DEFAULT_DISPLAY_THEME.presentation.errorColor
       : DEFAULT_DISPLAY_THEME.presentation.successColor;
 
-  const isWait = displayName === "Wait";
-  const waitElapsed = useElapsedSince(entry.toolStartedAt, active && isWait);
+  const isAwaitEvent = displayName === "Await Event";
+  const awaitElapsed = useElapsedSince(entry.toolStartedAt, active && isAwaitEvent);
   const toolText = entry.toolText ?? "";
   const suffix = entry.toolSuffix ?? "";
   const streamSections = entry.toolStreamSections ?? [];
@@ -202,8 +202,8 @@ function ToolOperationEntryInner(
           <text fg={ARG_COLOR} content={` ${suffix}`} flexShrink={0} />
         ) : null}
         <text content="  " flexShrink={0} />
-        {isWait && active ? (
-          <text fg={ARG_COLOR} content={`${waitElapsed}s  Timeout: ${toolText} (Send a message to interrupt)`} flexShrink={0} />
+        {isAwaitEvent && active ? (
+          <text fg={ARG_COLOR} content={`${awaitElapsed}s  Timeout: ${toolText} (Send a message to interrupt)`} flexShrink={0} />
         ) : entry.toolAgentName && !active ? (
           <ClickableAgentName
             text={entry.toolAgentName}

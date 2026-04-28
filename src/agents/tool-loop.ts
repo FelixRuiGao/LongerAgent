@@ -150,7 +150,7 @@ export function generateToolCallDisplay(
       return file ? `${toolName} ${file}` : toolName;
     case "kill_agent":
       return ids ? `${toolName} ${ids}` : toolName;
-    case "wait":
+    case "await_event":
       if (shell) {
         return toolArgs["seconds"] !== undefined
           ? `${toolName} ${shell} ${String(toolArgs["seconds"])}s`

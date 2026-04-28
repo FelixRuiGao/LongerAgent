@@ -749,7 +749,7 @@ export function OpenTuiApp({
         setPhase("decoding");
         break;
       case "tool_call":
-        if (event.extra?.["tool"] === "wait") {
+        if (event.extra?.["tool"] === "await_event") {
           setPhase("waiting");
         } else {
           setPhase("decoding");

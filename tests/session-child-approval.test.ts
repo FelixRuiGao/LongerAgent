@@ -1,9 +1,17 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { PendingAskUi } from "../src/ask.js";
 import { Session } from "../src/session.js";
 import { LogIdAllocator, createToolCall } from "../src/log-entry.js";
 import { ToolResult } from "../src/providers/base.js";
+
+function makeTempDir(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
 
 function makeSessionLike(): any {
   const s = Object.create(Session.prototype) as any;
@@ -124,7 +132,6 @@ function makeHandle(childSession: any): any {
     numericId: 1,
     template: "explorer",
     mode: "oneshot",
-    teamId: null,
     lifecycle: "running",
     status: "working",
     phase: "thinking",
@@ -257,6 +264,50 @@ describe("child approval routing", () => {
     expect(result.content).toContain("waiting for user approval");
     expect(result.content).toMatch(/^ERROR:/);
     expect(child._deliverMessage).not.toHaveBeenCalled();
+  });
+
+  it("propagates permission mode changes to existing child sessions", () => {
+    const root = makeSessionLike();
+    const child = makeChildSession({ permissionMode: "reversible" });
+    const handle = makeHandle(child);
+    root._childSessions.set("worker-1", handle);
+
+    root.permissionMode = "read_only";
+
+    expect(root._permissionAdvisor.sessionMode).toBe("read_only");
+    expect(child.permissionMode).toBe("read_only");
+  });
+
+  it("creates child sessions with the parent permission mode", () => {
+    const artifactsDir = makeTempDir("fermi-child-permission-");
+    try {
+      const root = makeSessionLike();
+      root._sessionArtifactsOverride = artifactsDir;
+      root._subAgentCounter = 0;
+      root._promptsDirs = undefined;
+      root.config = { mcpServerConfigs: [] };
+      root._permissionAdvisor.sessionMode = "read_only";
+      const agent = {
+        name: "worker",
+        description: "",
+        systemPrompt: "worker prompt",
+        tools: [],
+        modelConfig: {
+          name: "test-model",
+          provider: "openai",
+          model: "gpt-5.4",
+          apiKey: "sk-test",
+          supportsMultimodal: false,
+          contextLength: 8192,
+        },
+      };
+
+      const handle = root._instantiateChildSession("worker-1", "explorer", "persistent", agent);
+
+      expect(handle.session.permissionMode).toBe("read_only");
+    } finally {
+      rmSync(artifactsDir, { recursive: true, force: true });
+    }
   });
 
   it("includes pending ask state and display label in child snapshots", () => {

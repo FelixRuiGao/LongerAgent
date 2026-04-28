@@ -35,7 +35,6 @@ function createChildSnapshot(
     logRevision: 7,
     template: "default",
     mode: "persistent",
-    teamId: null,
     lifecycle: "idle",
     phase: "idle",
     outcome: "none",

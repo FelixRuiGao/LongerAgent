@@ -28,7 +28,7 @@ export interface AgentQuestionOption {
 export const ASK_CUSTOM_OPTION_LABEL = "Enter custom answer";
 export const ASK_DISCUSS_OPTION_LABEL = "Discuss further";
 export const ASK_DISCUSS_FURTHER_GUIDANCE =
-  'One or more answers are "Discuss further". Treat those answers as requests to continue the discussion rather than final commitments. Use any other answers normally. Briefly address the discussion points, then wait for the user\'s next message.';
+  'One or more answers are "Discuss further". Treat those answers as requests to continue the discussion rather than final commitments. Use any other answers normally. Briefly address the discussion points, then return control to the user.';
 
 export interface AgentQuestionItem {
   question: string;

@@ -21,7 +21,6 @@ export interface ChildSessionSnapshot {
   logRevision: number;
   template: string;
   mode: ChildSessionMode;
-  teamId: string | null;
   lifecycle: ChildSessionLifecycle;
   phase: ChildSessionPhase;
   outcome: ChildSessionOutcome;
@@ -50,7 +49,6 @@ export interface ChildSessionMetaRecord {
   numericId: number;
   template: string;
   mode: ChildSessionMode;
-  teamId?: string | null;
   lifecycle: ChildSessionLifecycle;
   outcome?: ChildSessionOutcome;
   order: number;
@@ -79,7 +77,6 @@ export interface ArchivedChildRecord {
   numericId: number;
   template: string;
   mode: ChildSessionMode;
-  teamId: string | null;
   outcome: ChildSessionOutcome;
   order: number;
   sessionDir: string;

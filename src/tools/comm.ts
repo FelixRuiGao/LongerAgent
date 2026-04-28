@@ -176,23 +176,23 @@ export const CHECK_STATUS_TOOL: ToolDef = {
   tuiPolicy: { partialReveal: "immediate" },
 };
 
-export const WAIT_TOOL: ToolDef = {
-  name: "wait",
+export const AWAIT_EVENT_TOOL: ToolDef = {
+  name: "await_event",
   description:
-    "Block until a tracked worker changes state, a new message arrives, or the timeout expires. " +
-    "Tracked workers include sub-agents and background shells. Returns status report with any new messages. " +
+    "Pause this turn until a runtime event arrives or the timeout expires. " +
+    "Runtime events include sub-agent completion, incoming messages, and tracked background shell exit. " +
     "Preferred over check_status when you have nothing else to do.",
   parameters: {
     type: "object",
     properties: {
       seconds: {
         type: "number",
-        description: "How long to wait (minimum 15, wall-clock timeout).",
+        description: "How long to await runtime events (minimum 15, wall-clock timeout).",
       },
     },
     required: ["seconds"],
   },
-  summaryTemplate: "{agent} is waiting",
+  summaryTemplate: "{agent} is awaiting runtime events",
   tuiPolicy: { partialReveal: { completeArgs: ["seconds"] } },
 };
 

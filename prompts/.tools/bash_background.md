@@ -6,4 +6,4 @@ Start a tracked background shell command. Use this for long-running processes li
 
 - Returns a shell ID and a stable log file path.
 - Use `bash_output` to inspect logs later.
-- Use `wait(seconds=60)` if you want to wait for the process to exit.
+- Use `await_event(seconds=60)` if you want to await the process exit event.

@@ -398,7 +398,6 @@ describe("resume command", () => {
             numericId: 1,
             template: "explorer",
             mode: "persistent",
-            teamId: null,
             lifecycle: "idle",
             outcome: "completed",
             order: 1,

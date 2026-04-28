@@ -45,7 +45,7 @@ import {
 
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
-  WAIT_TOOL,
+  AWAIT_EVENT_TOOL,
   SHOW_CONTEXT_TOOL,
   DISTILL_CONTEXT_TOOL,
   ASK_TOOL,
@@ -314,7 +314,7 @@ const SYSTEM_PREFIXES = [
 ];
 
 const COMM_TOOL_NAMES = new Set([
-  "spawn", "kill_agent", "check_status", "wait", "show_context", "distill_context", "ask", "skill",
+  "spawn", "kill_agent", "check_status", "await_event", "show_context", "distill_context", "ask", "skill",
   "bash_background", "bash_output", "kill_shell", "send",
 ]);
 
@@ -332,7 +332,7 @@ const SAFE_INTERRUPT_TOOLS = new Set([
   "skill",
   "spawn",
   "time",
-  "wait",
+  "await_event",
   "web_fetch",
   "web_search",
   "bash_output",
@@ -362,7 +362,6 @@ interface ChildSessionHandle {
   numericId: number;
   template: string;
   mode: ChildSessionMode;
-  teamId: string | null;
   lifecycle: ChildSessionLifecycle;
   status: "working" | "idle" | "error" | "interrupted" | "terminated" | "completed";
   phase: ChildSessionPhase;
@@ -649,6 +648,9 @@ export class Session {
 
   set permissionMode(mode: PermissionMode) {
     this._permissionAdvisor.sessionMode = mode;
+    for (const handle of this._childSessions.values()) {
+      handle.session.permissionMode = mode;
+    }
   }
 
   get permissionRuleStore(): PermissionRuleStore {
@@ -777,7 +779,6 @@ export class Session {
       logRevision,
       template: handle.template,
       mode: handle.mode,
-      teamId: handle.teamId,
       lifecycle: handle.lifecycle,
       phase,
       outcome,
@@ -1883,7 +1884,6 @@ export class Session {
           record.id,
           record.template,
           record.mode,
-          null,
           agent,
           { numericId: record.numericId, order: record.order },
         );
@@ -2060,7 +2060,6 @@ export class Session {
           record.id,
           record.template,
           record.mode,
-          null,
           agent,
           { numericId: record.numericId, order: record.order },
         );
@@ -2118,7 +2117,6 @@ export class Session {
         numericId: handle.numericId,
         template: handle.template,
         mode: handle.mode,
-        teamId: handle.teamId,
         lifecycle: handle.lifecycle,
         outcome: handle.lastOutcome,
         order: handle.order,
@@ -2131,7 +2129,6 @@ export class Session {
         numericId: record.numericId,
         template: record.template,
         mode: record.mode,
-        teamId: record.teamId,
         lifecycle: "archived" as ChildSessionLifecycle,
         outcome: record.outcome,
         order: record.order,
@@ -2224,7 +2221,7 @@ export class Session {
         spawn: (args) => this._execSpawn(args),
         kill_agent: (args) => this._execKillAgent(args),
         check_status: (args) => this._execCheckStatus(args),
-        wait: (args) => this._execWait(args),
+        await_event: (args) => this._execAwaitEvent(args),
         show_context: (args) => this._execShowContext(args),
         distill_context: (args) => this._execDistillContext(args),
         ask: (args) => this._execAsk(args),
@@ -2265,8 +2262,8 @@ export class Session {
     return entry ? entry.session.log : null;
   }
 
-  getActiveAgentIds(): Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> {
-    const result: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> = [];
+  getActiveAgentIds(): Array<{ id: string; status: string; interactive: boolean }> {
+    const result: Array<{ id: string; status: string; interactive: boolean }> = [];
     for (const snapshot of this.getChildSessionSnapshots()) {
       const status = snapshot.running
         ? "working"
@@ -2279,7 +2276,6 @@ export class Session {
         id: snapshot.id,
         status,
         interactive: snapshot.mode === "persistent",
-        teamId: snapshot.teamId,
       });
     }
     return result;
@@ -5328,7 +5324,6 @@ export class Session {
     taskId: string,
     templateLabel: string,
     mode: ChildSessionMode,
-    teamId: string | null,
     agent: Agent,
     opts?: { numericId?: number; order?: number },
   ): ChildSessionHandle {
@@ -5349,7 +5344,6 @@ export class Session {
       numericId,
       template: templateLabel,
       mode,
-      teamId,
       lifecycle: "idle",
       status: "idle",
       phase: "idle",
@@ -5385,6 +5379,7 @@ export class Session {
       toolExecutorOverrides: {},
       deferQueuedMessageInjectionOnTurnExit: true,
       promptCacheKey: taskId,
+      permissionMode: this.permissionMode,
     });
     childSession.onSaveRequest = () => this._saveChildSession(handle);
     handle.session = childSession;
@@ -5395,10 +5390,9 @@ export class Session {
     taskId: string,
     templateLabel: string,
     mode: ChildSessionMode,
-    teamId: string | null,
     agent: Agent,
   ): ChildSessionHandle {
-    const handle = this._instantiateChildSession(taskId, templateLabel, mode, teamId, agent);
+    const handle = this._instantiateChildSession(taskId, templateLabel, mode, agent);
     this._saveChildSession(handle);
     // Fire SubagentStart hook
     this.hookRuntime.fireAndForget("SubagentStart", {
@@ -5638,7 +5632,6 @@ export class Session {
       numericId: handle.numericId,
       template: handle.template,
       mode: handle.mode,
-      teamId: handle.teamId,
       outcome: handle.lastOutcome,
       order: handle.order,
       sessionDir: handle.sessionDir,
@@ -5829,7 +5822,7 @@ export class Session {
         this.primaryAgent.tools.push(SEND_TOOL);
       }
 
-      const handle = this._createChildSession(taskId, templateLabel, mode, null, agent);
+      const handle = this._createChildSession(taskId, templateLabel, mode, agent);
       if (tierThinkingLevel) {
         handle.session.thinkingLevel = tierThinkingLevel;
       }
@@ -5977,7 +5970,6 @@ export class Session {
       record.id,
       record.template,
       record.mode,
-      record.teamId,
       agent,
       { numericId: record.numericId, order: record.order },
     );
@@ -6025,10 +6017,10 @@ export class Session {
   }
 
   // ------------------------------------------------------------------
-  // wait — blocking wait for sub-agent completion or new messages
+  // await_event — blocking wait for sub-agent completion or new messages
   // ------------------------------------------------------------------
 
-  private async _execWait(args: Record<string, unknown>): Promise<ToolResult> {
+  private async _execAwaitEvent(args: Record<string, unknown>): Promise<ToolResult> {
     const secondsRaw = args["seconds"];
     if (typeof secondsRaw !== "number" || isNaN(secondsRaw)) {
       return new ToolResult({ content: "Error: 'seconds' must be a number." });
@@ -6061,8 +6053,7 @@ export class Session {
 
     const working = this._getWorkingChildHandles();
     const hasRunningShells = this._hasRunningShells();
-    // No tracked workers, no pending messages — but still allow wait for incoming peer messages
-    // (sub-agents in teams legitimately wait for teammate responses)
+    // No tracked workers, no pending messages — still allow waiting for incoming messages.
     if (!working.length && !hasRunningShells && this._childSessions.size === 0 && !this._statusSource) {
       // Pure message wait — skip child/shell status, just wait for timeout or message
     } else if (!working.length && !hasRunningShells) {
@@ -6255,7 +6246,6 @@ export class Session {
         numericId: handle.numericId,
         template: handle.template,
         mode: handle.mode,
-        teamId: handle.teamId,
         outcome: handle.lastOutcome,
         order: handle.order,
         sessionDir: handle.sessionDir,
@@ -6417,7 +6407,6 @@ export class Session {
    * Build a child session's full system prompt by layering:
    * 1. Template system prompt
    * 2. Mode-specific prompt
-   * 3. Team prompt
    */
   private _buildSubAgentSystemPrompt(
     basePrompt: string,
