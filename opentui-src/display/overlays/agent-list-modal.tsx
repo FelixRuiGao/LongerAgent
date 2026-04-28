@@ -19,11 +19,13 @@ export interface AgentListModalProps {
   colors: DisplayThemeColorTokens;
   onClose: () => void;
   onSelect: (agentId: string) => void;
+  onStopAll?: () => void;
 }
 
 function lifecycleIcon(lifecycle: string): string {
   switch (lifecycle) {
     case "running": return "●";
+    case "blocked": return "◐";
     case "idle": return "○";
     default: return "◌";
   }
@@ -32,6 +34,7 @@ function lifecycleIcon(lifecycle: string): string {
 function lifecycleLabel(lifecycle: string): string {
   switch (lifecycle) {
     case "running": return "running";
+    case "blocked": return "waiting";
     case "idle": return "idle";
     default: return "done";
   }
@@ -47,6 +50,7 @@ function lifecycleColor(agent: ChildSessionSnapshot, colors: DisplayThemeColorTo
   if (agent.pendingAskKind) return colors.waitingStatus;
   switch (agent.lifecycle) {
     case "running": return colors.workingStatus;
+    case "blocked": return colors.waitingStatus;
     case "idle": return colors.green;
     default: return colors.muted;
   }
@@ -118,6 +122,7 @@ export function AgentListModal({
   colors,
   onClose,
   onSelect,
+  onStopAll,
 }: AgentListModalProps): React.ReactNode {
   if (!visible || agents.length === 0) return null;
 
@@ -148,6 +153,12 @@ export function AgentListModal({
           onClick={() => onSelect(agent.id)}
         />
       ))}
+      <box paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <text
+          fg={colors.muted}
+          content={onStopAll ? "Enter open · X stop all running agents · Esc close" : "Enter open · Esc close"}
+        />
+      </box>
     </CenteredModal>
   );
 }

@@ -681,6 +681,32 @@ describe("projectToApiMessages", () => {
     ]);
   });
 
+  it("rejects API projections that put user messages before pending tool results", () => {
+    const entries: LogEntry[] = [
+      createSystemPrompt("sys-001", "prompt"),
+      createUserMessage("user-001", 1, "wait", "wait", "c1"),
+      createToolCall(
+        "tc-001",
+        1,
+        0,
+        "wait 15s",
+        { id: "wait:1", name: "wait", arguments: { seconds: 15 } },
+        { toolCallId: "wait:1", toolName: "wait", agentName: "main", contextId: "r1" },
+      ),
+      createUserMessage("user-002", 1, "side channel", "side channel", "c2"),
+      createToolResult(
+        "tr-001",
+        1,
+        0,
+        { toolCallId: "wait:1", toolName: "wait", content: "done", toolSummary: "main is waiting" },
+        { isError: false, contextId: "r1" },
+      ),
+    ];
+
+    expect(() => projectToApiMessages(entries, { enforceToolCallProtocol: true }))
+      .toThrow(/assistant tool_calls must be followed/);
+  });
+
   it("handles interruption_marker as user message", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),

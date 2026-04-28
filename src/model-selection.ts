@@ -8,7 +8,7 @@ import {
 } from "./provider-presets.js";
 import { isManagedProvider } from "./managed-provider-credentials.js";
 import { describeModel } from "./model-presentation.js";
-import type { ModelTierEntry } from "./persistence.js";
+import type { AgentModelEntry, ModelTierEntry } from "./persistence.js";
 
 export type ModelEntryLike = {
   name: string;
@@ -31,6 +31,11 @@ export interface ResolvedModelSelection {
   modelProvider: string;
   modelSelectionKey: string;
   modelId: string;
+}
+
+export interface ResolvedRuntimeModel extends ResolvedModelSelection {
+  modelConfig: any;
+  thinkingLevel?: string;
 }
 
 export interface StableModelIdentity {
@@ -189,6 +194,64 @@ export function resolveConfigNameForModelIdentity(
   }
 
   return undefined;
+}
+
+export function resolveModelIdentity(
+  session: any,
+  identity: StableModelIdentity,
+): ResolvedModelSelection {
+  const config = session.config;
+  const existingConfigName = resolveConfigNameForModelIdentity(config, identity);
+  if (existingConfigName) {
+    const existing = config.getModel(existingConfigName);
+    const descriptor = describeModel({
+      configName: existingConfigName,
+      providerId: identity.provider,
+      selectionKey: identity.selectionKey,
+      modelId: existing.model || identity.modelId,
+    });
+    return {
+      selectedConfigName: existingConfigName,
+      selectedHint: descriptor.scopedDetailedLabel,
+      modelProvider: identity.provider,
+      modelSelectionKey: identity.selectionKey,
+      modelId: existing.model || identity.modelId,
+    };
+  }
+
+  return resolveModelSelection(session, `${identity.provider}:${identity.selectionKey || identity.modelId}`);
+}
+
+export function resolveModelTierEntry(
+  session: any,
+  entry: ModelTierEntry,
+): ResolvedRuntimeModel {
+  const resolved = resolveModelIdentity(session, {
+    provider: entry.provider,
+    selectionKey: entry.selection_key || entry.model_id,
+    modelId: entry.model_id,
+  });
+  return {
+    ...resolved,
+    modelConfig: session.config.getModel(resolved.selectedConfigName),
+    thinkingLevel: entry.thinking_level,
+  };
+}
+
+export function resolveAgentModelEntry(
+  session: any,
+  entry: AgentModelEntry,
+): ResolvedRuntimeModel {
+  const resolved = resolveModelIdentity(session, {
+    provider: entry.provider,
+    selectionKey: entry.selection_key || entry.model_id,
+    modelId: entry.model_id,
+  });
+  return {
+    ...resolved,
+    modelConfig: session.config.getModel(resolved.selectedConfigName),
+    thinkingLevel: entry.thinking_level,
+  };
 }
 
 export function resolveModelSelection(

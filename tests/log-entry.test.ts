@@ -123,7 +123,7 @@ describe("Factory functions", () => {
     expect(e.tuiVisible).toBe(true);
     expect(e.displayKind).toBe("agent_result");
     expect(e.display).toBe("");
-    expect(e.apiRole).toBe("user");
+    expect(e.apiRole).toBeNull();
     expect(e.meta.contextId).toBe("c-ar-1");
     expect(e.meta.agentId).toBe("reviewer-1");
     expect(e.meta.agentNumericId).toBe(3);

@@ -32,7 +32,6 @@ function makeSessionLike(): any {
   s._activeLogEntryId = null;
   s._projectRoot = process.cwd();
   s._progress = undefined;
-  s._agentResultSeq = 0;
   s._permissionAdvisor = {
     _allowOnceGrants: new Set(),
     grantAllowOnce: vi.fn(),
@@ -82,6 +81,10 @@ function makeChildSession(overrides: Record<string, unknown> = {}): any {
   const pendingAsk = overrides.pendingAsk === undefined
     ? makePendingApproval()
     : overrides.pendingAsk as PendingAskUi | null;
+  const hasPendingTurnToResume = Boolean(overrides.hasPendingTurnToResume);
+  const rest = { ...overrides };
+  delete rest.pendingAsk;
+  delete rest.hasPendingTurnToResume;
   return {
     primaryAgent: {
       modelConfig: {
@@ -105,10 +108,13 @@ function makeChildSession(overrides: Record<string, unknown> = {}): any {
     pendingInboxCount: 0,
     getLogRevision: () => 7,
     getPendingAsk: vi.fn(() => pendingAsk),
-    hasPendingTurnToResume: vi.fn(() => Boolean(overrides.hasPendingTurnToResume)),
+    hasPendingTurnToResume: vi.fn(() => hasPendingTurnToResume),
     resolveApprovalAsk: vi.fn(),
     resumePendingTurn: vi.fn(async () => "resumed"),
-    ...overrides,
+    requestTurnInterrupt: vi.fn(() => ({ accepted: true })),
+    _normalizeInterruptedTurnFromLog: vi.fn(),
+    _deliverMessage: vi.fn(),
+    ...rest,
   };
 }
 
@@ -180,11 +186,77 @@ describe("child approval routing", () => {
 
     root._finishChildTurn(handle);
 
-    expect(handle.lifecycle).toBe("running");
+    expect(handle.lifecycle).toBe("blocked");
+    expect(handle.status).toBe("idle");
     expect(handle.phase).toBe("waiting");
     expect(handle.lastOutcome).toBe("none");
     expect(root._log.some((entry: any) => entry.type === "agent_result")).toBe(false);
     expect(root._saveChildSession).toHaveBeenCalledWith(handle);
+  });
+
+  it("notifies the parent inbox when a child blocks on approval", () => {
+    const root = makeSessionLike();
+    root._agentState = "working";
+    const child = makeChildSession();
+    const handle = makeHandle(child);
+    root._childSessions.set("worker-1", handle);
+
+    root._finishChildTurn(handle);
+
+    expect(root._inbox).toHaveLength(1);
+    expect(root._inbox[0]).toMatchObject({
+      type: "system_notice",
+      sender: "system",
+      content: expect.stringContaining("waiting for user approval"),
+    });
+    expect(handle.lifecycle).toBe("blocked");
+    expect(root._hasActiveAgents()).toBe(false);
+  });
+
+  it("can interrupt a blocked child without treating it as a working child", () => {
+    const root = makeSessionLike();
+    const child = makeChildSession();
+    const handle = makeHandle(child);
+    handle.lifecycle = "blocked";
+    handle.status = "idle";
+    handle.phase = "waiting";
+    handle.turnPromise = null;
+    handle.abortController = null;
+    root._childSessions.set("worker-1", handle);
+
+    const decision = root.interruptChildSession("worker-1");
+
+    expect(decision).toEqual({ accepted: true });
+    expect(child._normalizeInterruptedTurnFromLog).toHaveBeenCalledWith(
+      "Sub-agent was interrupted while waiting for user approval.",
+    );
+    expect(child.requestTurnInterrupt).toHaveBeenCalledOnce();
+    expect(handle.lifecycle).toBe("archived");
+    expect(handle.lastOutcome).toBe("interrupted");
+    expect(root._hasActiveAgents()).toBe(false);
+  });
+
+  it("rejects sends to blocked children until approval is resolved", () => {
+    const root = makeSessionLike();
+    const child = makeChildSession();
+    const handle = makeHandle(child);
+    handle.mode = "persistent";
+    handle.lifecycle = "blocked";
+    handle.status = "idle";
+    handle.phase = "waiting";
+    handle.turnPromise = null;
+    root._childSessions.set("worker-1", handle);
+
+    const result = root._sendMessageToChild("worker-1", {
+      type: "user_input",
+      sender: "main",
+      content: "new info",
+      timestamp: Date.now(),
+    });
+
+    expect(result.content).toContain("waiting for user approval");
+    expect(result.content).toMatch(/^ERROR:/);
+    expect(child._deliverMessage).not.toHaveBeenCalled();
   });
 
   it("includes pending ask state and display label in child snapshots", () => {
@@ -219,6 +291,22 @@ describe("child approval routing", () => {
       sender: "worker-1",
       content: expect.stringContaining("child says done"),
     });
+  });
+
+  it("keeps mass-interrupted child completions out of the parent inbox", () => {
+    const root = makeSessionLike();
+    root._agentState = "working";
+    const child = makeChildSession({ pendingAsk: null, lastTurnEndStatus: "interrupted" });
+    const handle = makeHandle(child);
+    handle.resultText = "interrupted";
+    handle.terminationCause = "user_mass_interrupt";
+    root._childSessions.set("worker-1", handle);
+
+    root._finishChildTurn(handle);
+
+    const agentResult = root._log.find((entry: any) => entry.type === "agent_result");
+    expect(agentResult).toBeTruthy();
+    expect(root._inbox).toHaveLength(0);
   });
 
   it("passes the active abort signal into approval-resumed tool execution", async () => {

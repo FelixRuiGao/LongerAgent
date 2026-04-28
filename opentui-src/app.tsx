@@ -2345,7 +2345,7 @@ export function OpenTuiApp({
       // If viewing a running child agent, interrupt it first
       if (selectedChildId) {
         const snapshot = childSessions.find((s) => s.id === selectedChildId);
-        if (snapshot?.lifecycle === "running") {
+        if (snapshot?.lifecycle === "running" || snapshot?.lifecycle === "blocked") {
           const decision = session.interruptChildSession?.(selectedChildId) ?? { accepted: false, reason: "unsupported" };
           if (decision.accepted) {
             showHint(`Interrupted ${selectedChildId}`);
@@ -2508,6 +2508,17 @@ export function OpenTuiApp({
         event.stopPropagation();
         return;
       }
+      if (event.name === "x") {
+        const decision = session.interruptAllChildSessions?.() ?? { accepted: false, interrupted: 0, reason: "unsupported" };
+        if (decision.accepted) {
+          showHint(`Interrupted ${decision.interrupted} sub-agent${decision.interrupted === 1 ? "" : "s"}`);
+        } else {
+          showHint(decision.reason === "not_live" ? "No running sub-agents" : "Stop all agents is unavailable");
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       // Block all other keys while modal is open
       event.preventDefault();
       event.stopPropagation();
@@ -2630,7 +2641,7 @@ export function OpenTuiApp({
   })();
 
   // Agent counts for indicator — all 3 states
-  const runningAgentCount = childSessions.filter((s) => s.lifecycle === "running").length;
+  const runningAgentCount = childSessions.filter((s) => s.lifecycle === "running" || s.lifecycle === "blocked").length;
   const idleAgentCount = childSessions.filter((s) => s.lifecycle === "idle").length;
   const archivedAgentCount = childSessions.filter((s) => s.lifecycle === "archived").length;
 
@@ -2654,6 +2665,15 @@ export function OpenTuiApp({
     });
     setActiveTabId(tabId);
   }, []);
+
+  const stopAllChildSessions = useCallback(() => {
+    const decision = session.interruptAllChildSessions?.() ?? { accepted: false, interrupted: 0, reason: "unsupported" };
+    if (decision.accepted) {
+      showHint(`Interrupted ${decision.interrupted} sub-agent${decision.interrupted === 1 ? "" : "s"}`);
+    } else {
+      showHint(decision.reason === "not_live" ? "No running sub-agents" : "Stop all agents is unavailable");
+    }
+  }, [session, showHint]);
 
   // Data source switching: use child snapshot when viewing a child page
   const childSnapshot = selectedChildId
@@ -2758,6 +2778,7 @@ export function OpenTuiApp({
       agentListSelectedIndex={agentListSelectedIndex}
       onAgentListClose={() => setAgentListOpen(false)}
       onAgentListSelect={enterChildSession}
+      onAgentListStopAll={stopAllChildSessions}
       sidebarMode={sidebarMode}
       statusPanel={(() => {
         const showAgents = agentsPanelOpen && childSessions.length > 0;

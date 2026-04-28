@@ -248,7 +248,7 @@ function transformAgentResult(entry: ReconciledConversationEntry): PresentationE
     contentVersion: entry.contentVersion,
     kind: "tool_operation",
     state,
-    toolDisplayName: "Agent",
+    toolDisplayName: "Agent Complete",
     toolCategory: "orchestrate",
     toolText: agentName,
     toolSuffix: suffix,

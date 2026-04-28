@@ -499,6 +499,8 @@ export interface ApiProjectionOptions {
   requiresAlternatingRoles?: boolean;
   /** Truncate distill_context tool-call content before provider submission. */
   truncateDistillToolArgs?: boolean;
+  /** Enforce provider tool-call ordering invariants before submission. */
+  enforceToolCallProtocol?: boolean;
   /**
    * show_context annotations: Map from contextId → annotation text.
    * When provided, §{id}§ + annotation is prepended to user message and
@@ -749,11 +751,42 @@ export function projectToApiMessages(
     ? messages
     : truncateDistillToolArgs(messages);
 
+  if (options?.enforceToolCallProtocol) {
+    validateToolCallProtocol(projected);
+  }
+
   if (options?.requiresAlternatingRoles) {
     projected = mergeConsecutiveSameRole(projected);
   }
 
   return projected;
+}
+
+function validateToolCallProtocol(messages: InternalMessage[]): void {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const toolCalls = Array.isArray(msg["tool_calls"])
+      ? msg["tool_calls"] as Array<Record<string, unknown>>
+      : [];
+    if (msg.role !== "assistant" || toolCalls.length === 0) continue;
+
+    const expected = new Set(toolCalls.map((tc) => String(tc["id"] ?? "")));
+    const missing = new Set(expected);
+    let cursor = i + 1;
+    while (cursor < messages.length && messages[cursor].role === "tool_result") {
+      const toolCallId = String(messages[cursor]["tool_call_id"] ?? "");
+      if (missing.has(toolCallId)) {
+        missing.delete(toolCallId);
+      }
+      cursor++;
+    }
+    if (missing.size > 0) {
+      throw new Error(
+        "Invalid API projection: assistant tool_calls must be followed by matching tool_result messages. " +
+        `Missing tool_call_id(s): ${[...missing].join(", ")}.`,
+      );
+    }
+  }
 }
 
 // ------------------------------------------------------------------

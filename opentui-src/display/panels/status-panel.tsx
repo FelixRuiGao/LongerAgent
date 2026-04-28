@@ -50,6 +50,7 @@ export interface StatusPanelProps {
 function lifecycleIcon(lifecycle: string): string {
   switch (lifecycle) {
     case "running": return "●";
+    case "blocked": return "◐";
     case "idle": return "○";
     default: return "◌";
   }
@@ -58,6 +59,7 @@ function lifecycleIcon(lifecycle: string): string {
 function lifecycleLabel(lifecycle: string): string {
   switch (lifecycle) {
     case "running": return "running";
+    case "blocked": return "waiting";
     case "idle": return "idle";
     default: return "done";
   }
@@ -74,10 +76,11 @@ function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSes
     <box flexDirection="column" gap={0} flexGrow={1}>
       {agents.map((agent) => {
         const isActive = agent.lifecycle === "running";
+        const isBlocked = agent.lifecycle === "blocked";
         const isWaitingForAsk = Boolean(agent.pendingAskKind);
-        const statusColor = isWaitingForAsk ? colors.waitingStatus : isActive ? colors.workingStatus : "#5a6078";
-        const nameColor = isActive ? colors.text : "#7a8098";
-        const descColor = isActive ? colors.dim : "#5a6078";
+        const statusColor = isWaitingForAsk || isBlocked ? colors.waitingStatus : isActive ? colors.workingStatus : "#5a6078";
+        const nameColor = isActive || isBlocked ? colors.text : "#7a8098";
+        const descColor = isActive || isBlocked ? colors.dim : "#5a6078";
         const icon = lifecycleIcon(agent.lifecycle);
         const label = agentStatusLabel(agent);
         const statsLine = `└ ${agent.lifetimeToolCallCount} tools, ${formatCompactTokensShort(agent.lastTotalTokens)} tokens`;
@@ -158,7 +161,7 @@ function StatusPanelInner({
 }: StatusPanelProps): React.ReactNode {
   const openTodos = todos.filter((cp) => cp.status !== "done");
   const doneCount = todos.length - openTodos.length;
-  const runningCount = agents.filter((a) => a.lifecycle === "running").length;
+  const runningCount = agents.filter((a) => a.lifecycle === "running" || a.lifecycle === "blocked").length;
 
   const hasAgents = agents.length > 0 && showAgents;
   const hasTodos = todos.length > 0 && showTodos;

@@ -109,6 +109,7 @@ export interface OpenTuiScreenProps {
   agentListSelectedIndex?: number;
   onAgentListClose?: () => void;
   onAgentListSelect?: (agentId: string) => void;
+  onAgentListStopAll?: () => void;
   onBackgroundMouseDown: () => void;
   sidebarMode?: SidebarMode;
   activeShells?: Array<{ id: string; command: string; status: string }>;
@@ -196,6 +197,7 @@ export function OpenTuiScreen({
   agentListSelectedIndex,
   onAgentListClose,
   onAgentListSelect,
+  onAgentListStopAll,
   onBackgroundMouseDown,
   sidebarMode = "close",
   activeShells = [],
@@ -461,6 +463,7 @@ export function OpenTuiScreen({
         colors={theme.colors}
         onClose={onAgentListClose ?? (() => {})}
         onSelect={onAgentListSelect ?? (() => {})}
+        onStopAll={onAgentListStopAll}
       />
     </box>
   );

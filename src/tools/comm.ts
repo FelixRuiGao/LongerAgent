@@ -38,10 +38,6 @@ export const SPAWN_TOOL: ToolDef = {
         enum: ["oneshot", "persistent"],
         description: "Agent mode: 'oneshot' (single turn) or 'persistent' (stays alive, receives messages via send).",
       },
-      idle: {
-        type: "boolean",
-        description: "If true, agent starts idle and won't work until it receives its first 'send' message.",
-      },
       model_level: {
         type: "string",
         enum: ["high", "medium", "low"],

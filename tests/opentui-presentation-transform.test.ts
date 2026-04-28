@@ -86,7 +86,7 @@ describe("OpenTUI presentation transform", () => {
         contentVersion: 1,
         kind: "tool_operation",
         state: "done",
-        toolDisplayName: "Agent",
+        toolDisplayName: "Agent Complete",
         toolCategory: "orchestrate",
         toolText: "reviewer-1",
         toolSuffix: "(4.2s, interrupted)",

@@ -79,6 +79,7 @@ export interface Session {
   getChildSessionSnapshots?(): ChildSessionSnapshot[];
   getChildSessionLog?(childId: string): readonly LogEntry[] | null;
   interruptChildSession?(childId: string): { accepted: boolean; reason?: string };
+  interruptAllChildSessions?(): { accepted: boolean; interrupted: number; reason?: string };
   restoreFromLog?(meta: LogSessionMeta, entries: LogEntry[], idAllocator: LogIdAllocator): void;
   getLogForPersistence?(): { meta: LogSessionMeta; entries: readonly LogEntry[] };
   resetForNewSession?(newStore?: any): void;

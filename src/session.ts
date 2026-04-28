@@ -157,6 +157,8 @@ import type {
   MessageType,
 } from "./session-tree-types.js";
 import {
+  resolveAgentModelEntry,
+  resolveModelTierEntry,
   resolvePersistedModelSelection,
   type PersistedModelSelection,
 } from "./model-selection.js";
@@ -591,7 +593,6 @@ export class Session {
   // Inbox: holds messages for push delivery into tool results.
   // Typed message inbox — all messages flow through _deliverMessage.
   private _inbox: MessageEnvelope[] = [];
-  private _agentResultSeq = 0;
   private _currentTurnSignal: AbortSignal | null = null;
   private _currentTurnAbortController: AbortController | null = null;
 
@@ -684,8 +685,9 @@ export class Session {
       .sort((a, b) => {
         const rank = (snapshot: ChildSessionSnapshot): number => {
           if (snapshot.lifecycle === "running") return 0;
-          if (snapshot.lifecycle === "idle") return 1;
-          if (snapshot.lifecycle === "archived") return 2;
+          if (snapshot.lifecycle === "blocked") return 1;
+          if (snapshot.lifecycle === "idle") return 2;
+          if (snapshot.lifecycle === "archived") return 3;
           return 3;
         };
         const ra = rank(a);
@@ -699,6 +701,10 @@ export class Session {
   getChildSessionLog(childId: string): readonly LogEntry[] | null {
     const handle = this._childSessions.get(childId);
     return handle ? handle.session.log : null;
+  }
+
+  private _isLiveChild(handle: ChildSessionHandle): boolean {
+    return handle.lifecycle === "running" || handle.lifecycle === "blocked";
   }
 
   private _getStatusSourceSnapshots(): ChildSessionSnapshot[] {
@@ -802,7 +808,12 @@ export class Session {
     const snapshots = this._getStatusSourceSnapshots();
     if (snapshots.length === 0) return "No sub-sessions.";
     const lines = snapshots
-      .filter((snapshot) => snapshot.lifecycle === "running" || snapshot.lifecycle === "idle" || snapshot.outcome !== "none")
+      .filter((snapshot) =>
+        snapshot.lifecycle === "running"
+        || snapshot.lifecycle === "blocked"
+        || snapshot.lifecycle === "idle"
+        || snapshot.outcome !== "none"
+      )
       .map((snapshot) => {
         const tools = `${snapshot.lifetimeToolCallCount} tool${snapshot.lifetimeToolCallCount === 1 ? "" : "s"}`;
         const tokens = snapshot.lastTotalTokens > 0 ? formatTokenCount(snapshot.lastTotalTokens) : "0";
@@ -1396,7 +1407,15 @@ export class Session {
     this._inbox = [];
     this._wakeWait();
     if (this._childSessions.size > 0) {
-      this._cascadeKillRunningChildren("user_mass_interrupt");
+      const interruptedChildren = this._cascadeKillRunningChildren("user_mass_interrupt");
+      if (interruptedChildren > 0) {
+        this._appendEntry(createStatus(
+          this._nextLogId("status"),
+          this._turnCount,
+          `Interrupted ${interruptedChildren} sub-agent${interruptedChildren === 1 ? "" : "s"}.`,
+          "children_interrupted",
+        ), false);
+      }
     }
     if (this._shellManager.hasTrackedShells()) {
       this._forceKillAllShells();
@@ -1419,7 +1438,6 @@ export class Session {
     this._hintState = "none";
     this._agentState = "idle";
     this._inbox = [];
-    this._agentResultSeq = 0;
     this._waitHandle = null;
     this._activeAsk = null;
     this._askHistory = [];
@@ -1637,7 +1655,6 @@ export class Session {
     this._askHistory = structuredClone(shadow._askHistory) as AskAuditRecord[];
     this._agentState = shadow._agentState;
     this._inbox = structuredClone(shadow._inbox) as MessageEnvelope[];
-    this._agentResultSeq = 0;
     this._pendingTurnState = shadow._pendingTurnState
       ? structuredClone(shadow._pendingTurnState) as PendingTurnState
       : null;
@@ -2251,7 +2268,13 @@ export class Session {
   getActiveAgentIds(): Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> {
     const result: Array<{ id: string; status: string; interactive: boolean; teamId: string | null }> = [];
     for (const snapshot of this.getChildSessionSnapshots()) {
-      const status = snapshot.running ? "working" : snapshot.lifecycle === "running" ? "working" : snapshot.lifecycle;
+      const status = snapshot.running
+        ? "working"
+        : snapshot.lifecycle === "blocked"
+          ? "waiting"
+          : snapshot.lifecycle === "running"
+            ? "working"
+            : snapshot.lifecycle;
       result.push({
         id: snapshot.id,
         status,
@@ -3084,7 +3107,7 @@ export class Session {
             resultContent = `ERROR: No executor for tool '${next.toolName}'`;
             isError = true;
           } else {
-            const result = await executor(next.toolArgs, { signal: this._currentTurnSignal });
+            const result = await executor(next.toolArgs, { signal: this._currentTurnSignal ?? undefined });
             if (typeof result === "string") {
               resultContent = result;
             } else if (result instanceof ToolResult) {
@@ -3235,7 +3258,6 @@ export class Session {
         reasoningAccumulator.text = "";
         this._agentState = "working";
         this._setSelfPhase("thinking");
-        const agentResultSeqAtStart = this._agentResultSeq;
 
         if (this._progress) {
           this._progress.onAgentStart(this._turnCount, this.primaryAgent.name);
@@ -3426,7 +3448,6 @@ export class Session {
         if (
           this._hasActiveAgents()
           && !this._hasInboxMessages()
-          && this._agentResultSeq === agentResultSeqAtStart
         ) {
           await this._waitForAnyAgent(activeSignal);
           if (activeSignal.aborted) {
@@ -3443,7 +3464,7 @@ export class Session {
         }
 
         // ★ ACTIVATION BOUNDARY DRAIN — unified exit point ★
-        if (this._hasInboxMessages() || this._agentResultSeq > agentResultSeqAtStart) {
+        if (this._hasInboxMessages()) {
           this._injectPendingMessages();
           continue;  // new activation to process injected messages
         }
@@ -4176,6 +4197,7 @@ export class Session {
         resolveImageRef: (refPath) => this._resolveImageRef(refPath),
         requiresAlternatingRoles: (this.primaryAgent as any)._provider?.requiresAlternatingRoles,
         showContextAnnotations: showAnnotations ?? undefined,
+        enforceToolCallProtocol: true,
       });
     };
 
@@ -5449,14 +5471,29 @@ export class Session {
 
     handle.elapsed = handle.startTime > 0 ? (performance.now() - handle.startTime) / 1000 : 0;
 
-    if (!error && (handle.session.getPendingAsk() || handle.session.hasPendingTurnToResume())) {
+    const pendingAsk = !error ? handle.session.getPendingAsk() : null;
+    const hasPendingResume = !error ? handle.session.hasPendingTurnToResume() : false;
+    if (!error && (pendingAsk || hasPendingResume)) {
       handle.abortController = null;
       handle.turnPromise = null;
-      handle.lifecycle = "running";
-      handle.status = "working";
+      handle.lifecycle = "blocked";
+      handle.status = "idle";
       handle.phase = "waiting";
       handle.lastOutcome = "none";
       handle.lastActivityAt = Date.now();
+      if (pendingAsk) {
+        const label = pendingAsk.payload.toolName
+          ? `${pendingAsk.kind} for ${pendingAsk.payload.toolName}`
+          : pendingAsk.kind;
+        this._deliverMessage({
+          type: "system_notice",
+          sender: "system",
+          content:
+            `Sub-agent '${handle.id}' is waiting for user approval (${label}). ` +
+            "The parent runtime will be notified after the approval is resolved.",
+          timestamp: Date.now(),
+        });
+      }
       this._saveChildSession(handle);
       this._notifyLogListeners();
       this.onSaveRequest?.();
@@ -5516,13 +5553,14 @@ export class Session {
       this._allocateContextId(),
       agentResult.fullOutputPath,
     ), false);
-    this._agentResultSeq += 1;
-    this._deliverMessage({
-      type: "peer_message",
-      sender: handle.id,
-      content: agentResult.content,
-      timestamp: Date.now(),
-    });
+    if (cause !== "user_mass_interrupt") {
+      this._deliverMessage({
+        type: "peer_message",
+        sender: handle.id,
+        content: agentResult.content,
+        timestamp: Date.now(),
+      });
+    }
     handle.terminationCause = undefined;
 
     // Lifecycle transition: oneshot → archived, persistent → idle
@@ -5632,6 +5670,13 @@ export class Session {
     }
 
     handle.lastActivityAt = Date.now();
+    if (handle.lifecycle === "blocked") {
+      return new ToolResult({
+        content:
+          `ERROR: Agent '${childId}' is waiting for user approval and cannot receive new messages. ` +
+          "Resolve the pending approval first.",
+      });
+    }
     if (handle.lifecycle === "running") {
       handle.session._deliverMessage(msg);
       return new ToolResult({ content: `Message sent to '${childId}'.` });
@@ -5646,13 +5691,53 @@ export class Session {
     return new ToolResult({ content: `Message sent to '${childId}'.` });
   }
 
+  private _interruptBlockedChild(handle: ChildSessionHandle, message: string): void {
+    (handle.session as any)._normalizeInterruptedTurnFromLog?.(message);
+    handle.session.requestTurnInterrupt();
+    handle.lifecycle = handle.mode === "oneshot" ? "archived" : "idle";
+    handle.status = handle.mode === "oneshot" ? "interrupted" : "idle";
+    handle.phase = "idle";
+    handle.lastOutcome = "interrupted";
+    handle.lastActivityAt = Date.now();
+    this._saveChildSession(handle);
+  }
+
   interruptChildSession(childId: string): { accepted: boolean; reason?: string } {
     const handle = this._childSessions.get(childId);
     if (!handle) return { accepted: false, reason: "not_found" };
-    if (handle.lifecycle !== "running") return { accepted: false, reason: "not_live" };
+    if (!this._isLiveChild(handle)) return { accepted: false, reason: "not_live" };
     handle.terminationCause = "user_targeted_kill";
-    handle.abortController?.abort();
+    if (handle.abortController) {
+      handle.abortController.abort();
+    } else {
+      this._interruptBlockedChild(handle, "Sub-agent was interrupted while waiting for user approval.");
+      this._notifyLogListeners();
+      this.onSaveRequest?.();
+    }
     return { accepted: true };
+  }
+
+  interruptAllChildSessions(): { accepted: boolean; interrupted: number; reason?: string } {
+    const interrupted = this._cascadeKillRunningChildren("user_mass_interrupt");
+    if (interrupted === 0) {
+      return { accepted: false, interrupted: 0, reason: "not_live" };
+    }
+    const message = `User interrupted ${interrupted} sub-agent${interrupted === 1 ? "" : "s"}.`;
+    this._appendEntry(createStatus(
+      this._nextLogId("status"),
+      this._turnCount,
+      message,
+      "children_interrupted",
+    ), false);
+    this._deliverMessage({
+      type: "system_notice",
+      sender: "system",
+      content: message,
+      timestamp: Date.now(),
+    });
+    this._notifyLogListeners();
+    this.onSaveRequest?.();
+    return { accepted: true, interrupted };
   }
 
   private async _execSpawn(args: Record<string, unknown>): Promise<ToolResult> {
@@ -5680,7 +5765,6 @@ export class Session {
     const spec: Record<string, unknown> = { id: idArg.trim(), task: taskArg.trim(), mode: modeArg.trim() };
     if (template) spec["template"] = template;
     if (templatePath) spec["template_path"] = templatePath;
-    if (args["idle"] === true) spec["idle"] = true;
     if (typeof args["model_level"] === "string") spec["model_level"] = args["model_level"];
 
     return this._execSpawnFromSpecs([spec]);
@@ -5699,7 +5783,6 @@ export class Session {
       const templatePath = ((spec["template_path"] as string) ?? "").trim();
       const taskDesc = ((spec["task"] as string) ?? "").trim();
       const modeRaw = ((spec["mode"] as string) ?? "").trim();
-      const startIdle = spec["idle"] === true;
       const modelLevel = typeof spec["model_level"] === "string" ? spec["model_level"].trim() : undefined;
 
       if (!taskId || !taskDesc) {
@@ -5762,9 +5845,7 @@ export class Session {
         );
       }
 
-      if (!startIdle) {
-        this._startChildTurn(handle, taskDesc);
-      }
+      this._startChildTurn(handle, taskDesc);
     }
 
     const parts: string[] = [];
@@ -6062,11 +6143,7 @@ export class Session {
   }
 
   private _hasActiveAgents(): boolean {
-    const childSessions = this._childSessions ?? new Map<string, ChildSessionHandle>();
-    for (const entry of childSessions.values()) {
-      if (entry.lifecycle === "running") return true;
-    }
-    return false;
+    return this._getWorkingChildHandles().length > 0;
   }
 
   private _getWorkingChildHandles(): ChildSessionHandle[] {
@@ -6087,13 +6164,20 @@ export class Session {
 
   private _cascadeKillRunningChildren(
     cause: "user_mass_interrupt" | "parent_kill",
-  ): void {
+  ): number {
+    let interrupted = 0;
     for (const handle of this._childSessions.values()) {
-      if (handle.lifecycle !== "running") continue;
+      if (!this._isLiveChild(handle)) continue;
       handle.terminationCause = cause;
-      handle.abortController?.abort();
+      if (handle.abortController) {
+        handle.abortController.abort();
+      } else {
+        this._interruptBlockedChild(handle, "Sub-agent was interrupted while waiting for user approval.");
+      }
       handle.session._recordSessionEvent(cause === "user_mass_interrupt" ? "interrupted by user" : "interrupted by parent");
+      interrupted += 1;
     }
+    return interrupted;
   }
 
   /**
@@ -6107,7 +6191,7 @@ export class Session {
     const toArchive: string[] = [];
     for (const [name, handle] of this._childSessions) {
       handle.suspended = true;
-      if (handle.lifecycle === "running") {
+      if (this._isLiveChild(handle)) {
         handle.abortController?.abort();
         // Normalize the child's log before persisting
         (handle.session as any)._normalizeInterruptedTurnFromLog(
@@ -6152,7 +6236,7 @@ export class Session {
   private _archiveAllChildSessions(): void {
     for (const [name, handle] of this._childSessions) {
       handle.suspended = true;
-      if (handle.lifecycle === "running") {
+      if (this._isLiveChild(handle)) {
         handle.abortController?.abort();
         (handle.session as any)._normalizeInterruptedTurnFromLog(
           "Session was reset by user.",
@@ -6295,8 +6379,11 @@ export class Session {
   private _resolveSubAgentModel(templateName: string, modelLevel?: string): { modelConfig: ModelConfig; thinkingLevel?: string } {
     // Priority 1: agent_models[templateName] — silently ignores model_level
     try {
-      const pinned = this.config.resolveAgentModel(templateName);
-      if (pinned) return pinned;
+      const pinnedEntry = this.config.agentModels[templateName];
+      if (pinnedEntry) {
+        const resolved = resolveAgentModelEntry(this, pinnedEntry);
+        return { modelConfig: resolved.modelConfig, thinkingLevel: resolved.thinkingLevel };
+      }
     } catch (err) {
       // Pinned model configured but unavailable — fallback to parent model
       const msg = `Pinned model for '${templateName}' unavailable: ${err instanceof Error ? err.message : String(err)}. Using parent model.`;
@@ -6311,8 +6398,12 @@ export class Session {
   private _getSubAgentModelConfig(modelLevel?: string): { modelConfig: ModelConfig; thinkingLevel?: string } {
     if (modelLevel && (modelLevel === "high" || modelLevel === "medium" || modelLevel === "low")) {
       try {
-        const { modelConfig, thinkingLevel } = this.config.resolveModelTier(modelLevel);
-        return { modelConfig, thinkingLevel };
+        const tier = this.config.modelTiers[modelLevel];
+        if (!tier) {
+          throw new Error(`Model tier '${modelLevel}' is not configured.`);
+        }
+        const resolved = resolveModelTierEntry(this, tier);
+        return { modelConfig: resolved.modelConfig, thinkingLevel: resolved.thinkingLevel };
       } catch (err) {
         const msg = `Sub-agent requested model tier '${modelLevel}' but it failed: ${err instanceof Error ? err.message : String(err)}. Falling back to current model.`;
         this._appendEntry(createStatus(this._nextLogId("status"), this._turnCount, msg, "tier_fallback"));

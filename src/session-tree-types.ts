@@ -1,6 +1,6 @@
 export type ChildSessionMode = "oneshot" | "persistent";
 
-export type ChildSessionLifecycle = "running" | "idle" | "archived";
+export type ChildSessionLifecycle = "running" | "blocked" | "idle" | "archived";
 
 export type ChildSessionPhase =
   | "idle"
