@@ -12,6 +12,8 @@ import { GLMProvider } from "./glm.js";
 import { MiniMaxProvider } from "./minimax.js";
 import { OpenRouterProvider } from "./openrouter.js";
 import { CopilotProvider } from "./copilot.js";
+import { DeepSeekProvider } from "./deepseek.js";
+import { XiaomiProvider } from "./xiaomi.js";
 
 export function createProvider(config: ModelConfig): BaseProvider {
   const provider = config.provider.toLowerCase();
@@ -44,6 +46,14 @@ export function createProvider(config: ModelConfig): BaseProvider {
     return new MiniMaxProvider(config);
   }
 
+  if (provider === "deepseek") {
+    return new DeepSeekProvider(config);
+  }
+
+  if (provider === "xiaomi") {
+    return new XiaomiProvider(config);
+  }
+
   if (provider === "openrouter") {
     return new OpenRouterProvider(config);
   }
@@ -52,6 +62,7 @@ export function createProvider(config: ModelConfig): BaseProvider {
     `Unknown provider '${config.provider}'. ` +
       "Supported: anthropic, openai, openai-codex, copilot, openai-chat, ollama, omlx, lmstudio, " +
       "kimi, kimi-cn, kimi-ai, kimi-code, " +
-      "glm, glm-intl, glm-code, glm-intl-code, minimax, minimax-cn, openrouter",
+      "glm, glm-intl, glm-code, glm-intl-code, minimax, minimax-cn, " +
+      "deepseek, xiaomi, openrouter",
   );
 }

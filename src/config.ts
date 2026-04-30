@@ -74,6 +74,7 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
   "gpt-5.4": 1_050_000,
   "gpt-5.4-mini": 400_000,
   "gpt-5.4-nano": 400_000,
+  "gpt-5.5": 1_050_000,
   // Anthropic
   "claude-opus-4-1-20250805": 200_000,
   "claude-sonnet-4-5-20250929": 200_000,
@@ -82,14 +83,15 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
   "claude-opus-4-5-20251101": 200_000,
   "claude-opus-4-6": 200_000,
   "claude-sonnet-4-6": 200_000,
+  "claude-opus-4-7": 1_000_000,
   // OpenRouter Anthropic aliases
   "claude-haiku-4.5": 200_000,
   "claude-opus-4.6": 200_000,
   "claude-sonnet-4.6": 200_000,
+  "claude-opus-4.7": 1_000_000,
   // Kimi
   "kimi-k2.6": 256_000,
   "kimi-k2.5": 256_000,
-  "kimi-k2-thinking": 256_000,
   "kimi-k2-instruct": 128_000,
   // GLM (Zhipu AI)
   "glm-5.1": 204_800,
@@ -99,65 +101,77 @@ export const KNOWN_CONTEXT_LENGTHS: Record<string, number> = {
   "glm-4.7": 200_000,
   "glm-4.7-flash": 200_000,
   // MiniMax
-  "MiniMax-M2.1": 200_000,
-  "MiniMax-M2.1-highspeed": 200_000,
   "MiniMax-M2.5": 204_800,
   "MiniMax-M2.5-highspeed": 204_800,
   "MiniMax-M2.7": 204_800,
   "MiniMax-M2.7-highspeed": 204_800,
-  "MiniMax-M1-40k": 1_000_000,
-  "MiniMax-M1-80k": 1_000_000,
   // MiniMax — lowercase aliases for OpenRouter (minimax/minimax-m2.5 → minimax-m2.5)
-  "minimax-m2.1": 200_000,
   "minimax-m2.5": 204_800,
   "minimax-m2.7": 204_800,
-  "minimax-m1": 1_000_000,
+  // DeepSeek
+  "deepseek-v4-flash": 1_000_000,
+  "deepseek-v4-pro": 1_000_000,
+  // Xiaomi (MiMo)
+  "mimo-v2.5": 1_048_576,
+  "mimo-v2.5-pro": 1_048_576,
 };
 
 export const KNOWN_MULTIMODAL_MODELS: Set<string> = new Set([
   // OpenAI
-  "gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
+  "gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.5",
   // Anthropic
   "claude-opus-4-1-20250805", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
   "claude-haiku-4-5",
   "claude-opus-4-5-20251101", "claude-opus-4-6", "claude-sonnet-4-6",
+  "claude-opus-4-7",
   "claude-haiku-4.5", "claude-opus-4.6", "claude-sonnet-4.6",
+  "claude-opus-4.7",
   // GLM (Zhipu AI) — vision
   "glm-5v-turbo",
   // Kimi
   "kimi-k2.6",
   "kimi-k2.5",
+  // Xiaomi (MiMo) — native omnimodal (vision + audio)
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
 ]);
 
 export const KNOWN_THINKING_MODELS: Set<string> = new Set([
   // OpenAI
-  "gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
+  "gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.5",
   // Anthropic
   "claude-opus-4-1-20250805", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
   "claude-haiku-4-5",
   "claude-opus-4-5-20251101", "claude-opus-4-6", "claude-sonnet-4-6",
+  "claude-opus-4-7",
   "claude-haiku-4.5", "claude-opus-4.6", "claude-sonnet-4.6",
+  "claude-opus-4.7",
   // Kimi
-  "kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking",
+  "kimi-k2.6", "kimi-k2.5",
   // GLM
   "glm-5.1", "glm-5", "glm-5-turbo", "glm-5v-turbo", "glm-4.7", "glm-4.7-flash",
   // MiniMax
-  "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
   "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
   "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
-  "MiniMax-M1-40k", "MiniMax-M1-80k",
   // MiniMax — lowercase aliases for OpenRouter
-  "minimax-m2.1", "minimax-m2.5", "minimax-m2.7", "minimax-m1",
+  "minimax-m2.5", "minimax-m2.7",
+  // DeepSeek
+  "deepseek-v4-flash", "deepseek-v4-pro",
+  // Xiaomi (MiMo)
+  "mimo-v2.5", "mimo-v2.5-pro",
 ]);
 
 export const KNOWN_NO_WEB_SEARCH_MODELS: Set<string> = new Set([
-  // MiniMax — M1 series lacks native web search
-  "MiniMax-M1-40k", "MiniMax-M1-80k",
+  // DeepSeek — no native web search tool
+  "deepseek-v4-flash", "deepseek-v4-pro",
+  // Xiaomi (MiMo) — no native web search tool
+  "mimo-v2.5", "mimo-v2.5-pro",
 ]);
 
 /** Models that support OpenAI's extended 24h prompt cache retention (`prompt_cache_retention: "24h"`). */
 export const KNOWN_EXTENDED_CACHE_MODELS: Set<string> = new Set([
   // GPT-5 family
+  "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini", "gpt-5.4-nano",
   "gpt-5.2", "gpt-5.2-codex",
@@ -179,6 +193,9 @@ export const KNOWN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "gpt-5.4": 128_000,
   "gpt-5.4-mini": 128_000,
   "gpt-5.4-nano": 128_000,
+  "gpt-5.5": 128_000,
+  // Anthropic — Claude 4.7
+  "claude-opus-4-7": 128_000,
   // Anthropic — Claude 4.6
   "claude-opus-4-6": 128_000,
   "claude-sonnet-4-6": 64_000,
@@ -193,10 +210,10 @@ export const KNOWN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-haiku-4.5": 64_000,
   "claude-opus-4.6": 128_000,
   "claude-sonnet-4.6": 64_000,
+  "claude-opus-4.7": 128_000,
   // Kimi
   "kimi-k2.6": 65_536,
   "kimi-k2.5": 65_536,
-  "kimi-k2-thinking": 65_536,
   "kimi-k2-instruct": 65_536,
   // GLM (Zhipu AI)
   "glm-5.1": 131_072,
@@ -206,19 +223,19 @@ export const KNOWN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "glm-4.7": 128_000,
   "glm-4.7-flash": 128_000,
   // MiniMax
-  "MiniMax-M2.1": 8_192,
-  "MiniMax-M2.1-highspeed": 8_192,
   "MiniMax-M2.5": 196_608,
   "MiniMax-M2.5-highspeed": 196_608,
   "MiniMax-M2.7": 131_072,
   "MiniMax-M2.7-highspeed": 131_072,
-  "MiniMax-M1-40k": 40_000,
-  "MiniMax-M1-80k": 80_000,
   // MiniMax — lowercase aliases for OpenRouter
-  "minimax-m2.1": 8_192,
   "minimax-m2.5": 196_608,
   "minimax-m2.7": 131_072,
-  "minimax-m1": 80_000,
+  // DeepSeek
+  "deepseek-v4-flash": 384_000,
+  "deepseek-v4-pro": 384_000,
+  // Xiaomi (MiMo)
+  "mimo-v2.5": 131_072,
+  "mimo-v2.5-pro": 131_072,
 };
 
 /** Resolve max output tokens for a model. Priority: known lookup (exact then normalized) > undefined. */
@@ -239,11 +256,14 @@ export const KNOWN_THINKING_LEVELS: Record<string, string[]> = {
   "gpt-5.4":   ["none", "low", "medium", "high", "xhigh"],
   "gpt-5.4-mini": ["none", "low", "medium", "high", "xhigh"],
   "gpt-5.4-nano": ["none", "low", "medium", "high", "xhigh"],
-  // Anthropic — adaptive + effort (4.6)
+  "gpt-5.5":   ["none", "low", "medium", "high", "xhigh"],
+  // Anthropic — adaptive + effort (4.6 / 4.7); 4.7 adds the exclusive "xhigh" level
   "claude-opus-4-6":   ["off", "low", "medium", "high", "max"],
   "claude-sonnet-4-6": ["off", "low", "medium", "high"],
+  "claude-opus-4-7":   ["off", "low", "medium", "high", "xhigh", "max"],
   "claude-opus-4.6":   ["off", "low", "medium", "high", "max"],
   "claude-sonnet-4.6": ["off", "low", "medium", "high"],
+  "claude-opus-4.7":   ["off", "low", "medium", "high", "xhigh", "max"],
   // Anthropic — manual extended thinking (4.5 and earlier)
   "claude-opus-4-1-20250805":   ["off", "low", "medium", "high"],
   "claude-sonnet-4-5-20250929": ["off", "low", "medium", "high"],
@@ -255,14 +275,18 @@ export const KNOWN_THINKING_LEVELS: Record<string, string[]> = {
   "glm-5.1": ["off", "on"], "glm-5": ["off", "on"], "glm-5-turbo": ["off", "on"], "glm-5v-turbo": ["off", "on"],
   "glm-4.7": ["off", "on"], "glm-4.7-flash": ["off", "on"],
   // Kimi
-  "kimi-k2.6": ["off", "on"], "kimi-k2.5": ["off", "on"], "kimi-k2-thinking": ["on"],
+  "kimi-k2.6": ["off", "on"], "kimi-k2.5": ["off", "on"],
   // MiniMax (not configurable)
-  "MiniMax-M2.1": ["on"], "MiniMax-M2.1-highspeed": ["on"],
   "MiniMax-M2.5": ["on"], "MiniMax-M2.5-highspeed": ["on"],
   "MiniMax-M2.7": ["on"], "MiniMax-M2.7-highspeed": ["on"],
-  "MiniMax-M1-40k": ["on"], "MiniMax-M1-80k": ["on"],
   // MiniMax — lowercase aliases for OpenRouter
-  "minimax-m2.1": ["on"], "minimax-m2.5": ["on"], "minimax-m2.7": ["on"], "minimax-m1": ["on"],
+  "minimax-m2.5": ["on"], "minimax-m2.7": ["on"],
+  // DeepSeek — vendor-original three modes (off via thinking.type=disabled, high/max via reasoning_effort)
+  "deepseek-v4-flash": ["off", "high", "max"],
+  "deepseek-v4-pro": ["off", "high", "max"],
+  // Xiaomi (MiMo) — thinking.type enabled/disabled
+  "mimo-v2.5": ["off", "on"],
+  "mimo-v2.5-pro": ["off", "on"],
 };
 
 /** Return available thinking levels for a model, or empty array if not a thinking model. */
@@ -645,6 +669,8 @@ const PROVIDER_URLS: Record<string, string> = {
   "glm-intl-code": "https://api.z.ai/api/coding/paas/v4",
   "minimax": "https://api.minimax.io/v1",
   "minimax-cn": "https://api.minimaxi.com/v1",
+  "deepseek": "https://api.deepseek.com/v1",
+  "xiaomi": "https://api.xiaomimimo.com/v1",
   "openrouter": "https://openrouter.ai/api/v1",
 };
 

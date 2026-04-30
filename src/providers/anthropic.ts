@@ -202,24 +202,35 @@ export class AnthropicProvider extends BaseProvider {
   // ------------------------------------------------------------------
 
   /**
-   * Claude 4.6 models use the new Adaptive Thinking system:
+   * Claude 4.6 / 4.7 use Adaptive Thinking:
    *   thinking: { type: "adaptive" }
    *   output_config: { effort: "low" | "medium" | "high" | "max" }
+   * Opus 4.7 also accepts effort "xhigh" (exclusive to 4.7).
    *
    * Claude 4.5 and earlier use Manual Extended Thinking:
    *   thinking: { type: "enabled", budget_tokens: N }
    *
-   * Matches both the canonical dashed form (`claude-opus-4-6`) used by the
-   * Anthropic API and the dotted variant (`claude-opus-4.6`, including
+   * Matches both the canonical dashed form (`claude-opus-4-7`) used by the
+   * Anthropic API and the dotted variant (`claude-opus-4.7`, including
    * suffixes like `-fast`) used by GitHub Copilot's model catalog.
    */
   private static readonly _ADAPTIVE_MODEL_RE =
-    /^claude-(opus|sonnet)-4[.-]6/;
+    /^claude-(opus|sonnet)-4[.-][67]/;
+
+  /** Opus 4.7+ rejects any non-default temperature/top_p/top_k with HTTP 400. */
+  private static readonly _NO_SAMPLING_PARAMS_RE =
+    /^claude-(opus|sonnet)-4[.-]7/;
+
+  /** Opus 4.7 introduced the `xhigh` effort level (between high and max). */
+  private static readonly _XHIGH_EFFORT_RE =
+    /^claude-(opus|sonnet)-4[.-]7/;
 
   private _applyThinkingParams(kwargs: Record<string, unknown>, options?: SendMessageOptions): void {
     if (!this._config.supportsThinking) return;
 
     const level = options?.thinkingLevel;
+    const model = this._config.model;
+    const noSamplingParams = AnthropicProvider._NO_SAMPLING_PARAMS_RE.test(model);
 
     // "off" disables thinking entirely (both systems)
     if (level === "off" || level === "none") {
@@ -227,14 +238,15 @@ export class AnthropicProvider extends BaseProvider {
       return;
     }
 
-    const model = this._config.model;
     if (AnthropicProvider._ADAPTIVE_MODEL_RE.test(model)) {
-      // --- Adaptive Thinking (Claude 4.6) ---
+      // --- Adaptive Thinking (Claude 4.6 / 4.7) ---
       kwargs["thinking"] = { type: "adaptive" };
 
-      // Map level to effort; default is "high"
+      const validEfforts = AnthropicProvider._XHIGH_EFFORT_RE.test(model)
+        ? ["low", "medium", "high", "xhigh", "max"]
+        : ["low", "medium", "high", "max"];
       let effort: string;
-      if (level && ["low", "medium", "high", "max"].includes(level)) {
+      if (level && validEfforts.includes(level)) {
         effort = level;
       } else {
         effort = "high";
@@ -260,7 +272,9 @@ export class AnthropicProvider extends BaseProvider {
       }
       kwargs["thinking"] = { type: "enabled", budget_tokens: budget };
     }
-    kwargs["temperature"] = 1; // Anthropic requires temperature=1 with thinking
+    if (!noSamplingParams) {
+      kwargs["temperature"] = 1; // 4.6 and earlier require temperature=1 with thinking
+    }
   }
 
   // ------------------------------------------------------------------
@@ -397,11 +411,13 @@ export class AnthropicProvider extends BaseProvider {
       model: this._config.model,
       messages: converted,
       max_tokens: options?.maxTokens || this._config.maxTokens,
-      temperature:
+    };
+    if (!AnthropicProvider._NO_SAMPLING_PARAMS_RE.test(this._config.model)) {
+      kwargs["temperature"] =
         options?.temperature !== undefined
           ? options.temperature
-          : this._config.temperature,
-    };
+          : this._config.temperature;
+    }
     if (system) {
       kwargs["system"] = system;
     }

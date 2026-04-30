@@ -192,7 +192,7 @@ describe("/model command", () => {
 
     expect(vendorMiniMax).toBeTruthy();
     expect(vendorMiniMax!.label).toBe("MiniMax");
-    expect(vendorMiniMax!.children?.some((c) => c.label.startsWith("MiniMax M2.1"))).toBe(true);
+    expect(vendorMiniMax!.children?.some((c) => c.label.startsWith("MiniMax M2.5"))).toBe(true);
 
     expect(vendorGLM).toBeTruthy();
     expect(vendorGLM!.label).toBe("GLM / Zhipu");

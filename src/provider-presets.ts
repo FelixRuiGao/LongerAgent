@@ -51,8 +51,6 @@ const GLM_MODELS = [
 ] satisfies ProviderPresetModel[];
 
 const MINIMAX_MODELS = [
-  { key: "MiniMax-M2.1", id: "MiniMax-M2.1", label: "MiniMax M2.1" },
-  { key: "MiniMax-M2.1-highspeed", id: "MiniMax-M2.1-highspeed", label: "MiniMax M2.1 Highspeed" },
   { key: "MiniMax-M2.5", id: "MiniMax-M2.5", label: "MiniMax M2.5" },
   { key: "MiniMax-M2.5-highspeed", id: "MiniMax-M2.5-highspeed", label: "MiniMax M2.5 Highspeed" },
   { key: "MiniMax-M2.7", id: "MiniMax-M2.7", label: "MiniMax M2.7" },
@@ -89,6 +87,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
           betas: [ANTHROPIC_CONTEXT_1M_BETA],
         },
       },
+      { key: "claude-opus-4-7", id: "claude-opus-4-7", label: "Claude Opus 4.7" },
     ],
   },
   // ── OpenAI (no group, two-level) ──
@@ -101,6 +100,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       { key: "gpt-5.4", id: "gpt-5.4", label: "GPT-5.4" },
       { key: "gpt-5.4-mini", id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
       { key: "gpt-5.4-nano", id: "gpt-5.4-nano", label: "GPT-5.4 Nano" },
+      { key: "gpt-5.5", id: "gpt-5.5", label: "GPT-5.5" },
     ],
   },
   // ── OpenAI Codex (ChatGPT OAuth login) ──
@@ -117,6 +117,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
         config: { store: false, supports_web_search: false } },
       { key: "gpt-5.4-mini", id: "gpt-5.4-mini", label: "GPT-5.4 Mini",
         config: { store: false, supports_web_search: false } },
+      // gpt-5.5 over the Codex backend caps context at 400K (vs 1M on the public OpenAI API).
+      { key: "gpt-5.5", id: "gpt-5.5", label: "GPT-5.5",
+        config: { store: false, supports_web_search: false, context_length: 400_000 } },
     ],
   },
   // ── GitHub Copilot (device flow) ──
@@ -208,6 +211,22 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     group: "glm", groupLabel: "z.ai (GLM/Zhipu)", subLabel: "GLM-Global-Code",
     models: GLM_MODELS,
   },
+  // ── DeepSeek ──
+  {
+    id: "deepseek", name: "DeepSeek", envVar: "DEEPSEEK_API_KEY",
+    models: [
+      { key: "deepseek-v4-flash", id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
+      { key: "deepseek-v4-pro", id: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
+    ],
+  },
+  // ── Xiaomi (MiMo) ──
+  {
+    id: "xiaomi", name: "Xiaomi (MiMo)", envVar: "XIAOMI_API_KEY",
+    models: [
+      { key: "mimo-v2.5", id: "mimo-v2.5", label: "MiMo V2.5" },
+      { key: "mimo-v2.5-pro", id: "mimo-v2.5-pro", label: "MiMo V2.5 Pro" },
+    ],
+  },
   // ── Local inference servers ──
   {
     id: "ollama", name: "Ollama (Local)", envVar: "_OLLAMA_LOCAL",
@@ -251,15 +270,28 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
         aliases: ["anthropic/claude-opus-4-6"],
         config: { context_length: 1_000_000 },
       },
+      {
+        key: "anthropic/claude-opus-4.7",
+        id: "anthropic/claude-opus-4.7",
+        label: "Claude Opus 4.7",
+        optionNote: "1M context",
+        aliases: ["anthropic/claude-opus-4-7"],
+      },
       // OpenAI
       { key: "openai/gpt-5.2", id: "openai/gpt-5.2", label: "GPT-5.2" },
       { key: "openai/gpt-5.2-codex", id: "openai/gpt-5.2-codex", label: "GPT-5.2 Codex" },
       { key: "openai/gpt-5.3-codex", id: "openai/gpt-5.3-codex", label: "GPT-5.3 Codex" },
       { key: "openai/gpt-5.4", id: "openai/gpt-5.4", label: "GPT-5.4" },
+      { key: "openai/gpt-5.5", id: "openai/gpt-5.5", label: "GPT-5.5" },
+      // DeepSeek
+      { key: "deepseek/deepseek-v4-flash", id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash" },
+      { key: "deepseek/deepseek-v4-pro", id: "deepseek/deepseek-v4-pro", label: "DeepSeek V4 Pro" },
+      // Xiaomi (MiMo)
+      { key: "xiaomi/mimo-v2.5", id: "xiaomi/mimo-v2.5", label: "MiMo V2.5" },
+      { key: "xiaomi/mimo-v2.5-pro", id: "xiaomi/mimo-v2.5-pro", label: "MiMo V2.5 Pro" },
       // Kimi / Moonshot
       { key: "moonshotai/kimi-k2.5", id: "moonshotai/kimi-k2.5", label: "Kimi K2.5" },
       // MiniMax
-      { key: "minimax/minimax-m2.1", id: "minimax/minimax-m2.1", label: "MiniMax M2.1" },
       { key: "minimax/minimax-m2.5", id: "minimax/minimax-m2.5", label: "MiniMax M2.5" },
       { key: "minimax/minimax-m2.7", id: "minimax/minimax-m2.7", label: "MiniMax M2.7" },
       // GLM / Zhipu (Z.ai)
