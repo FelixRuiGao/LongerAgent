@@ -11,10 +11,10 @@
 // ------------------------------------------------------------------
 
 export interface ContextThresholds {
-  /** Summarize hint level 1 trigger (percentage of effective context budget). */
-  summarize_hint_level1: number;
-  /** Summarize hint level 2 trigger (percentage, must be >= level1). */
-  summarize_hint_level2: number;
+  /** Context hint level 1 trigger (percentage of effective context budget). */
+  context_hint_level1: number;
+  /** Context hint level 2 trigger (percentage, must be >= level1). */
+  context_hint_level2: number;
   /** Auto-compact trigger on normal output (percentage). */
   compact_output: number;
   /** Auto-compact trigger when tool calls present (percentage, must be >= compact_output). */
@@ -26,8 +26,8 @@ export interface ContextThresholds {
 // ------------------------------------------------------------------
 
 export const DEFAULT_THRESHOLDS: ContextThresholds = {
-  summarize_hint_level1: 60,
-  summarize_hint_level2: 80,
+  context_hint_level1: 60,
+  context_hint_level2: 80,
   compact_output: 85,
   compact_toolcall: 90,
 };
@@ -45,7 +45,7 @@ export function computeHysteresisThresholds(t: ContextThresholds): {
   hintResetLevel1: number;
 } {
   return {
-    hintResetNone: t.summarize_hint_level1 - 20,
-    hintResetLevel1: (t.summarize_hint_level1 + t.summarize_hint_level2) / 2,
+    hintResetNone: t.context_hint_level1 - 20,
+    hintResetLevel1: (t.context_hint_level1 + t.context_hint_level2) / 2,
   };
 }

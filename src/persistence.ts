@@ -733,8 +733,6 @@ function entryToSnake(entry: LogEntry): Record<string, unknown> {
     meta: entry.meta,
   };
   if (entry.roundIndex !== undefined) obj.round_index = entry.roundIndex;
-  if (entry.summarized) obj.summarized = true;
-  if (entry.summarizedBy) obj.summarized_by = entry.summarizedBy;
   if (entry.discarded) obj.discarded = true;
   return obj;
 }
@@ -753,8 +751,6 @@ function entryFromSnake(obj: Record<string, unknown>): LogEntry {
     content: obj.content ?? null,
     archived: (obj.archived as boolean) ?? false,
     meta: (obj.meta as Record<string, unknown>) ?? {},
-    ...(obj.summarized ? { summarized: true } : {}),
-    ...(obj.summarized_by ? { summarizedBy: obj.summarized_by as string } : {}),
     ...(obj.discarded ? { discarded: true } : {}),
   };
 }

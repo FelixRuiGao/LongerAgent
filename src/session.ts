@@ -47,7 +47,7 @@ import {
   CHECK_STATUS_TOOL,
   AWAIT_EVENT_TOOL,
   SHOW_CONTEXT_TOOL,
-  DISTILL_CONTEXT_TOOL,
+  SUMMARIZE_TOOL,
   ASK_TOOL,
   SEND_TOOL,
 } from "./tools/comm.js";
@@ -57,7 +57,7 @@ import {
   KILL_SHELL_TOOL,
   executeTool,
 } from "./tools/basic.js";
-import { execSummarizeContextOnLog } from "./summarize-context.js";
+import { execSummarizeContextOnLog, buildCoveredContextIds } from "./summarize-context.js";
 import { resolveSkillContent, loadSkillsMulti, type SkillMeta } from "./skills/loader.js";
 import { toolBuiltinWebSearchPassthrough } from "./tools/web-search.js";
 import {
@@ -110,6 +110,7 @@ import {
   type LogEntry,
   createSystemPrompt,
   createTurnStart,
+  type TurnKind,
   createTurnEnd,
   createUserMessage as createUserMessageEntry,
   createAgentResult,
@@ -204,7 +205,7 @@ const SUB_AGENT_TIMEOUT = 600_000; // milliseconds
 const MAX_COMPACT_PHASE_ROUNDS = 10;       // max activations during compact phase
 
 // -- Compact Prompt: Output scenario --
-const COMPACT_PROMPT_OUTPUT = `Distill this conversation into a continuation prompt — imagine you're writing a briefing for a fresh instance of yourself who must seamlessly pick up where we left off, with zero access to the original conversation.
+const COMPACT_PROMPT_OUTPUT = `Condense this conversation into a continuation prompt — imagine you're writing a briefing for a fresh instance of yourself who must seamlessly pick up where we left off, with zero access to the original conversation.
 
 **Before writing the continuation prompt**, make sure any stable, long-term knowledge from this session has been written to AGENTS.md if it belongs there.
 
@@ -271,13 +272,6 @@ Capture:
 
 Be thorough — include all information that could be useful. The next instance has no access to this conversation.`;
 
-const MANUAL_SUMMARIZE_PROMPT = [
-  "Review the current active context and use `distill_context` to distill older groups that are no longer needed in full.",
-  "Preserve the latest working context and anything you still need verbatim.",
-  "Do not continue the main task beyond this distill request.",
-  "After distilling, reply briefly with what you compressed and stop.",
-].join(" ");
-
 function appendManualInstruction(
   basePrompt: string,
   instruction: string | undefined,
@@ -290,11 +284,11 @@ function appendManualInstruction(
 
 // -- Hint Prompt generators (two-tier) --
 function HINT_LEVEL1_PROMPT(pct: string): string {
-  return `[SYSTEM: Context usage has reached ${pct}. Consider reviewing your context to free up space. You can call \`show_context\` to see the current context distribution, then use \`distill_context\` to distill older groups that are no longer needed in full. Prioritize: completed subtasks, large tool results you've already extracted key info from, and exploratory steps that led to a conclusion. After distilling, continue your work normally.]`;
+  return `[SYSTEM: Context usage has reached ${pct}. Consider freeing space: call \`show_context\` first to see the distribution, then call \`summarize\` to compress groups you no longer need in full. Prioritize: completed subtasks, large tool results you've already extracted key info from, and exploratory steps that led to a conclusion. Always inspect with show_context before summarizing. After summarizing, continue your work normally.]`;
 }
 
 function HINT_LEVEL2_PROMPT(pct: string): string {
-  return `[SYSTEM: Context usage has reached ${pct} — auto-compact will trigger soon. Strongly recommended: call \`show_context\` now to see context distribution, then immediately use \`distill_context\` to distill older groups. Prioritize: completed subtasks, large tool results, and exploratory steps. After distilling, continue your work.]`;
+  return `[SYSTEM: Context usage has reached ${pct} — auto-compact will trigger soon. You should act now: call \`show_context\` to see the distribution, then immediately call \`summarize\` to compress older groups. Prioritize: completed subtasks, large tool results, and exploratory steps. Do not skip the show_context step. After summarizing, continue your work.]`;
 }
 
 function formatTokenCount(value: number): string {
@@ -315,14 +309,14 @@ const SYSTEM_PREFIXES = [
 ];
 
 const COMM_TOOL_NAMES = new Set([
-  "spawn", "kill_agent", "check_status", "await_event", "show_context", "distill_context", "ask", "skill",
+  "spawn", "kill_agent", "check_status", "await_event", "show_context", "summarize", "ask", "skill",
   "bash_background", "bash_output", "kill_shell", "send",
 ]);
 
 const SAFE_INTERRUPT_TOOLS = new Set([
   "ask",
   "check_status",
-  "distill_context",
+  "summarize",
   "glob",
   "grep",
   "kill_agent",
@@ -511,8 +505,8 @@ export class Session {
 
   // Context thresholds (from settings.json, or defaults)
   private _thresholds: ContextThresholds = { ...DEFAULT_THRESHOLDS };
-  private _hintResetNone = DEFAULT_THRESHOLDS.summarize_hint_level1 / 100 - 0.20;
-  private _hintResetLevel1 = (DEFAULT_THRESHOLDS.summarize_hint_level1 + DEFAULT_THRESHOLDS.summarize_hint_level2) / 200;
+  private _hintResetNone = DEFAULT_THRESHOLDS.context_hint_level1 / 100 - 0.20;
+  private _hintResetLevel1 = (DEFAULT_THRESHOLDS.context_hint_level1 + DEFAULT_THRESHOLDS.context_hint_level2) / 200;
 
   // Context window multiplier (0.0–1.0). Effective context = contextLength × _contextRatio.
   private _contextRatio = 1.0;
@@ -523,6 +517,9 @@ export class Session {
   // show_context: number of remaining rounds where annotations are active
   private _showContextRoundsRemaining = 0;
   private _showContextAnnotations: Map<string, string> | null = null;
+
+  // /summarize tool whitelist mode
+  private _summarizeToolWhitelist: Set<string> | null = null;
 
   // Skills
   private _skills = new Map<string, SkillMeta>();
@@ -1065,7 +1062,7 @@ export class Session {
   private _findPrecedingUserSideContextId(): string | undefined {
     for (let i = this._log.length - 1; i >= 0; i--) {
       const entry = this._log[i];
-      if (entry.discarded || entry.summarized) continue;
+      if (entry.discarded) continue;
       if (entry.apiRole === "user" || entry.apiRole === "tool_result") {
         const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
         if (typeof ctxId === "string" && ctxId.trim()) {
@@ -1494,20 +1491,47 @@ export class Session {
   }
 
   // ------------------------------------------------------------------
-  // Rewind
+  // Turn listing (shared by /summarize picker and /rewind picker)
   // ------------------------------------------------------------------
 
   /**
-   * Get the list of turn boundaries available for rewind.
-   * Returns turns in reverse chronological order (most recent first).
+   * Return metadata for every turn in the log.
+   * Each entry includes turnKind (from turn_start meta) and a preview.
+   * Callers filter by turnKind, active window, etc.
    */
-  getRewindTargets(): Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }> {
-    const targets: Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }> = [];
+  listTurns(): Array<{
+    turnIndex: number;
+    entryIndex: number;
+    turnKind: TurnKind;
+    preview: string;
+    timestamp: number;
+    /** Whether this turn is inside the active window (after last compact_marker). */
+    inActiveWindow: boolean;
+  }> {
+    let lastCompactMarkerIdx = -1;
+    for (let i = this._log.length - 1; i >= 0; i--) {
+      if (this._log[i].type === "compact_marker" && !this._log[i].discarded) {
+        lastCompactMarkerIdx = i;
+        break;
+      }
+    }
+
+    const turns: Array<{
+      turnIndex: number;
+      entryIndex: number;
+      turnKind: TurnKind;
+      preview: string;
+      timestamp: number;
+      inActiveWindow: boolean;
+    }> = [];
+
     for (let i = 0; i < this._log.length; i++) {
       const entry = this._log[i];
-      if (entry.type !== "turn_start") continue;
-      if (entry.discarded) continue;
-      // Find the user message for this turn
+      if (entry.type !== "turn_start" || entry.discarded) continue;
+
+      const meta = entry.meta as Record<string, unknown>;
+      const turnKind = (meta.turnKind as TurnKind) ?? "user";
+
       let preview = "";
       for (let j = i + 1; j < this._log.length; j++) {
         const next = this._log[j];
@@ -1517,14 +1541,40 @@ export class Session {
           break;
         }
       }
-      targets.push({
+
+      turns.push({
         turnIndex: entry.turnIndex,
         entryIndex: i,
+        turnKind,
         preview: preview || `(turn ${entry.turnIndex})`,
         timestamp: entry.timestamp,
+        inActiveWindow: i > lastCompactMarkerIdx,
       });
     }
-    return targets.reverse();
+
+    return turns;
+  }
+
+  // ------------------------------------------------------------------
+  // Rewind
+  // ------------------------------------------------------------------
+
+  /**
+   * Get the list of turn boundaries available for rewind.
+   * Only shows real user turns (not injected/compact/summarize turns).
+   * Includes turns before compact markers (rewind undoes compacts).
+   * Returns turns in reverse chronological order (most recent first).
+   */
+  getRewindTargets(): Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }> {
+    return this.listTurns()
+      .filter(t => t.turnKind === "user")
+      .map(t => ({
+        turnIndex: t.turnIndex,
+        entryIndex: t.entryIndex,
+        preview: t.preview,
+        timestamp: t.timestamp,
+      }))
+      .reverse();
   }
 
   /**
@@ -1564,6 +1614,7 @@ export class Session {
 
     // Reset transient state
     this._compactInProgress = false;
+    this._summarizeToolWhitelist = null;
     this._hintState = "none";
     this._agentState = "idle";
     this._inbox = [];
@@ -1575,11 +1626,15 @@ export class Session {
     this._lastTurnEndStatus = null;
     this._cachedSummary = undefined;
 
-    // Rebuild used context IDs from remaining log
+    // Rebuild used context IDs and compact count from remaining log
     this._usedContextIds.clear();
+    this._compactCount = 0;
     for (const entry of this._log) {
       const ctx = (entry.meta as Record<string, unknown>)?.["contextId"];
       if (typeof ctx === "string") this._usedContextIds.add(ctx);
+      if (entry.type === "compact_marker" && !entry.discarded) {
+        this._compactCount += 1;
+      }
     }
 
     // Refresh plan state and notify
@@ -2238,7 +2293,7 @@ export class Session {
         check_status: (args) => this._execCheckStatus(args),
         await_event: (args) => this._execAwaitEvent(args),
         show_context: (args) => this._execShowContext(args),
-        distill_context: (args) => this._execDistillContext(args),
+        summarize: (args) => this._execSummarizeTool(args),
         ask: (args) => this._execAsk(args),
         skill: (args) => this._execSkill(args),
         send: (args) => this._execSend(args),
@@ -2688,32 +2743,16 @@ export class Session {
     return null;
   }
 
-  private _armShowContextAnnotations(): void {
-    const mc = this.primaryAgent.modelConfig;
-    const provider = (this.primaryAgent as any)._provider;
-    const effectiveMax = mc.maxTokens;
-    const budget = provider.budgetCalcMode === "full_context"
-      ? this._effectiveContextLength(mc)
-      : this._effectiveContextLength(mc) - effectiveMax;
-    const result = generateShowContext(this._log, this._lastInputTokens, budget);
-    this._showContextRoundsRemaining = 1;
-    this._showContextAnnotations = result.annotations;
-  }
-
   private async _runInjectedTurn(
     displayText: string,
     content: string,
-    opts?: { signal?: AbortSignal; armShowContext?: boolean },
+    opts?: { signal?: AbortSignal; turnKind?: TurnKind },
   ): Promise<string> {
-    if (opts?.armShowContext) {
-      this._armShowContextAnnotations();
-    }
-
     const userCtxId = this._allocateContextId();
     this._lastTurnEndStatus = null;
     this._turnCount += 1;
     this._appendEntry(
-      createTurnStart(this._nextLogId("turn_start"), this._turnCount),
+      createTurnStart(this._nextLogId("turn_start"), this._turnCount, opts?.turnKind ?? "summarize"),
       false,
     );
     this._appendEntry(
@@ -2733,7 +2772,118 @@ export class Session {
     return this._runTurnActivationLoop(opts?.signal, textAccumulator, reasoningAccumulator);
   }
 
-  async runManualSummarize(instruction?: string, options?: { signal?: AbortSignal }): Promise<string> {
+  /**
+   * Return the list of items available for the /summarize picker.
+   * Includes real user turns and visible summary entries in the active window.
+   * Excludes the current turn.
+   */
+  getSummarizeTargets(): Array<{
+    kind: "turn" | "summary";
+    turnIndex: number;
+    preview: string;
+    timestamp: number;
+    contextId?: string;
+  }> {
+    // Find active window start
+    let windowStart = 0;
+    for (let i = this._log.length - 1; i >= 0; i--) {
+      if (this._log[i].type === "compact_marker" && !this._log[i].discarded) {
+        windowStart = i + 1;
+        break;
+      }
+    }
+
+    // Collect covered set to exclude superseded summaries
+    const coveredSet = buildCoveredContextIds(this._log);
+
+    // 1. Real user turns in active window
+    const items: Array<{
+      kind: "turn" | "summary";
+      turnIndex: number;
+      preview: string;
+      timestamp: number;
+      contextId?: string;
+      sortKey: number;
+    }> = [];
+
+    for (const t of this.listTurns()) {
+      if (!t.inActiveWindow || t.turnKind !== "user") continue;
+      if (t.turnIndex >= this._turnCount) continue;
+      items.push({
+        kind: "turn",
+        turnIndex: t.turnIndex,
+        preview: t.preview,
+        timestamp: t.timestamp,
+        sortKey: t.entryIndex,
+      });
+    }
+
+    // 2. Visible summary entries in active window (not superseded)
+    for (let i = windowStart; i < this._log.length; i++) {
+      const entry = this._log[i];
+      if (entry.type !== "summary" || entry.discarded) continue;
+      const ctxId = (entry.meta as Record<string, unknown>)["contextId"] as string | undefined;
+      if (ctxId && coveredSet.has(ctxId)) continue;
+      const display = (entry.display || "").slice(0, 80).replace(/\n/g, " ");
+      items.push({
+        kind: "summary",
+        turnIndex: entry.turnIndex,
+        preview: display || "(summary)",
+        timestamp: entry.timestamp,
+        contextId: ctxId,
+        sortKey: i,
+      });
+    }
+
+    items.sort((a, b) => a.sortKey - b.sortKey);
+    return items.map(({ sortKey: _, ...rest }) => rest);
+  }
+
+  /**
+   * Map a turn range to the set of visible (non-covered) context IDs.
+   * Only includes context IDs in the active window that are not already
+   * covered by a later summary.
+   */
+  getContextIdsForTurnRange(startTurn: number, endTurn: number): string[] {
+    const coveredSet = buildCoveredContextIds(this._log);
+    const contextIds: string[] = [];
+    const seen = new Set<string>();
+
+    // Find active window start
+    let windowStart = 0;
+    for (let i = this._log.length - 1; i >= 0; i--) {
+      if (this._log[i].type === "compact_marker" && !this._log[i].discarded) {
+        windowStart = i + 1;
+        break;
+      }
+    }
+
+    for (let i = windowStart; i < this._log.length; i++) {
+      const entry = this._log[i];
+      if (entry.turnIndex < startTurn || entry.turnIndex > endTurn) continue;
+      if (entry.discarded) continue;
+      const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
+      if (!ctxId || typeof ctxId !== "string") continue;
+      if (coveredSet.has(ctxId)) continue;
+      if (seen.has(ctxId)) continue;
+      seen.add(ctxId);
+      contextIds.push(ctxId);
+    }
+
+    return contextIds;
+  }
+
+  static readonly SUMMARIZE_TOOL_WHITELIST = new Set([
+    "show_context", "summarize", "read_file", "grep", "glob", "list_dir",
+  ]);
+
+  async runManualSummarize(
+    options?: {
+      signal?: AbortSignal;
+      targetContextIds?: string[];
+      focusPrompt?: string;
+    },
+  ): Promise<string> {
     return this._withTurnLock(async () => {
       this._ensureSessionStorageReady();
       await this._ensureMcp();
@@ -2741,16 +2891,45 @@ export class Session {
       const blocker = this._getManualContextCommandBlocker("/summarize");
       if (blocker) throw new Error(blocker);
 
-      const prompt = appendManualInstruction(
-        MANUAL_SUMMARIZE_PROMPT,
-        instruction,
-        "summarize",
-      );
-      return this._runInjectedTurn(
-        "[Manual summarize request]",
-        prompt,
-        { signal: options?.signal, armShowContext: true },
-      );
+      const targetIds = options?.targetContextIds;
+      if (!targetIds || targetIds.length === 0) {
+        throw new Error("/summarize requires selecting target turns first.");
+      }
+
+      const idList = targetIds.map(id => `  - ${id}`).join("\n");
+      let prompt = [
+        `[Targeted summarize request]`,
+        ``,
+        `The user has selected the following context groups to be summarized:`,
+        idList,
+        ``,
+        `Instructions:`,
+        `1. First call \`show_context\` to inspect the content and size of each group.`,
+        `2. You may call \`read_file\`, \`grep\`, \`glob\`, or \`list_dir\` to verify details before writing the summary.`,
+        `3. Call \`summarize\` to compress the selected groups. You MUST only target the context_ids listed above.`,
+        `4. Your summary content should match the information density of the original — do not over-compress.`,
+        `   Preserve: user message intent and original wording, file paths with line numbers, key decisions and why,`,
+        `   unresolved issues, code references you'd look back at, and any constraints or rules the user stated.`,
+        `5. After summarizing, reply briefly with what you compressed and stop.`,
+        ``,
+        `Do NOT continue the main task. Do NOT call show_context(dismiss=true).`,
+      ].join("\n");
+      if (options?.focusPrompt?.trim()) {
+        prompt += `\n\nUser focus: ${options.focusPrompt.trim()}`;
+      }
+      const displayText = `[Targeted summarize: ${targetIds.length} context groups]`;
+
+      // Enable tool whitelist for this turn
+      this._summarizeToolWhitelist = (this.constructor as typeof Session).SUMMARIZE_TOOL_WHITELIST;
+      try {
+        return await this._runInjectedTurn(
+          displayText,
+          prompt,
+          { signal: options?.signal, turnKind: "summarize" },
+        );
+      } finally {
+        this._summarizeToolWhitelist = null;
+      }
     });
   }
 
@@ -2764,7 +2943,7 @@ export class Session {
       this._turnCount += 1;
       this._lastTurnEndStatus = null;
       this._appendEntry(
-        createTurnStart(this._nextLogId("turn_start"), this._turnCount),
+        createTurnStart(this._nextLogId("turn_start"), this._turnCount, "compact"),
         false,
       );
       this._appendEntry(
@@ -2922,7 +3101,27 @@ export class Session {
   private _beforeToolExecute = async (
     ctx: ToolPreflightContext,
   ): Promise<ToolPreflightDecision | void> => {
-    // 0. Artifacts-dir bypass: write_file/edit_file inside session artifacts/
+    // 0a. /summarize tool whitelist: reject tools not in the whitelist
+    if (this._summarizeToolWhitelist) {
+      if (!this._summarizeToolWhitelist.has(ctx.toolName)) {
+        return {
+          kind: "deny",
+          message: `Tool "${ctx.toolName}" is not available during /summarize. Allowed: ${[...this._summarizeToolWhitelist].join(", ")}.`,
+        };
+      }
+      // Block show_context(dismiss=true) during /summarize
+      if (ctx.toolName === "show_context") {
+        const args = ctx.toolArgs as Record<string, unknown>;
+        if (args["dismiss"]) {
+          return {
+            kind: "deny",
+            message: "Cannot dismiss context annotations during /summarize.",
+          };
+        }
+      }
+    }
+
+    // 0b. Artifacts-dir bypass: write_file/edit_file inside session artifacts/
     //    don't need approval (Fermi-style auto-allow for agent-owned scratch space).
     const isFileWrite = ctx.toolName === "write_file" || ctx.toolName === "edit_file";
     const skipPermissionGate =
@@ -3612,7 +3811,7 @@ export class Session {
 
     // v2 log: turn_start + user_message
     this._appendEntry(
-      createTurnStart(this._nextLogId("turn_start"), this._turnCount),
+      createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
       false,
     );
     // Merge inline images (clipboard paste) into multimodal content
@@ -4657,7 +4856,7 @@ export class Session {
     return new ToolResult({ content: result.contextMap });
   }
 
-  private _execDistillContext(args: Record<string, unknown>): ToolResult {
+  private _execSummarizeTool(args: Record<string, unknown>): ToolResult {
     const result = execSummarizeContextOnLog(
       args,
       this._log,
@@ -4666,11 +4865,16 @@ export class Session {
       this._turnCount,
     );
 
-    this._annotateLatestDistillToolCall(result.results);
+    // Append new summary entries (append-only — originals are never mutated)
+    for (const entry of result.newEntries) {
+      this._appendEntry(entry, false);
+    }
+
+    this._annotateLatestSummarizeToolCall(result.results);
 
     this._touchLog();
 
-    // Auto-dismiss show_context annotations after a successful distill
+    // Auto-dismiss show_context annotations after a successful summarize
     if (result.results.some((r) => r.success)) {
       this._showContextRoundsRemaining = 0;
       this._showContextAnnotations = null;
@@ -4679,9 +4883,9 @@ export class Session {
     return new ToolResult({ content: result.output });
   }
 
-  private _annotateLatestDistillToolCall(results: Array<{ success: boolean; newContextId?: string }>): void {
+  private _annotateLatestSummarizeToolCall(results: Array<{ success: boolean; newContextId?: string }>): void {
     const resolvedToolCallIds = new Set<string>();
-    let distillEntry: LogEntry | null = null;
+    let summarizeEntry: LogEntry | null = null;
 
     for (let i = this._log.length - 1; i >= 0; i--) {
       const entry = this._log[i];
@@ -4694,13 +4898,13 @@ export class Session {
       if (entry.type !== "tool_call") continue;
       const toolCallId = String((entry.meta as Record<string, unknown>)["toolCallId"] ?? "");
       if (resolvedToolCallIds.has(toolCallId)) continue;
-      if ((entry.meta as Record<string, unknown>)["toolName"] !== "distill_context") continue;
-      distillEntry = entry;
+      if ((entry.meta as Record<string, unknown>)["toolName"] !== "summarize") continue;
+      summarizeEntry = entry;
       break;
     }
 
-    if (!distillEntry) return;
-    const content = distillEntry.content as Record<string, unknown>;
+    if (!summarizeEntry) return;
+    const content = summarizeEntry.content as Record<string, unknown>;
     const args = (content["arguments"] as Record<string, unknown>) ?? {};
     const operations = ((args["operations"] as Array<Record<string, unknown>>) ?? []).map((op) => ({ ...op }));
 
@@ -4709,89 +4913,13 @@ export class Session {
       operations[i]["_result_context_id"] = results[i].newContextId;
     }
 
-    distillEntry.content = {
+    summarizeEntry.content = {
       ...content,
       arguments: {
         ...args,
         operations,
       },
     };
-  }
-
-
-  /**
-   * After execSummarizeContext mutates the projected messages array,
-   * mirror changes back to _log: mark entries as summarized and create summary LogEntries.
-   */
-  private _syncSummarizeToLog(messages: Array<Record<string, unknown>>): void {
-    // 1. Build set of contextIds marked as summarized
-    const summarizedCtxIds = new Set<string>();
-    const summarizedByMap = new Map<string, string>();
-
-    for (const msg of messages) {
-      if (msg["_is_summarized"] !== true) continue;
-      const ctxId = msg["_context_id"];
-      if (ctxId === undefined || ctxId === null) continue;
-      summarizedCtxIds.add(String(ctxId));
-      const by = msg["_summarized_by"];
-      if (by !== undefined && by !== null) {
-        summarizedByMap.set(String(ctxId), String(by));
-      }
-    }
-
-    // 2. Mark corresponding _log entries
-    for (const entry of this._log) {
-      if (entry.summarized) continue;
-      const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
-      if (ctxId && summarizedCtxIds.has(String(ctxId))) {
-        entry.summarized = true;
-        const by = summarizedByMap.get(String(ctxId));
-        if (by) entry.summarizedBy = by;
-      }
-    }
-
-    // 3. Find new summary messages and create LogEntries
-    const existingSummaryCtxIds = new Set<string>();
-    for (const entry of this._log) {
-      if (entry.type === "summary") {
-        const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
-        if (ctxId) existingSummaryCtxIds.add(String(ctxId));
-      }
-    }
-
-    for (const msg of messages) {
-      if (msg["_is_summary"] !== true) continue;
-      const ctxId = msg["_context_id"];
-      if (!ctxId || existingSummaryCtxIds.has(String(ctxId))) continue;
-
-      const summarizedIds = (msg["_summarized_ids"] as Array<number | string>) ?? [];
-      const depth = (msg["_summary_depth"] as number) ?? 1;
-      const content = typeof msg["content"] === "string" ? msg["content"] : "";
-
-      // Find splice position: before the first log entry summarized by this summary
-      let spliceIdx = this._log.length;
-      for (let i = 0; i < this._log.length; i++) {
-        if (this._log[i].summarizedBy === String(ctxId)) {
-          spliceIdx = i;
-          break;
-        }
-      }
-
-      const summaryEntry = createSummary(
-        this._nextLogId("summary"),
-        this._turnCount,
-        content,
-        content,
-        String(ctxId),
-        summarizedIds.map(String),
-        depth,
-      );
-
-      this._log.splice(spliceIdx, 0, summaryEntry);
-      existingSummaryCtxIds.add(String(ctxId));
-    }
-
-    this._touchLog();
   }
 
   // ==================================================================
@@ -5269,7 +5397,7 @@ export class Session {
     const ratio = this._lastInputTokens / budget;
     const pct = `${Math.round(ratio * 100)}%`;
 
-    // Child sessions: single warning at 90%, no distill_context guidance
+    // Child sessions: single warning at 90%, no summarize guidance
     if (!this._capabilities.includeSpawnTool) {
       if (ratio >= 0.90 && this._hintState === "none") {
         this._deliverMessage({
@@ -5283,8 +5411,8 @@ export class Session {
       return;
     }
 
-    const level2Ratio = this._thresholds.summarize_hint_level2 / 100;
-    const level1Ratio = this._thresholds.summarize_hint_level1 / 100;
+    const level2Ratio = this._thresholds.context_hint_level2 / 100;
+    const level1Ratio = this._thresholds.context_hint_level1 / 100;
 
     if (ratio >= level2Ratio && this._hintState !== "level2_sent") {
       this._deliverMessage({ type: "system_notice", sender: "system", content: HINT_LEVEL2_PROMPT(pct), timestamp: Date.now() });

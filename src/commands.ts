@@ -87,8 +87,8 @@ export interface CommandContext {
   /** Inject content as a user message and trigger a new turn. */
   onTurnRequested?: (content: string) => void;
 
-  /** Trigger a manual summarize request through the TUI turn pipeline. */
-  onManualSummarizeRequested?: (instruction: string) => void;
+  /** Trigger a targeted summarize request through the TUI turn pipeline. */
+  onManualSummarizeRequested?: (opts: { targetContextIds?: string[]; focusPrompt?: string }) => void;
 
   /** Trigger a manual compact request through the TUI execution pipeline. */
   onManualCompactRequested?: (instruction: string) => void;
@@ -260,12 +260,94 @@ async function cmdNew(ctx: CommandContext, _args: string): Promise<void> {
   ctx.resetUiState();
 }
 
-async function cmdSummarize(ctx: CommandContext, args: string): Promise<void> {
+function formatSummarizeLabel(t: { kind: string; turnIndex: number; preview: string }): string {
+  const prefix = t.kind === "summary" ? "(Summary)" : `Turn ${t.turnIndex}`;
+  return `${prefix}: ${t.preview}`;
+}
+
+async function cmdSummarize(ctx: CommandContext, _args: string): Promise<void> {
   if (!ctx.onManualSummarizeRequested) {
     ctx.showMessage("Manual summarize is not available in this UI.");
     return;
   }
-  ctx.onManualSummarizeRequested(args.trim());
+
+  const session = ctx.session;
+  const targets: Array<{ kind: "turn" | "summary"; turnIndex: number; preview: string; timestamp: number; contextId?: string }> =
+    session.getSummarizeTargets?.() ?? [];
+  if (targets.length === 0) {
+    ctx.showMessage("No turns available to summarize.");
+    return;
+  }
+
+  if (!ctx.promptSelect) {
+    ctx.showMessage("Interactive summarize is not available in this UI.");
+    return;
+  }
+
+  // Step 1: Pick range start
+  const startOptions = targets.map((t, i) => ({
+    label: formatSummarizeLabel(t),
+    value: String(i),
+  }));
+  const startPick = await ctx.promptSelect({
+    message: "Summarize from:",
+    options: startOptions,
+  });
+  if (!startPick) return;
+  const startIdx = parseInt(startPick, 10);
+
+  // Step 2: Pick range end (only items at or after start)
+  const endOptions = targets.slice(startIdx).map((t, i) => ({
+    label: formatSummarizeLabel(t),
+    value: String(startIdx + i),
+  }));
+  const endPick = await ctx.promptSelect({
+    message: "Summarize to:",
+    options: endOptions,
+  });
+  if (!endPick) return;
+  const endIdx = parseInt(endPick, 10);
+
+  // Step 3: Optional focus prompt
+  let focusPrompt: string | undefined;
+  if (ctx.promptSecret) {
+    const input = await ctx.promptSecret({
+      message: "Focus prompt (optional, Enter to skip):",
+      allowEmpty: true,
+    });
+    if (input?.trim()) {
+      focusPrompt = input.trim();
+    }
+  }
+
+  // Step 4: Compute context IDs from selected range
+  const selected = targets.slice(startIdx, endIdx + 1);
+  const contextIds: string[] = [];
+
+  // Collect turn ranges for getContextIdsForTurnRange
+  const turnItems = selected.filter(t => t.kind === "turn");
+  if (turnItems.length > 0) {
+    const minTurn = turnItems[0].turnIndex;
+    const maxTurn = turnItems[turnItems.length - 1].turnIndex;
+    const turnContextIds = session.getContextIdsForTurnRange?.(minTurn, maxTurn) ?? [];
+    contextIds.push(...turnContextIds);
+  }
+
+  // Collect summary contextIds directly
+  const seen = new Set(contextIds);
+  for (const t of selected) {
+    if (t.kind === "summary" && t.contextId && !seen.has(t.contextId)) {
+      contextIds.push(t.contextId);
+      seen.add(t.contextId);
+    }
+  }
+
+  if (contextIds.length === 0) {
+    ctx.showMessage("No context groups found in the selected range.");
+    return;
+  }
+
+  ctx.onManualSummarizeRequested({ targetContextIds: contextIds, focusPrompt });
 }
 
 async function cmdCompact(ctx: CommandContext, args: string): Promise<void> {

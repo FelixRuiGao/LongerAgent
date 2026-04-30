@@ -1321,8 +1321,8 @@ export function OpenTuiApp({
       onTurnRequested: (content: string) => {
         void handleSubmit(content);
       },
-      onManualSummarizeRequested: (instruction: string) => {
-        void runManualSummarize(instruction);
+      onManualSummarizeRequested: (opts: { targetContextIds?: string[]; focusPrompt?: string }) => {
+        void runManualSummarize(opts);
       },
       onManualCompactRequested: (instruction: string) => {
         void runManualCompact(instruction);
@@ -1401,7 +1401,7 @@ export function OpenTuiApp({
     }
   }, [session, autoSave]);
 
-  const runManualSummarize = useCallback(async (instruction: string) => {
+  const runManualSummarize = useCallback(async (opts: { targetContextIds?: string[]; focusPrompt?: string }) => {
     if (typeof session.runManualSummarize !== "function") {
       session.appendStatusMessage?.("/summarize is not available in this session.");
       return;
@@ -1411,7 +1411,11 @@ export function OpenTuiApp({
     setProcessing(true);
     setPhase("prefilling");
     try {
-      await session.runManualSummarize(instruction, { signal: controller.signal });
+      await session.runManualSummarize({
+        signal: controller.signal,
+        targetContextIds: opts.targetContextIds,
+        focusPrompt: opts.focusPrompt,
+      });
       setPhase("idle");
       autoSave();
     } catch (err) {

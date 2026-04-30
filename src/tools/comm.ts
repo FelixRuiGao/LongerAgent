@@ -108,7 +108,7 @@ export const SHOW_CONTEXT_TOOL: ToolDef = {
   description:
     "Display the context distribution of the current active window. " +
     "Returns a Context Map showing all context groups with their sizes and types. " +
-    "Also causes detailed annotations to appear inline until the next distill_context call or show_context(dismiss=true), " +
+    "Also causes detailed annotations to appear inline until the next summarize call or show_context(dismiss=true), " +
     "showing exactly what each context ID covers and the approximate size of each part.",
   parameters: {
     type: "object",
@@ -125,17 +125,17 @@ export const SHOW_CONTEXT_TOOL: ToolDef = {
   tuiPolicy: { partialReveal: "immediate" },
 };
 
-export const DISTILL_CONTEXT_TOOL: ToolDef = {
-  name: "distill_context",
+export const SUMMARIZE_TOOL: ToolDef = {
+  name: "summarize",
   description:
-    "Distill groups of spatially contiguous contexts — extract and preserve valuable information, discard the rest. " +
+    "Summarize groups of spatially contiguous contexts — extract and preserve valuable information, discard the rest. " +
     "If you need to inspect the current context distribution first, call show_context.",
   parameters: {
     type: "object",
     properties: {
       operations: {
         type: "array",
-        description: "Each operation distills a group of contiguous context_ids into a preserved extract.",
+        description: "Each operation summarizes a group of contiguous context_ids into a preserved extract.",
         items: {
           type: "object",
           properties: {
@@ -146,11 +146,11 @@ export const DISTILL_CONTEXT_TOOL: ToolDef = {
             },
             content: {
               type: "string",
-              description: "Distilled content preserving decisions, key facts, file paths, code references, and unresolved issues. Length should match the information density of the original — preserve everything you'd look back at.",
+              description: "Summary content preserving decisions, key facts, file paths, code references, and unresolved issues. Length should match the information density of the original — preserve everything you'd look back at.",
             },
             reason: {
               type: "string",
-              description: "Brief reason for distilling this group.",
+              description: "Brief reason for summarizing this group.",
             },
           },
           required: ["context_ids", "content"],
@@ -159,7 +159,7 @@ export const DISTILL_CONTEXT_TOOL: ToolDef = {
     },
     required: ["operations"],
   },
-  summaryTemplate: "{agent} is distilling context",
+  summaryTemplate: "{agent} is summarizing context",
   tuiPolicy: { partialReveal: "closed" },
 };
 

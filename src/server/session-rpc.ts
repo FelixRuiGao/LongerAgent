@@ -279,8 +279,9 @@ export function registerSessionRpc(opts: SessionRpcOptions): { dispose: () => vo
   // ── Manual context commands ──
   server.on("session.summarize", (params) => {
     const p = expectObject(params, "session.summarize");
-    const instruction = optString(p, "instruction");
-    void session.runManualSummarize(instruction).catch((err) => {
+    const targetContextIds = p["targetContextIds"] as string[] | undefined;
+    const focusPrompt = optString(p, "focusPrompt");
+    void session.runManualSummarize({ targetContextIds: targetContextIds ?? undefined, focusPrompt: focusPrompt ?? undefined }).catch((err) => {
       server.emit("turn.ended", {
         status: "error",
         error: err instanceof Error ? err.message : String(err),

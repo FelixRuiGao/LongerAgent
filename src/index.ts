@@ -126,7 +126,7 @@ export {
   KILL_AGENT_TOOL,
   CHECK_STATUS_TOOL,
   AWAIT_EVENT_TOOL,
-  DISTILL_CONTEXT_TOOL,
+  SUMMARIZE_TOOL,
   ASK_TOOL,
 } from "./tools/comm.js";
 

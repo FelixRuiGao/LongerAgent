@@ -1,8 +1,10 @@
 /**
- * Log-native distill_context implementation.
+ * Log-native summarize tool implementation (append-only).
  *
- * The session log is the single source of truth. distill_context works
- * directly on LogEntry[] and inserts summary entries into the active window.
+ * The session log is the single source of truth. Summary entries are
+ * appended to the log with `coveredContextIds`; projections compute
+ * visibility dynamically via backward scan. Original entries are never
+ * mutated.
  */
 
 import { createSummary, type LogEntry } from "./log-entry.js";
@@ -33,25 +35,37 @@ interface LogValidationResult {
 export interface LogSummarizeExecutionResult {
   output: string;
   results: OperationResult[];
+  /** Summary entries to append to the log (caller appends). */
+  newEntries: LogEntry[];
 }
 
+// ------------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------------
+
 function getLogContextId(entry: LogEntry): string | null {
-  if (entry.discarded || entry.summarized) return null;
+  if (entry.discarded) return null;
   const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
   if (ctxId === undefined || ctxId === null) return null;
   return String(ctxId);
 }
 
 function isTransparentLogEntry(entry: LogEntry): boolean {
-  if (entry.discarded || entry.summarized) return true;
+  if (entry.discarded) return true;
+  if (entry.type === "compact_context") return true;
   return getLogContextId(entry) === null;
 }
 
-function buildLogSpatialIndex(entries: LogEntry[]): Map<string, LogSpatialEntry> {
+function buildLogSpatialIndex(
+  entries: LogEntry[],
+  coveredSet: Set<string>,
+): Map<string, LogSpatialEntry> {
   const index = new Map<string, LogSpatialEntry>();
   for (let i = 0; i < entries.length; i++) {
+    if (entries[i].type === "compact_context") continue;
     const ctxId = getLogContextId(entries[i]);
     if (!ctxId) continue;
+    if (coveredSet.has(ctxId)) continue;
 
     registerIndex(index, ctxId, i);
 
@@ -78,7 +92,12 @@ function findLastCompactMarkerEntryIdx(entries: LogEntry[]): number {
   return -1;
 }
 
-function collectNearbyLogContextIds(entries: LogEntry[], minIdx: number, maxIdx: number): string[] {
+function collectNearbyLogContextIds(
+  entries: LogEntry[],
+  minIdx: number,
+  maxIdx: number,
+  coveredSet: Set<string>,
+): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
   const start = Math.max(0, minIdx - 2);
@@ -86,12 +105,31 @@ function collectNearbyLogContextIds(entries: LogEntry[], minIdx: number, maxIdx:
 
   for (let i = start; i <= end; i++) {
     const ctxId = getLogContextId(entries[i]);
-    if (!ctxId || seen.has(ctxId)) continue;
+    if (!ctxId || seen.has(ctxId) || coveredSet.has(ctxId)) continue;
     seen.add(ctxId);
     ids.push(ctxId);
   }
 
   return ids;
+}
+
+/**
+ * Build the set of context IDs that are covered by existing summary entries.
+ * Used to exclude already-summarized context IDs from the spatial index.
+ */
+export function buildCoveredContextIds(entries: LogEntry[]): Set<string> {
+  const covered = new Set<string>();
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry.discarded) continue;
+    if (entry.type !== "summary") continue;
+    const meta = entry.meta as Record<string, unknown>;
+    const ids = meta.coveredContextIds as string[] | undefined;
+    if (ids) {
+      for (const id of ids) covered.add(id);
+    }
+  }
+  return covered;
 }
 
 function parseOperations(args: Record<string, unknown>): SummarizeOperation[] {
@@ -110,6 +148,7 @@ function validateLogOperation(
   spatialIndex: Map<string, LogSpatialEntry>,
   entries: LogEntry[],
   lastCompactMarkerIdx: number,
+  coveredSet: Set<string>,
 ): LogValidationResult {
   const { context_ids, summary } = op;
 
@@ -122,7 +161,7 @@ function validateLogOperation(
 
   for (const id of context_ids) {
     if (!spatialIndex.has(id)) {
-      return { valid: false, error: `context_id "${id}" not found.` };
+      return { valid: false, error: `context_id "${id}" not found in the active context.` };
     }
   }
 
@@ -147,8 +186,10 @@ function validateLogOperation(
   for (let i = minIdx; i <= maxIdx; i++) {
     if (allIndices.has(i)) continue;
     if (isTransparentLogEntry(entries[i])) continue;
+    const entryCtxId = getLogContextId(entries[i]);
+    if (entryCtxId && coveredSet.has(entryCtxId)) continue;
 
-    const nearbyIds = collectNearbyLogContextIds(entries, minIdx, maxIdx);
+    const nearbyIds = collectNearbyLogContextIds(entries, minIdx, maxIdx, coveredSet);
     return {
       valid: false,
       error:
@@ -161,20 +202,20 @@ function validateLogOperation(
   return { valid: true, mergeRange: [minIdx, maxIdx] };
 }
 
-function executeLogOperation(
+function buildSummaryEntry(
   op: SummarizeOperation,
   entries: LogEntry[],
   allocateContextId: () => string,
   allocateLogId: () => string,
   turnIndex: number,
   validation: LogValidationResult,
-): OperationResult {
+): { result: OperationResult; entry: LogEntry } {
   const [startIdx, endIdx] = validation.mergeRange!;
   const newContextId = allocateContextId();
   const summaryEntryId = allocateLogId();
 
   let summaryDepth = 1;
-  const summarizedContextIds: string[] = [];
+  const coveredContextIds: string[] = [];
   for (let i = startIdx; i <= endIdx; i++) {
     const entry = entries[i];
     if (entry.type === "summary") {
@@ -182,13 +223,12 @@ function executeLogOperation(
       summaryDepth = Math.max(summaryDepth, depth + 1);
     }
     const ctxId = getLogContextId(entry);
-    if (ctxId && !summarizedContextIds.includes(ctxId)) {
-      summarizedContextIds.push(ctxId);
+    if (ctxId && !coveredContextIds.includes(ctxId)) {
+      coveredContextIds.push(ctxId);
     }
   }
 
-  let display = `[Summary of ${op.context_ids.join(", ")} ]\n`;
-  display = display.replace(" )", ")");
+  let display = `[Summary of ${op.context_ids.join(", ")}]\n`;
   if (op.reason) {
     display += `Reason: ${op.reason}\n`;
   }
@@ -201,22 +241,17 @@ function executeLogOperation(
     display,
     content,
     newContextId,
-    summarizedContextIds,
+    coveredContextIds,
     summaryDepth,
   );
 
-  for (let i = startIdx; i <= endIdx; i++) {
-    if (entries[i].discarded) continue;
-    entries[i].summarized = true;
-    entries[i].summarizedBy = summaryEntryId;
-  }
-
-  entries.splice(startIdx, 0, summaryEntry);
-
   return {
-    success: true,
-    contextIds: op.context_ids,
-    newContextId,
+    result: {
+      success: true,
+      contextIds: op.context_ids,
+      newContextId,
+    },
+    entry: summaryEntry,
   };
 }
 
@@ -229,20 +264,20 @@ function formatExecutionOutput(ops: SummarizeOperation[], results: OperationResu
   for (const result of results) {
     const idsLabel = result.contextIds.join(", ");
     if (result.success) {
-      lines.push(`\u2713 [context_ids: ${idsLabel}] \u2192 Replaced with context_id ${String(result.newContextId)}.`);
+      lines.push(`✓ [context_ids: ${idsLabel}] → Replaced with context_id ${String(result.newContextId)}.`);
     } else {
-      lines.push(`\u2717 [context_ids: ${idsLabel}] \u2192 Error: ${result.error}`);
+      lines.push(`✗ [context_ids: ${idsLabel}] → Error: ${result.error}`);
     }
   }
   return lines.join("\n");
 }
 
 /**
- * Truncate long distill content in projected tool arguments.
- * The full content is preserved in the distilled entry; this only shrinks the
+ * Truncate long summarize content in projected tool arguments.
+ * The full content is preserved in the summary entry; this only shrinks the
  * duplicated copy inside the tool_call before provider submission.
  */
-export function truncateDistillContent(content: string, newContextId?: string | number): string {
+export function truncateSummarizeContent(content: string, newContextId?: string | number): string {
   if (content.length <= 100) return content;
 
   let cutPoint: number;
@@ -258,6 +293,10 @@ export function truncateDistillContent(content: string, newContextId?: string | 
   return `${kept}... [truncated — full content preserved${ctxRef}]`;
 }
 
+/**
+ * Execute summarize operations on the log. Append-only: original entries are
+ * never mutated. Returns new summary entries for the caller to append.
+ */
 export function execSummarizeContextOnLog(
   args: Record<string, unknown>,
   entries: LogEntry[],
@@ -275,13 +314,15 @@ export function execSummarizeContextOnLog(
     return {
       output: "Error: no operations provided.",
       results,
+      newEntries: [],
     };
   }
 
-  const spatialIndex = buildLogSpatialIndex(entries);
+  const coveredSet = buildCoveredContextIds(entries);
+  const spatialIndex = buildLogSpatialIndex(entries, coveredSet);
   const lastCompactMarkerIdx = findLastCompactMarkerEntryIdx(entries);
-  const validations: Array<{ op: SummarizeOperation; validation: LogValidationResult; opIndex: number }> = [];
   const orderedResults: Array<OperationResult | undefined> = new Array(ops.length);
+  const newEntries: LogEntry[] = [];
   const claimedIds = new Set<string>();
 
   for (let opIndex = 0; opIndex < ops.length; opIndex++) {
@@ -296,7 +337,7 @@ export function execSummarizeContextOnLog(
       continue;
     }
 
-    const validation = validateLogOperation(op, spatialIndex, entries, lastCompactMarkerIdx);
+    const validation = validateLogOperation(op, spatialIndex, entries, lastCompactMarkerIdx, coveredSet);
     if (!validation.valid) {
       orderedResults[opIndex] = {
         success: false,
@@ -306,13 +347,7 @@ export function execSummarizeContextOnLog(
       continue;
     }
 
-    validations.push({ op, validation, opIndex });
-    for (const id of op.context_ids) claimedIds.add(id);
-  }
-
-  validations.sort((a, b) => b.validation.mergeRange![0] - a.validation.mergeRange![0]);
-  for (const { op, validation, opIndex } of validations) {
-    orderedResults[opIndex] = executeLogOperation(
+    const { result, entry } = buildSummaryEntry(
       op,
       entries,
       contextIdAllocator,
@@ -320,6 +355,9 @@ export function execSummarizeContextOnLog(
       turnIndex,
       validation,
     );
+    orderedResults[opIndex] = result;
+    newEntries.push(entry);
+    for (const id of op.context_ids) claimedIds.add(id);
   }
 
   const finalizedResults = orderedResults.map((result, idx) => result ?? ({
@@ -331,5 +369,6 @@ export function execSummarizeContextOnLog(
   return {
     output: formatExecutionOutput(ops, finalizedResults),
     results: finalizedResults,
+    newEntries,
   };
 }

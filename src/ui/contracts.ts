@@ -62,7 +62,9 @@ export interface Session {
   rewind?(toTurnIndex: number): { removed: number; error?: string };
   resumePendingTurn?(options?: { signal?: AbortSignal }): Promise<string>;
   hasPendingTurnToResume?(): boolean;
-  runManualSummarize?(instruction?: string, options?: { signal?: AbortSignal }): Promise<string>;
+  runManualSummarize?(options?: { signal?: AbortSignal; targetContextIds?: string[]; focusPrompt?: string }): Promise<string>;
+  getSummarizeTargets?(): Array<{ kind: "turn" | "summary"; turnIndex: number; preview: string; timestamp: number; contextId?: string }>;
+  getContextIdsForTurnRange?(startTurn: number, endTurn: number): string[];
   runManualCompact?(instruction?: string, options?: { signal?: AbortSignal }): Promise<void>;
   thinkingLevel?: string;
   currentModelConfigName?: string;

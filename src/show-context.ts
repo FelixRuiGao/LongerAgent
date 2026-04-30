@@ -10,6 +10,7 @@
 
 import { encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
 import type { LogEntry } from "./log-entry.js";
+import { buildCoveredContextIds } from "./summarize-context.js";
 
 // ------------------------------------------------------------------
 // Types
@@ -167,7 +168,7 @@ function formatToolCallArgs(toolName: string, args: Record<string, unknown>): st
       if (qs?.length) return truncateText(String(qs[0]?.question ?? ""), 30).slice(1, -1);
       return "...";
     }
-    case "distill_context": {
+    case "summarize": {
       const ops = args["operations"] as unknown[] | undefined;
       return `${ops?.length ?? 0} operations`;
     }
@@ -217,7 +218,7 @@ function formatToolResultBrief(
 // ------------------------------------------------------------------
 
 function getLogContextId(entry: LogEntry): string | null {
-  if (entry.discarded || entry.summarized) return null;
+  if (entry.discarded) return null;
   if (entry.type === "compact_context") {
     const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
     return ctxId ? String(ctxId) : null;
@@ -241,6 +242,9 @@ export function buildContextGroups(entries: LogEntry[]): ContextGroup[] {
     }
   }
 
+  // Build summary coverage set — entries with covered contextIds are hidden
+  const coveredSet = buildCoveredContextIds(entries);
+
   // Build ordered groups
   const groupMap = new Map<string, ContextGroup>();
   const groupOrder: string[] = [];
@@ -249,6 +253,7 @@ export function buildContextGroups(entries: LogEntry[]): ContextGroup[] {
     const entry = entries[i];
     const ctxId = getLogContextId(entry);
     if (!ctxId) continue;
+    if (coveredSet.has(ctxId)) continue;
 
     let group = groupMap.get(ctxId);
     if (!group) {

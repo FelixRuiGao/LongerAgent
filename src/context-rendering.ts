@@ -209,7 +209,7 @@ export function mergeConsecutiveSameRole(
 
     if (role === "assistant" && msg["tool_calls"]) {
       // If the previous message is a pure-text assistant (e.g. a summary
-      // inserted by distill_context), merge its text into this message
+      // inserted by summarize), merge its text into this message
       // to avoid consecutive model turns that violate strict
       // role-alternation requirements.
       const prev = result.length > 0 ? result[result.length - 1] : null;

@@ -8,7 +8,46 @@
 import type { LogEntry, TuiDisplayKind } from "./log-entry.js";
 import type { ConversationEntry, ConversationEntryKind } from "./ui/contracts.js";
 import { mergeConsecutiveSameRole } from "./context-rendering.js";
-import { truncateDistillContent } from "./summarize-context.js";
+import { truncateSummarizeContent } from "./summarize-context.js";
+
+// ------------------------------------------------------------------
+// Summary visibility (append-only backward scan)
+// ------------------------------------------------------------------
+
+/**
+ * Build the set of context IDs that should be hidden because a later
+ * summary entry covers them. Also returns the set of summary context IDs
+ * that are themselves superseded by an even later summary.
+ *
+ * Algorithm: walk entries backward. Every summary's coveredContextIds are
+ * added to the hidden set. A summary whose own contextId is already in
+ * the hidden set is itself superseded (hidden).
+ */
+function buildSummaryCoveredSet(entries: LogEntry[], windowStartIdx: number): Set<string> {
+  const covered = new Set<string>();
+  for (let i = entries.length - 1; i >= windowStartIdx; i--) {
+    const entry = entries[i];
+    if (entry.discarded || entry.type !== "summary") continue;
+    const meta = entry.meta as Record<string, unknown>;
+    const ids = meta.coveredContextIds as string[] | undefined;
+    if (ids) {
+      for (const id of ids) covered.add(id);
+    }
+  }
+  return covered;
+}
+
+/**
+ * Check whether a specific entry should be hidden by summary coverage.
+ * A summary entry is hidden if its own contextId is in the covered set.
+ * A non-summary entry is hidden if its contextId is in the covered set.
+ */
+function isCoveredBySummary(entry: LogEntry, coveredSet: Set<string>): boolean {
+  if (coveredSet.size === 0) return false;
+  const ctxId = (entry.meta as Record<string, unknown>)["contextId"];
+  if (ctxId === undefined || ctxId === null) return false;
+  return coveredSet.has(String(ctxId));
+}
 
 // ------------------------------------------------------------------
 // TuiDisplayKind → ConversationEntryKind mapping
@@ -46,10 +85,10 @@ const PRIMARY_ROUND_ENTRY_TYPES = new Set<LogEntry["type"]>([
   "tool_result",
 ]);
 
-function isProjectableTuiEntry(entry: LogEntry): boolean {
+function isProjectableTuiEntry(entry: LogEntry, coveredSet?: Set<string>): boolean {
   if (entry.discarded) return false;
   if (!entry.tuiVisible) return false;
-  if (entry.type === "summary") return false;
+  if (coveredSet && isCoveredBySummary(entry, coveredSet)) return false;
   if (
     entry.type === "sub_agent_start" ||
     entry.type === "sub_agent_tool_call" ||
@@ -113,6 +152,12 @@ function toConversationEntry(
     id: entry.id,
   };
   if (entry.meta["tuiDim"]) ce.dim = true;
+  if (entry.type === "summary") {
+    ce.meta ??= {};
+    ce.meta.isSummary = true;
+    ce.meta.summaryDepth = entry.meta["summaryDepth"] ?? 1;
+    ce.meta.coveredContextIds = entry.meta["coveredContextIds"];
+  }
   if (entry.type === "status" && entry.meta["statusType"]) {
     ce.meta ??= {};
     ce.meta.statusType = entry.meta["statusType"];
@@ -237,9 +282,9 @@ function toConversationEntries(
   return entries;
 }
 
-function isPrimaryRoundEntry(entry: LogEntry): boolean {
+function isPrimaryRoundEntry(entry: LogEntry, coveredSet?: Set<string>): boolean {
   return (
-    isProjectableTuiEntry(entry) &&
+    isProjectableTuiEntry(entry, coveredSet) &&
     entry.roundIndex !== undefined &&
     PRIMARY_ROUND_ENTRY_TYPES.has(entry.type)
   );
@@ -295,7 +340,7 @@ function buildToolElapsedMap(entries: LogEntry[]): Map<string, number> {
   return elapsed;
 }
 
-function projectTuiWindow(entries: LogEntry[]): ConversationEntry[] {
+function projectTuiWindow(entries: LogEntry[], coveredSet?: Set<string>): ConversationEntry[] {
   const result: ConversationEntry[] = [];
   const pendingSubAgentCalls: LogEntry[] = [];
   const toolElapsedMap = buildToolElapsedMap(entries);
@@ -310,7 +355,7 @@ function projectTuiWindow(entries: LogEntry[]): ConversationEntry[] {
   while (i < entries.length) {
     const entry = entries[i];
 
-    if (!isProjectableTuiEntry(entry)) {
+    if (!isProjectableTuiEntry(entry, coveredSet)) {
       i++;
       continue;
     }
@@ -321,7 +366,7 @@ function projectTuiWindow(entries: LogEntry[]): ConversationEntry[] {
       continue;
     }
 
-    if (isPrimaryRoundEntry(entry)) {
+    if (isPrimaryRoundEntry(entry, coveredSet)) {
       if (pendingSubAgentCalls.length > 0) {
         flushPendingSubAgentCalls();
       }
@@ -336,7 +381,7 @@ function projectTuiWindow(entries: LogEntry[]): ConversationEntry[] {
       while (i < entries.length) {
         const candidate = entries[i];
 
-        if (!isProjectableTuiEntry(candidate)) {
+        if (!isProjectableTuiEntry(candidate, coveredSet)) {
           i++;
           continue;
         }
@@ -437,6 +482,7 @@ export function projectToTuiEntries(
   options?: TuiProjectionOptions,
 ): ConversationEntry[] {
   const threshold = options?.compactFoldThreshold ?? 3;
+  const coveredSet = buildSummaryCoveredSet(entries, 0);
 
   // Find all compact_marker indices
   const compactMarkerIndices: number[] = [];
@@ -453,7 +499,7 @@ export function projectToTuiEntries(
   if (compactMarkerIndices.length >= threshold) {
     const foldUpToMarker = compactMarkerIndices[compactMarkerIndices.length - threshold];
     foldEndIdx = foldUpToMarker;
-    foldedCount = projectTuiWindow(entries.slice(0, foldEndIdx + 1)).length;
+    foldedCount = projectTuiWindow(entries.slice(0, foldEndIdx + 1), coveredSet).length;
     foldedCompactCount = compactMarkerIndices.length - threshold + 1;
   }
 
@@ -467,7 +513,7 @@ export function projectToTuiEntries(
     });
   }
 
-  result.push(...projectTuiWindow(entries.slice(foldEndIdx + 1)));
+  result.push(...projectTuiWindow(entries.slice(foldEndIdx + 1), coveredSet));
 
   return result;
 }
@@ -497,8 +543,8 @@ export interface ApiProjectionOptions {
   resolveImageRef?: (refPath: string) => { data: string; media_type: string } | null;
   /** Merge consecutive same-role messages for providers that require alternation. */
   requiresAlternatingRoles?: boolean;
-  /** Truncate distill_context tool-call content before provider submission. */
-  truncateDistillToolArgs?: boolean;
+  /** Truncate summarize tool-call content before provider submission. */
+  truncateSummarizeToolArgs?: boolean;
   /** Enforce provider tool-call ordering invariants before submission. */
   enforceToolCallProtocol?: boolean;
   /**
@@ -518,7 +564,7 @@ const USER_MESSAGE_HEADER = "[User Message]";
  *  1. Re-render system prompt (or use log's)
  *  2. Find last compact_marker → API window start
  *  3. Insert compact_context if present
- *  4. Iterate entries, skip: apiRole===null, summarized, discarded, archived with null content
+ *  4. Iterate entries, skip: apiRole===null, covered by summary, discarded, archived with null content
  *  5. Group by roundIndex to build assistant messages
  */
 export function projectToApiMessages(
@@ -543,12 +589,17 @@ export function projectToApiMessages(
     }
   }
 
+  // Build summary coverage set for the active window
+  const coveredSet = buildSummaryCoveredSet(entries, windowStartIdx);
+
   // Step 3: Find compact_context for the current window
+  // compact_context is always injected regardless of coveredSet — it is the
+  // continuation prompt after compaction and must never be hidden by a summary.
   let compactContextContent: unknown = null;
   let compactContextId: string | undefined;
   for (let i = windowStartIdx; i < entries.length; i++) {
     const e = entries[i];
-    if (e.type === "compact_context" && !e.discarded && !e.summarized) {
+    if (e.type === "compact_context" && !e.discarded) {
       compactContextContent = e.content;
       const ctxId = (e.meta as Record<string, unknown>)["contextId"];
       compactContextId = ctxId !== undefined && ctxId !== null ? String(ctxId) : undefined;
@@ -559,13 +610,18 @@ export function projectToApiMessages(
   if (!compactContextContent && windowStartIdx > 0) {
     for (let i = windowStartIdx; i < entries.length && i < windowStartIdx + 5; i++) {
       const e = entries[i];
-      if (e.type === "compact_context" && !e.discarded && !e.summarized) {
+      if (e.type === "compact_context" && !e.discarded) {
         compactContextContent = e.content;
         const ctxId = (e.meta as Record<string, unknown>)["contextId"];
         compactContextId = ctxId !== undefined && ctxId !== null ? String(ctxId) : undefined;
         break;
       }
     }
+  }
+
+  // Defense: ensure compact_context's contextId is never in coveredSet
+  if (compactContextId && coveredSet.has(compactContextId)) {
+    coveredSet.delete(compactContextId);
   }
 
   // Copy annotations map so we can delete entries after first injection per group
@@ -598,11 +654,11 @@ export function projectToApiMessages(
 
   // Step 4-5: Collect window entries and group by round
   const windowEntries = entries.slice(windowStartIdx).filter((e) => {
-    if (e.summarized) return false;
     if (e.discarded) return false;
     if (e.archived && e.content === null) return false;
     if (e.type === "system_prompt") return false; // already handled
     if (e.type === "compact_context") return false; // already handled
+    if (isCoveredBySummary(e, coveredSet)) return false;
     // reasoning has apiRole=null but is grouped with assistant entries
     if (e.type === "reasoning") return true;
     if (e.apiRole === null) return false;
@@ -723,7 +779,7 @@ export function projectToApiMessages(
       if (entry.type === "summary") {
         userMsg["_is_summary"] = true;
         userMsg["_summary_depth"] = (entry.meta as Record<string, unknown>)["summaryDepth"] ?? 1;
-        userMsg["_summarized_ids"] = (entry.meta as Record<string, unknown>)["summarizedEntryIds"] ?? [];
+        userMsg["_covered_context_ids"] = (entry.meta as Record<string, unknown>)["coveredContextIds"] ?? [];
       }
       messages.push(userMsg);
       i++;
@@ -747,9 +803,9 @@ export function projectToApiMessages(
     );
   }
 
-  let projected = options?.truncateDistillToolArgs === false
+  let projected = options?.truncateSummarizeToolArgs === false
     ? messages
-    : truncateDistillToolArgs(messages);
+    : truncateSummarizeToolArgs(messages);
 
   if (options?.enforceToolCallProtocol) {
     validateToolCallProtocol(projected);
@@ -941,7 +997,7 @@ function injectLabeledUserContext(
   }
 }
 
-function truncateDistillToolArgs(
+function truncateSummarizeToolArgs(
   messages: InternalMessage[],
 ): InternalMessage[] {
   return messages.map((msg) => {
@@ -950,7 +1006,7 @@ function truncateDistillToolArgs(
 
     let modified = false;
     const nextToolCalls = toolCalls.map((tc) => {
-      if ((tc["name"] as string) !== "distill_context") return tc;
+      if ((tc["name"] as string) !== "summarize") return tc;
 
       const args = tc["arguments"] as Record<string, unknown> | undefined;
       const operations = args?.["operations"] as Array<Record<string, unknown>> | undefined;
@@ -971,7 +1027,7 @@ function truncateDistillToolArgs(
         const { _result_context_id: _removed, ...rest } = op;
         return {
           ...rest,
-          content: truncateDistillContent(content, resultCtxId),
+          content: truncateSummarizeContent(content, resultCtxId),
         };
       });
 

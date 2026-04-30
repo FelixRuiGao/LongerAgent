@@ -34,6 +34,8 @@ export type LogEntryType =
   | "error"
   | "token_update";
 
+export type TurnKind = "user" | "summarize" | "compact";
+
 export type TuiDisplayKind =
   | "user"
   | "agent_result"
@@ -94,12 +96,6 @@ export interface LogEntry {
   archived: boolean;
 
   // ---- State markers ----
-
-  /** Replaced by distill_context (skip in projections). */
-  summarized?: boolean;
-
-  /** The summary entry ID that replaced this entry. */
-  summarizedBy?: string;
 
   /** Discarded entry (skip in projections). Used for compact rollback etc. */
   discarded?: boolean;
@@ -233,9 +229,10 @@ export function createSystemPrompt(
 export function createTurnStart(
   id: string,
   turnIndex: number,
+  turnKind: TurnKind = "user",
 ): LogEntry {
   return baseEntry(id, "turn_start", turnIndex, {
-    meta: { turnIndex, timestamp: Date.now() },
+    meta: { turnIndex, turnKind, timestamp: Date.now() },
   });
 }
 
@@ -466,7 +463,7 @@ export function createSummary(
   display: string,
   content: string,
   contextId: string,
-  summarizedEntryIds: string[],
+  coveredContextIds: string[],
   summaryDepth: number,
 ): LogEntry {
   return baseEntry(id, "summary", turnIndex, {
@@ -475,7 +472,7 @@ export function createSummary(
     display,
     apiRole: "user",
     content,
-    meta: { contextId, summarizedEntryIds, summaryDepth },
+    meta: { contextId, coveredContextIds, summaryDepth },
   });
 }
 

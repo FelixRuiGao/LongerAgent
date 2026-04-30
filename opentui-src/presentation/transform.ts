@@ -103,6 +103,18 @@ function isPlanFileOperation(
 // ------------------------------------------------------------------
 
 function transformUser(entry: ReconciledConversationEntry): PresentationEntry {
+  const meta = getMeta(entry);
+  if (meta.isSummary) {
+    return {
+      id: entry.id,
+      contentVersion: entry.contentVersion,
+      kind: "system",
+      state: "done",
+      systemText: entry.entry.text,
+      systemSeverity: "compact",
+    };
+  }
+
   const { text, queued } = extractUserText(entry.entry.text);
   const attachments = extractAttachments(entry.entry.text);
 
