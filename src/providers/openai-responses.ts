@@ -543,29 +543,90 @@ export class OpenAIResponsesProvider extends BaseProvider {
 
     const textParts: string[] = [];
     const reasoningParts: string[] = [];
-    type StreamToolAcc = { name: string; rawArguments: string; closed: boolean };
+    type StreamToolAcc = {
+      callId: string;
+      itemId?: string;
+      name: string;
+      rawArguments: string;
+      closed: boolean;
+    };
     const toolAcc: Map<string, StreamToolAcc> = new Map();
+    const itemIdToCallId: Map<string, string> = new Map();
     let activeFunctionCallId: string | null = null;
     let finalResponse: Record<string, unknown> | null = null;
 
-    const emitToolPartial = (callId: string): void => {
-      const acc = toolAcc.get(callId);
-      if (!acc || !acc.name || !onToolCallPartial) return;
-      onToolCallPartial(callId, acc.name, acc.rawArguments);
+    const getEventString = (value: unknown): string => typeof value === "string" ? value : "";
+
+    const resolveToolAcc = (id: string | null): StreamToolAcc | undefined => {
+      if (!id) return undefined;
+      const callId = itemIdToCallId.get(id) ?? id;
+      return toolAcc.get(callId);
     };
 
-    const closeToolCall = (callId: string | null, argsOverride?: string): void => {
-      if (!callId) return;
-      const acc = toolAcc.get(callId);
+    const ensureToolAcc = (ids: {
+      callId?: string;
+      itemId?: string;
+      name?: string;
+    }): StreamToolAcc | null => {
+      const itemId = ids.itemId || undefined;
+      const requestedCallId = ids.callId || (itemId ? itemIdToCallId.get(itemId) : undefined) || itemId;
+      if (!requestedCallId) return null;
+
+      let acc = toolAcc.get(requestedCallId);
+
+      // Standard Responses events stream argument deltas by output item id.
+      // If a delta arrives before the call_id is known, merge the provisional
+      // item-id record into the stable call_id record once output_item.added lands.
+      if (!acc && itemId && ids.callId && ids.callId !== itemId) {
+        const provisional = toolAcc.get(itemId);
+        if (provisional) {
+          toolAcc.delete(itemId);
+          provisional.callId = ids.callId;
+          acc = provisional;
+          toolAcc.set(ids.callId, acc);
+          if (activeFunctionCallId === itemId) {
+            activeFunctionCallId = ids.callId;
+          }
+        }
+      }
+
+      if (!acc) {
+        acc = {
+          callId: requestedCallId,
+          itemId,
+          name: "",
+          rawArguments: "",
+          closed: false,
+        };
+        toolAcc.set(requestedCallId, acc);
+      }
+
+      if (itemId) {
+        acc.itemId = itemId;
+        itemIdToCallId.set(itemId, acc.callId);
+      }
+      if (ids.name) {
+        acc.name = ids.name;
+      }
+      return acc;
+    };
+
+    const emitToolPartial = (acc: StreamToolAcc | undefined): void => {
+      if (!acc || !acc.name || !onToolCallPartial) return;
+      onToolCallPartial(acc.callId, acc.name, acc.rawArguments);
+    };
+
+    const closeToolCall = (id: string | null, argsOverride?: string): void => {
+      const acc = resolveToolAcc(id);
       if (!acc || acc.closed || !acc.name) return;
       if (typeof argsOverride === "string") {
         acc.rawArguments = argsOverride;
       }
       acc.closed = true;
-      if (activeFunctionCallId === callId) {
+      if (activeFunctionCallId === acc.callId || activeFunctionCallId === acc.itemId) {
         activeFunctionCallId = null;
       }
-      onToolCallClosed?.(finalizeToolCall(callId, acc.name, acc.rawArguments, `${acc.name} stream`));
+      onToolCallClosed?.(finalizeToolCall(acc.callId, acc.name, acc.rawArguments, `${acc.name} stream`));
     };
 
     const responseStream = await (this._client as unknown as { responses: { create: (params: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<AsyncIterable<Record<string, unknown>>> } }).responses.create(kwargs, requestOptions);
@@ -588,40 +649,36 @@ export class OpenAIResponsesProvider extends BaseProvider {
           if (onReasoningChunk) onReasoningChunk(delta);
         }
       } else if (eventType === "response.function_call_arguments.delta") {
-        const callId =
-          (event["call_id"] as string) || (event["item_id"] as string) || "";
+        const itemId = getEventString(event["item_id"]);
+        const callId = getEventString(event["call_id"]);
         const delta = (event["delta"] as string) || "";
-        if (!toolAcc.has(callId)) {
-          toolAcc.set(callId, { name: "", rawArguments: "", closed: false });
-        }
+        const acc = ensureToolAcc({ callId, itemId });
         if (delta) {
-          const acc = toolAcc.get(callId)!;
-          acc.closed = false;
+          if (!acc) continue;
           acc.rawArguments += delta;
-          emitToolPartial(callId);
+          acc.closed = false;
+          emitToolPartial(acc);
         }
-        activeFunctionCallId = callId || activeFunctionCallId;
+        activeFunctionCallId = acc?.callId ?? (callId || itemId || activeFunctionCallId);
       } else if (eventType === "response.output_item.added") {
         const item = event["item"] as Record<string, unknown> | undefined;
         if (item && item["type"] !== "function_call") {
           closeToolCall(activeFunctionCallId);
         }
         if (item && item["type"] === "function_call") {
-          const callId = (item["call_id"] as string) || "";
-          const name = (item["name"] as string) || "";
-          if (callId) {
-            if (activeFunctionCallId && activeFunctionCallId !== callId) {
+          const itemId = getEventString(item["id"]);
+          const callId = getEventString(item["call_id"]) || itemId;
+          const name = getEventString(item["name"]);
+          if (callId || itemId) {
+            if (activeFunctionCallId && activeFunctionCallId !== callId && activeFunctionCallId !== itemId) {
               closeToolCall(activeFunctionCallId);
             }
-            if (!toolAcc.has(callId)) {
-              toolAcc.set(callId, { name, rawArguments: "", closed: false });
-            } else {
-              const acc = toolAcc.get(callId)!;
-              acc.name = name;
+            const acc = ensureToolAcc({ callId, itemId, name });
+            if (acc) {
               acc.closed = false;
+              emitToolPartial(acc);
+              activeFunctionCallId = acc.callId;
             }
-            emitToolPartial(callId);
-            activeFunctionCallId = callId;
           }
         }
       } else if (
@@ -630,22 +687,27 @@ export class OpenAIResponsesProvider extends BaseProvider {
       ) {
         const item = event["item"] as Record<string, unknown> | undefined;
         if (item?.["type"] === "function_call") {
-          const callId = (item["call_id"] as string) || (item["id"] as string) || "";
+          const itemId = getEventString(item["id"]);
+          const callId = getEventString(item["call_id"]) || itemId;
+          const name = getEventString(item["name"]);
+          const acc = ensureToolAcc({ callId, itemId, name });
           const argsStr = typeof item["arguments"] === "string"
             ? item["arguments"] as string
-            : (callId ? (toolAcc.get(callId)?.rawArguments ?? "") : "");
-          closeToolCall(callId || activeFunctionCallId, argsStr);
+            : (acc?.rawArguments ?? "");
+          closeToolCall(acc?.callId ?? (callId || itemId || activeFunctionCallId), argsStr);
         }
       } else if (
         eventType === "response.function_call_arguments.done"
         || eventType === "response.function_call.done"
       ) {
-        const callId =
-          (event["call_id"] as string) || (event["item_id"] as string) || "";
+        const itemId = getEventString(event["item_id"]);
+        const callId = getEventString(event["call_id"]);
+        const name = getEventString(event["name"]);
+        const acc = ensureToolAcc({ callId, itemId, name });
         const argsStr = typeof event["arguments"] === "string"
           ? event["arguments"] as string
-          : (callId ? (toolAcc.get(callId)?.rawArguments ?? "") : "");
-        closeToolCall(callId || activeFunctionCallId, argsStr);
+          : (acc?.rawArguments ?? "");
+        closeToolCall(acc?.callId ?? (callId || itemId || activeFunctionCallId), argsStr);
       } else if (
         eventType === "response.completed"
         || eventType === "response.incomplete"

@@ -11,7 +11,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { SessionStore, LocalProviderConfig, ModelSelectionState, FermiSettings, ProviderEntry, ModelTierEntry } from "./persistence.js";
 import { loadLog, validateAndRepairLog, saveModelSelectionState, saveSettings, globalSettingsPath, loadGlobalSettings } from "./persistence.js";
 import { setDotenvKey } from "./dotenv.js";
@@ -124,6 +124,10 @@ export interface CommandOption {
   label: string;
   /** Value submitted as the command argument when selected. */
   value: string;
+  /** Right-aligned detail text shown alongside the label (e.g., "+42 -18"). */
+  detail?: string;
+  /** Non-submittable row used for headings or notices. */
+  disabled?: boolean;
   /** Child options for hierarchical selection (e.g., provider → model). */
   children?: CommandOption[];
   /** Checked state for checkbox picker mode. */
@@ -156,6 +160,8 @@ export interface SlashCommand {
   checkboxMode?: boolean;
   /** Alternative names that also match during search (e.g. ["/resume"] for "/sessions"). */
   aliases?: string[];
+  /** Optional display title for the picker; the command name is still submitted. */
+  pickerTitle?: string;
 }
 
 export class CommandExitSignal extends Error {
@@ -367,44 +373,31 @@ async function cmdResume(ctx: CommandContext, args: string): Promise<void> {
 
   const sessions = store.listSessions();
   if (sessions.length === 0) {
-    ctx.showMessage("No saved sessions found.");
+    ctx.showMessage("No previous sessions in this project.");
     return;
   }
 
   const trimmed = args.trim();
   if (!trimmed) {
-    // List sessions
-    const lines: string[] = ["Recent Sessions:"];
-    const shown = sessions.slice(0, 10);
-    for (let i = 0; i < shown.length; i++) {
-      const s = shown[i];
-      const created = s.created
-        ? s.created.slice(0, 19).replace("T", " ")
-        : "?";
-      const displayName = truncateDisplayText(s.title || s.summary || "(empty)", 25);
-      lines.push(`  ${i + 1}  ${created}  ${s.turns}t  ${displayName}`);
-    }
-    lines.push("");
-    lines.push("Use /resume <number> to load a session.");
+    const lines = ["Sessions", "", ...buildSessionTableRows(sessions)];
+    lines.push("", "Use /sessions <sessionId> to load a session.");
     ctx.showMessage(lines.join("\n"));
     return;
   }
 
   // Load specific session
-  const idx = parseInt(trimmed, 10) - 1;
-  if (isNaN(idx)) {
-    ctx.showMessage(`Invalid session number: ${trimmed}`);
-    return;
-  }
-  if (idx < 0 || idx >= sessions.length) {
-    ctx.showMessage(`Session number out of range (1-${sessions.length}).`);
+  const numericIdx = /^\d+$/.test(trimmed) ? parseInt(trimmed, 10) - 1 : Number.NaN;
+  const target = Number.isInteger(numericIdx)
+    ? sessions[numericIdx]
+    : sessions.find((s) => s.sessionId === trimmed || basename(s.path) === trimmed);
+  if (!target) {
+    ctx.showMessage(`Session not found: ${trimmed}`);
     return;
   }
 
   // Auto-save current first
   ctx.autoSave();
 
-  const target = sessions[idx];
   const session = ctx.session;
   const logJsonPath = join(target.path, "log.json");
   const hasLogJson = existsSync(logJsonPath);
@@ -458,30 +451,69 @@ async function cmdResume(ctx: CommandContext, args: string): Promise<void> {
   store.attachToExistingSession(target.path);
 }
 
-function buildResumeOptionLabel(
-  index: number,
-  created: string | undefined,
-  turns: number | undefined,
-  summary: string | undefined,
-): string {
-  const date = (created || "").slice(0, 16);
-  const normalized = truncateDisplayText((summary || "").replace(/\s+/g, " ").trim(), 25);
-  return `${index + 1}. ${date}  ${turns ?? 0} turns  ${normalized}`;
+function formatRelativeTime(value: string | undefined, now: number): string {
+  const ms = value ? Date.parse(value) : Number.NaN;
+  if (!Number.isFinite(ms)) return "unknown";
+  const deltaSeconds = Math.max(0, Math.round((now - ms) / 1000));
+  if (deltaSeconds < 60) return deltaSeconds <= 1 ? "just now" : `${deltaSeconds}s ago`;
+  const minutes = Math.floor(deltaSeconds / 60);
+  if (minutes < 60) return minutes === 1 ? "1 min ago" : `${minutes} mins ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
-function truncateDisplayText(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  return Array.from(normalized).slice(0, maxChars).join("");
+function sessionTitle(session: {
+  sessionId?: string;
+  path: string;
+  title?: string;
+  summary?: string;
+}): string {
+  const customTitle = session.title?.trim();
+  if (customTitle) return customTitle;
+  const autoSummary = session.summary?.replace(/\s+/g, " ").trim();
+  if (autoSummary) return autoSummary;
+  return session.sessionId || basename(session.path);
+}
+
+function buildSessionTableRows(
+  sessions: Array<{ sessionId?: string; path: string; created?: string; lastActiveAt?: string; summary?: string; title?: string }>,
+): string[] {
+  const now = Date.now();
+  const createdValues = sessions.map((s) => formatRelativeTime(s.created, now));
+  const activeValues = sessions.map((s) => formatRelativeTime(s.lastActiveAt, now));
+  const createdHeader = "Created";
+  const activeHeader = "Active";
+  const titleHeader = "Title";
+  const createdWidth = Math.max(createdHeader.length, ...createdValues.map((v) => v.length));
+  const activeWidth = Math.max(activeHeader.length, ...activeValues.map((v) => v.length));
+  const gap = "  ";
+  const rows = [
+    `${createdHeader.padEnd(createdWidth)}${gap}${activeHeader.padEnd(activeWidth)}${gap}${titleHeader}`,
+  ];
+  for (let i = 0; i < sessions.length; i += 1) {
+    const s = sessions[i]!;
+    rows.push(
+      `${(createdValues[i] ?? "").padEnd(createdWidth)}${gap}${(activeValues[i] ?? "").padEnd(activeWidth)}${gap}${sessionTitle(s)}`,
+    );
+  }
+  return rows;
 }
 
 function resumeOptions(ctx: CommandOptionsContext): CommandOption[] {
   const store = ctx.store;
   if (!store) return [];
   const sessions = store.listSessions();
-  return sessions.map((s, i) => ({
-    label: buildResumeOptionLabel(i, s.created, s.turns, s.title || s.summary),
-    value: String(i + 1),
-  }));
+  if (sessions.length === 0) return [];
+  const rows = buildSessionTableRows(sessions);
+  return [
+    { label: rows[0] ?? "Created  Active  Title", value: "", disabled: true },
+    ...sessions.map((s, i) => ({
+      label: rows[i + 1] ?? sessionTitle(s),
+      value: s.sessionId,
+    })),
+  ];
 }
 
 async function cmdQuit(ctx: CommandContext, _args: string): Promise<void> {
@@ -1602,7 +1634,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/help", description: "Show commands and shortcuts", handler: cmdHelp });
   registry.register({ name: "/compact", description: "Manually compact the active context", handler: cmdCompact });
   registry.register({ name: "/new", description: "Start a new session", handler: cmdNew });
-  registry.register({ name: "/sessions", description: "Resume a previous session", handler: cmdResume, options: resumeOptions, aliases: ["/resume"] });
+  registry.register({ name: "/sessions", description: "Resume a previous session", handler: cmdResume, options: resumeOptions, aliases: ["/resume"], pickerTitle: "Sessions" });
   registry.register({ name: "/summarize", description: "Manually summarize older context", handler: cmdSummarize });
   registry.register({ name: "/model", description: "Switch model", handler: cmdModel, options: modelOptions });
   registry.register({ name: "/tier", description: "Configure sub-agent model tiers", handler: cmdTier, options: tierOptions });
@@ -1918,55 +1950,178 @@ function persistPermissionMode(ctx: CommandContext): void {
 // /rewind — rewind to a previous turn
 // ------------------------------------------------------------------
 
+function formatRewindDetail(target: {
+  fileCount: number;
+  additions: number;
+  deletions: number;
+  filesReverted: boolean;
+}): string {
+  if (target.filesReverted) return "Changes reverted";
+  if (target.fileCount === 0) return "No code changes";
+  const parts: string[] = [];
+  if (target.additions > 0) parts.push(`+${target.additions}`);
+  if (target.deletions > 0) parts.push(`-${target.deletions}`);
+  const n = target.fileCount;
+  parts.push(`${n} file${n > 1 ? "s" : ""}`);
+  return parts.join(" ");
+}
+
 function rewindOptions(ctx: CommandOptionsContext): CommandOption[] {
   const session = ctx.session;
-  const targets: Array<{ turnIndex: number; preview: string; timestamp: number }> =
-    session.getRewindTargets?.() ?? [];
+  const targets: Array<{
+    turnIndex: number;
+    preview: string;
+    fileCount: number;
+    additions: number;
+    deletions: number;
+    filesReverted: boolean;
+  }> = session.getRewindTargets?.() ?? [];
+  const header: CommandOption = { label: "Message", value: "", detail: "Changes", disabled: true };
+  const current: CommandOption = { label: "(Current)", value: "0:cancel", detail: "" };
   if (targets.length === 0) {
-    return [{ label: "(no turns to rewind to)", value: "" }];
+    return [
+      header,
+      current,
+      { label: "No previous turns", value: "", detail: "", disabled: true },
+    ];
   }
-  return targets.slice(0, 20).map((t) => {
-    const ago = Math.round((Date.now() - t.timestamp) / 1000);
-    const agoText = ago < 60 ? `${ago}s ago` : ago < 3600 ? `${Math.round(ago / 60)}m ago` : `${Math.round(ago / 3600)}h ago`;
+
+  const options: CommandOption[] = targets.map((t) => {
+    const hasLiveMutations = t.fileCount > 0 && !t.filesReverted;
+    const children: CommandOption[] = [];
+
+    if (hasLiveMutations) {
+      children.push(
+        { label: "Restore code and conversation", value: `${t.turnIndex}:both` },
+        { label: "Restore conversation", value: `${t.turnIndex}:conversation` },
+        { label: "Restore code", value: `${t.turnIndex}:files` },
+        { label: "Never mind", value: `${t.turnIndex}:cancel` },
+      );
+    } else {
+      children.push(
+        { label: "Restore conversation", value: `${t.turnIndex}:conversation` },
+        { label: "Never mind", value: `${t.turnIndex}:cancel` },
+      );
+    }
+
     return {
-      label: `Turn ${t.turnIndex} (${agoText}): ${t.preview}`,
+      label: t.preview,
+      detail: formatRewindDetail(t),
       value: String(t.turnIndex),
+      children,
     };
   });
+
+  return [header, current, ...options];
 }
 
 async function cmdRewind(ctx: CommandContext, args: string): Promise<void> {
   const session = ctx.session;
 
-  let turnIndex: number | undefined;
+  if (!session.rewindConversation) {
+    ctx.showMessage("Rewind is not supported in this session.");
+    return;
+  }
 
-  if (args.trim()) {
-    turnIndex = parseInt(args.trim(), 10);
+  // Resolve turnIndex and mode from either direct args or picker
+  let turnIndex: number;
+  let mode: "both" | "conversation" | "files" | "cancel";
+
+  const raw = args.trim();
+  if (raw) {
+    // Direct args: "/rewind 3" (conversation-only) or "/rewind 3:files" (from picker)
+    const colonIdx = raw.indexOf(":");
+    if (colonIdx >= 0) {
+      turnIndex = parseInt(raw.slice(0, colonIdx), 10);
+      mode = raw.slice(colonIdx + 1) as "both" | "conversation" | "files" | "cancel";
+    } else {
+      turnIndex = parseInt(raw, 10);
+      mode = "conversation";
+    }
     if (isNaN(turnIndex)) {
-      ctx.showMessage(`Invalid turn number: "${args.trim()}"`);
+      ctx.showMessage(`Invalid turn number: "${raw}"`);
       return;
     }
   } else if (ctx.promptCommandPicker) {
     const picked = await ctx.promptCommandPicker(rewindOptions({ session, store: ctx.store }));
     if (!picked) return;
-    turnIndex = parseInt(picked, 10);
+    const colonIdx = picked.indexOf(":");
+    if (colonIdx < 0) return;
+    turnIndex = parseInt(picked.slice(0, colonIdx), 10);
+    mode = picked.slice(colonIdx + 1) as "both" | "conversation" | "files" | "cancel";
     if (isNaN(turnIndex)) return;
   } else {
     ctx.showMessage("Usage: /rewind <turn_number>");
     return;
   }
 
-  const result = session.rewind?.(turnIndex);
-  if (!result) {
-    ctx.showMessage("Rewind is not supported in this session.");
-    return;
-  }
-  if (result.error) {
-    ctx.showMessage(`Rewind failed: ${result.error}`);
+  if (mode === "cancel") return;
+
+  if (mode === "conversation") {
+    const result = session.rewindConversation(turnIndex);
+    if (result.error) {
+      ctx.showMessage(`Rewind failed: ${result.error}`);
+      return;
+    }
+    ctx.showMessage(`Rewound conversation to turn ${turnIndex}. Removed ${result.removed} log entries.`);
+    ctx.autoSave();
     return;
   }
 
-  ctx.showMessage(`Rewound to turn ${turnIndex}. Removed ${result.removed} log entries.`);
+  // For "files" and "both" modes, we need to plan first
+  if (!session.planRewind || !session.rewindFiles || !session.rewindBoth) {
+    ctx.showMessage("File rewind is not supported in this session.");
+    return;
+  }
+
+  const plan = await session.planRewind(turnIndex);
+  const hasFiles = plan.applicable.length + plan.warnings.length > 0;
+  const hasConflicts = plan.conflicts.length > 0;
+
+  if (!hasFiles && !hasConflicts) {
+    if (mode === "both") {
+      const result = session.rewindConversation(turnIndex);
+      if (result.error) {
+        ctx.showMessage(`Rewind failed: ${result.error}`);
+        return;
+      }
+      ctx.showMessage(`Rewound conversation to turn ${turnIndex}. No file changes to revert.`);
+    } else {
+      ctx.showMessage("No file changes to revert.");
+    }
+    ctx.autoSave();
+    return;
+  }
+
+  if (hasConflicts) {
+    const conflictList = plan.conflicts.map((c: { path: string; reason: string }) => `  ${c.path} (${c.reason})`).join("\n");
+    ctx.showMessage(`Warning: ${plan.conflicts.length} file(s) cannot be auto-reverted:\n${conflictList}`);
+  }
+
+  if (mode === "files") {
+    const result = await session.rewindFiles(plan);
+    if (result.error) {
+      ctx.showMessage(`File rewind failed: ${result.error}`);
+      return;
+    }
+    const msg = result.revertedPaths.length > 0
+      ? `Reverted ${result.revertedPaths.length} file(s).`
+      : "No files were reverted.";
+    ctx.showMessage(msg);
+  } else {
+    // mode === "both"
+    const result = await session.rewindBoth(turnIndex, plan);
+    if (result.error) {
+      ctx.showMessage(`Rewind failed: ${result.error}`);
+      return;
+    }
+    const filePart = result.revertedPaths.length > 0
+      ? `Reverted ${result.revertedPaths.length} file(s).`
+      : "";
+    const convPart = `Removed ${result.removed} log entries.`;
+    ctx.showMessage(`Rewound to turn ${turnIndex}. ${convPart} ${filePart}`.trim());
+  }
+
   ctx.autoSave();
 }
 

@@ -9,6 +9,7 @@ export interface CommandPickerLevel {
 
 export interface CommandPickerState {
   commandName: string;
+  title?: string;
   maxVisible: number;
   stack: CommandPickerLevel[];
 }
@@ -24,6 +25,15 @@ function clampSelection(selected: number, options: CommandOption[]): number {
   return selected;
 }
 
+function isOptionSelectable(option: CommandOption | undefined): boolean {
+  return Boolean(option && !option.disabled);
+}
+
+function firstSelectableIndex(options: CommandOption[]): number {
+  const index = options.findIndex((option) => isOptionSelectable(option));
+  return index >= 0 ? index : 0;
+}
+
 function clampVisibleStart(
   start: number,
   optionCount: number,
@@ -37,11 +47,14 @@ export function createCommandPicker(
   commandName: string,
   options: CommandOption[],
   maxVisible = options.length,
+  title?: string,
 ): CommandPickerState {
+  const selected = firstSelectableIndex(options);
   return {
     commandName,
+    title,
     maxVisible,
-    stack: [{ label: commandName, options, selected: 0, visibleStart: 0 }],
+    stack: [{ label: commandName, options, selected, visibleStart: 0 }],
   };
 }
 
@@ -93,7 +106,12 @@ export function moveCommandPickerSelection(
   const direction = delta > 0 ? 1 : -1;
 
   for (let step = 0; step < Math.abs(delta); step += 1) {
-    nextSelected = (nextSelected + direction + count) % count;
+    let candidate = nextSelected;
+    for (let guard = 0; guard < count; guard += 1) {
+      candidate = (candidate + direction + count) % count;
+      if (isOptionSelectable(level.options[candidate])) break;
+    }
+    nextSelected = candidate;
 
     if (count <= maxVisible) {
       nextVisibleStart = 0;
@@ -125,6 +143,7 @@ export function setCommandPickerSelection(
   if (count === 0) return picker;
 
   const selected = clampSelection(index, level.options);
+  if (!isOptionSelectable(level.options[selected])) return picker;
   const maxVisible = Math.max(1, picker.maxVisible);
   let visibleStart = clampVisibleStart(level.visibleStart, count, maxVisible);
   if (selected < visibleStart) {
@@ -157,6 +176,7 @@ export function acceptCommandPickerSelection(
   const level = getCommandPickerLevel(picker);
   const option = level.options[clampSelection(level.selected, level.options)];
   if (!option) return null;
+  if (!isOptionSelectable(option)) return null;
 
   if (option.children && option.children.length > 0) {
     return {
@@ -168,7 +188,7 @@ export function acceptCommandPickerSelection(
           {
             label: option.label,
             options: option.children,
-            selected: 0,
+            selected: firstSelectableIndex(option.children),
             visibleStart: 0,
           },
         ],

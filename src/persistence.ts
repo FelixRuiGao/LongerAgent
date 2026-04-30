@@ -377,10 +377,10 @@ export class SessionStore {
     throw new Error(`Unable to save TUI preferences. Tried: ${detail}`);
   }
 
-  listSessions(): Array<{ path: string; created: string; lastActiveAt: string; summary: string; title?: string; turns: number }> {
+  listSessions(): Array<{ sessionId: string; path: string; created: string; lastActiveAt: string; summary: string; title?: string; turns: number }> {
     if (!existsSync(this._projectDir)) return [];
 
-    const sessions: Array<{ path: string; created: string; lastActiveAt: string; summary: string; title?: string; turns: number }> = [];
+    const sessions: Array<{ sessionId: string; path: string; created: string; lastActiveAt: string; summary: string; title?: string; turns: number }> = [];
     const entries = readdirSync(this._projectDir).sort().reverse();
 
     for (const name of entries) {
@@ -404,10 +404,11 @@ export class SessionStore {
           const summary = raw.summary ?? "";
           const title = raw.title ?? undefined;
           const turns = raw.turn_count ?? 0;
+          const sessionId = (raw.session_id as string | undefined) || name;
           // Skip empty sessions (0 turns) and archived sessions
           if (turns === 0) continue;
           if (raw.archived) continue;
-          sessions.push({ path: d, created, lastActiveAt, summary, title, turns });
+          sessions.push({ sessionId, path: d, created, lastActiveAt, summary, title, turns });
           continue;
         } catch {
           // Fall through to log.json
@@ -426,10 +427,11 @@ export class SessionStore {
         const summary = raw["summary"] ?? "";
         const title = raw["title"] ?? undefined;
         const turns = raw["turn_count"] ?? 0;
+        const sessionId = (raw["session_id"] as string | undefined) || name;
         // Skip empty sessions (0 turns) and archived sessions
         if (turns === 0) continue;
         if (raw.archived) continue;
-        sessions.push({ path: d, created, lastActiveAt, summary, title, turns });
+        sessions.push({ sessionId, path: d, created, lastActiveAt, summary, title, turns });
       } catch {
         continue;
       }

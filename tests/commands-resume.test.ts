@@ -131,8 +131,10 @@ describe("resume command", () => {
       store: {
         listSessions: vi.fn(() => [
           {
+            sessionId: "s1",
             path: "/tmp/s1",
             created: "2026-02-21T08:00:00.000-08:00",
+            lastActiveAt: "2026-02-22T08:00:00.000-08:00",
             summary: "hello",
             turns: 1,
           },
@@ -140,16 +142,18 @@ describe("resume command", () => {
       } as unknown as CommandContext["store"],
     });
 
-    expect(options).toEqual([
-      expect.objectContaining({
-        value: "1",
-      }),
-    ]);
-    expect(options[0]?.label).toContain("1.");
-    expect(options[0]?.label).toContain("hello");
+    expect(options[0]).toEqual(expect.objectContaining({
+      disabled: true,
+      label: expect.stringContaining("Created"),
+      value: "",
+    }));
+    expect(options[1]).toEqual(expect.objectContaining({
+      value: "s1",
+      label: expect.stringContaining("hello"),
+    }));
   });
 
-  it("truncates /resume summaries to 25 characters in picker labels", () => {
+  it("does not pre-truncate /resume summaries in picker labels", () => {
     const registry = buildDefaultRegistry();
     const resume = registry.lookup("/resume");
     expect(resume?.options).toBeTruthy();
@@ -159,8 +163,10 @@ describe("resume command", () => {
       store: {
         listSessions: vi.fn(() => [
           {
+            sessionId: "s1",
             path: "/tmp/s1",
             created: "2026-02-21T08:00:00.000-08:00",
+            lastActiveAt: "2026-02-22T08:00:00.000-08:00",
             summary: "123456789012345678901234567890",
             turns: 1,
           },
@@ -168,8 +174,7 @@ describe("resume command", () => {
       } as unknown as CommandContext["store"],
     });
 
-    expect(options[0]?.label).toContain("1234567890123456789012345");
-    expect(options[0]?.label).not.toContain("12345678901234567890123456");
+    expect(options[1]?.label).toContain("123456789012345678901234567890");
   });
 
   it("normalizes newlines in /resume summaries before truncation", () => {
@@ -182,8 +187,10 @@ describe("resume command", () => {
       store: {
         listSessions: vi.fn(() => [
           {
+            sessionId: "s1",
             path: "/tmp/s1",
             created: "2026-02-21T08:00:00.000-08:00",
+            lastActiveAt: "2026-02-22T08:00:00.000-08:00",
             summary: "hello\nworld\nagain",
             turns: 1,
           },
@@ -191,8 +198,8 @@ describe("resume command", () => {
       } as unknown as CommandContext["store"],
     });
 
-    expect(options[0]?.label).toContain("hello world again");
-    expect(options[0]?.label).not.toContain("\n");
+    expect(options[1]?.label).toContain("hello world again");
+    expect(options[1]?.label).not.toContain("\n");
   });
 
   it("restores from log.json and rebuilds conversation", async () => {
@@ -451,8 +458,10 @@ describe("resume command", () => {
       store: {
         listSessions: vi.fn(() => [
           {
+            sessionId: "s1",
             path: "/tmp/s1",
             created: "2026-02-21T08:00:00.000-08:00",
+            lastActiveAt: "2026-02-22T08:00:00.000-08:00",
             summary: "123456789012345678901234567890",
             turns: 1,
           },
@@ -466,9 +475,11 @@ describe("resume command", () => {
     await resume!.handler(ctx, "");
 
     const output = showMessage.mock.calls[0][0] as string;
-    expect(output).toContain("2026-02-21 08:00:00");
+    expect(output).toContain("Sessions");
+    expect(output).toContain("Created");
+    expect(output).toContain("Active");
+    expect(output).toContain("Title");
+    expect(output).toContain("123456789012345678901234567890");
     expect(output).not.toContain("Z");
-    expect(output).toContain("1234567890123456789012345");
-    expect(output).not.toContain("12345678901234567890123456");
   });
 });

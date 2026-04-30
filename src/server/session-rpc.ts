@@ -310,7 +310,7 @@ export function registerSessionRpc(opts: SessionRpcOptions): { dispose: () => vo
     if (typeof toTurnIndex !== "number") {
       throw new Error("session.rewind: 'toTurnIndex' must be a number");
     }
-    return session.rewind(toTurnIndex);
+    return session.rewindConversation(toTurnIndex);
   });
 
   // ── Subscriptions ──

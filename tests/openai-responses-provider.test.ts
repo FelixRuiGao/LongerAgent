@@ -258,19 +258,21 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
               type: "response.output_item.added",
               item: {
                 type: "function_call",
+                id: "fc_1",
                 call_id: "call_1",
                 name: "write_file",
               },
             },
             {
               type: "response.function_call_arguments.delta",
-              call_id: "call_1",
+              item_id: "fc_1",
               delta: "{\"path\":\"a.txt\",\"content\":\"hello\"}",
             },
             {
               type: "response.output_item.done",
               item: {
                 type: "function_call",
+                id: "fc_1",
                 call_id: "call_1",
                 name: "write_file",
                 arguments: "{\"path\":\"a.txt\",\"content\":\"hello\"}",
@@ -296,6 +298,7 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
       },
     );
 
+    expect(events).toContain("partial:call_1:write_file:{\"path\":\"a.txt\",\"content\":\"hello\"}");
     expect(events).toContain("close:call_1");
     expect(events.indexOf("close:call_1")).toBeGreaterThan(events.indexOf("partial:call_1:write_file:{\"path\":\"a.txt\",\"content\":\"hello\"}"));
     expect(closedCalls).toEqual([

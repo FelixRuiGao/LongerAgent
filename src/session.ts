@@ -12,8 +12,9 @@ import {
   readFileSync,
   writeFileSync,
   statSync,
+  unlinkSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { getFermiHomeDir } from "./home-path.js";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
@@ -57,6 +58,9 @@ import {
   KILL_SHELL_TOOL,
   executeTool,
 } from "./tools/basic.js";
+import { applyPatch, parsePatch } from "diff";
+import type { FileMutation } from "./tools/basic.js";
+import type { RewindPlan, RewindApplyResult, RewindPathMutation } from "./ui/contracts.js";
 import { execSummarizeContextOnLog, buildCoveredContextIds } from "./summarize-context.js";
 import { resolveSkillContent, loadSkillsMulti, type SkillMeta } from "./skills/loader.js";
 import { toolBuiltinWebSearchPassthrough } from "./tools/web-search.js";
@@ -1537,7 +1541,7 @@ export class Session {
         const next = this._log[j];
         if (next.turnIndex !== entry.turnIndex) break;
         if (next.type === "user_message" && !next.discarded) {
-          preview = (next.display || "").slice(0, 80).replace(/\n/g, " ");
+          preview = (next.display || "").replace(/\s+/g, " ").trim().slice(0, 240);
           break;
         }
       }
@@ -1565,30 +1569,208 @@ export class Session {
    * Includes turns before compact markers (rewind undoes compacts).
    * Returns turns in reverse chronological order (most recent first).
    */
-  getRewindTargets(): Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }> {
-    return this.listTurns()
-      .filter(t => t.turnKind === "user")
-      .map(t => ({
-        turnIndex: t.turnIndex,
-        entryIndex: t.entryIndex,
-        preview: t.preview,
-        timestamp: t.timestamp,
-      }))
+  getRewindTargets(): Array<{
+    turnIndex: number;
+    entryIndex: number;
+    preview: string;
+    timestamp: number;
+    fileCount: number;
+    additions: number;
+    deletions: number;
+    filesReverted: boolean;
+  }> {
+    const userTurns = this.listTurns().filter(t => t.turnKind === "user");
+
+    // Collect per-turn mutation data: distinct paths, additions, deletions
+    interface TurnMutData {
+      livePaths: Set<string>;
+      revertedPaths: Set<string>;
+      additions: number;
+      deletions: number;
+    }
+    const perTurn = new Map<number, TurnMutData>();
+    for (const entry of this._log) {
+      if (entry.type !== "tool_result" || entry.discarded) continue;
+      const meta = entry.meta as Record<string, unknown>;
+      const toolMeta = meta.toolMetadata as Record<string, unknown> | undefined;
+      const fm = toolMeta?.fileMutation as FileMutation | undefined;
+      if (!fm) continue;
+      const ti = entry.turnIndex;
+      let cur = perTurn.get(ti);
+      if (!cur) { cur = { livePaths: new Set(), revertedPaths: new Set(), additions: 0, deletions: 0 }; perTurn.set(ti, cur); }
+      if (meta.fileMutationReverted) {
+        cur.revertedPaths.add(fm.path);
+      } else {
+        cur.livePaths.add(fm.path);
+        cur.additions += fm.additions ?? 0;
+        cur.deletions += fm.deletions ?? 0;
+      }
+    }
+
+    // Suffix accumulation: cumulative from each turn to the end
+    const turnIndices = userTurns.map(t => t.turnIndex);
+    const cumulative = new Map<number, { fileCount: number; additions: number; deletions: number; allReverted: boolean }>();
+    const suffixLivePaths = new Set<string>();
+    const suffixRevertedPaths = new Set<string>();
+    let suffixAdd = 0;
+    let suffixDel = 0;
+    for (let i = turnIndices.length - 1; i >= 0; i--) {
+      const ti = turnIndices[i];
+      const cur = perTurn.get(ti);
+      if (cur) {
+        for (const p of cur.livePaths) suffixLivePaths.add(p);
+        for (const p of cur.revertedPaths) suffixRevertedPaths.add(p);
+        suffixAdd += cur.additions;
+        suffixDel += cur.deletions;
+      }
+      const hasLive = suffixLivePaths.size > 0;
+      const allReverted = !hasLive && suffixRevertedPaths.size > 0;
+      cumulative.set(ti, {
+        fileCount: suffixLivePaths.size,
+        additions: suffixAdd,
+        deletions: suffixDel,
+        allReverted,
+      });
+    }
+
+    return userTurns
+      .map(t => {
+        const cum = cumulative.get(t.turnIndex) ?? { fileCount: 0, additions: 0, deletions: 0, allReverted: false };
+        return {
+          turnIndex: t.turnIndex,
+          entryIndex: t.entryIndex,
+          preview: t.preview,
+          timestamp: t.timestamp,
+          fileCount: cum.fileCount,
+          additions: cum.additions,
+          deletions: cum.deletions,
+          filesReverted: cum.allReverted,
+        };
+      })
       .reverse();
   }
 
   /**
-   * Rewind the session to the start of the given turn, discarding all entries
-   * from that turn onward. Cannot rewind while a turn is in progress.
-   *
-   * @returns The number of entries removed.
+   * Build a rewind plan: collect live file mutations from `fromTurnIndex`
+   * onward, group by path, and classify each as applicable/warning/conflict.
    */
-  rewind(toTurnIndex: number): { removed: number; error?: string } {
+  async planRewind(fromTurnIndex: number): Promise<RewindPlan> {
+    const mutations = this._collectLiveFileMutations(fromTurnIndex);
+    const byPath = new Map<string, Array<{ entryId: string; turnIndex: number; mutation: FileMutation }>>();
+    for (const m of mutations) {
+      const arr = byPath.get(m.mutation.path) ?? [];
+      arr.push(m);
+      byPath.set(m.mutation.path, arr);
+    }
+
+    const applicable: RewindPlan["applicable"] = [];
+    const warnings: RewindPlan["warnings"] = [];
+    const conflicts: RewindPlan["conflicts"] = [];
+    let totalAdditions = 0;
+    let totalDeletions = 0;
+    const fileLineCounts = new Map<string, number>();
+
+    for (const [filePath, muts] of byPath) {
+      // Sort newest first — reverse patches apply in this order
+      muts.sort((a, b) => b.turnIndex - a.turnIndex || mutations.indexOf(b) - mutations.indexOf(a));
+
+      // Check for untracked mutations
+      if (muts.some(m => m.mutation.untracked || !m.mutation.reversePatch)) {
+        conflicts.push({ path: filePath, reason: "untracked" });
+        continue;
+      }
+
+      // Read current disk state
+      let diskContent: string;
+      try {
+        diskContent = readFileSync(filePath, { encoding: "utf-8" });
+      } catch (e: unknown) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") {
+          conflicts.push({ path: filePath, reason: "file_deleted" });
+        } else {
+          conflicts.push({ path: filePath, reason: "file_not_readable" });
+        }
+        continue;
+      }
+
+      const diskSha = createHash("sha256").update(diskContent, "utf-8").digest("hex");
+      const latestPostSha = muts[0].mutation.postImageSha;
+      const isDiskModified = diskSha !== latestPostSha;
+
+      // Try applying the reverse patch chain
+      const pathMutations: RewindPathMutation[] = muts.map(m => ({
+        entryId: m.entryId,
+        turnIndex: m.turnIndex,
+        reversePatch: m.mutation.reversePatch!,
+      }));
+
+      let current: string | false = diskContent;
+      for (const pm of pathMutations) {
+        current = applyPatch(current as string, pm.reversePatch);
+        if (current === false) break;
+      }
+
+      if (current === false) {
+        conflicts.push({ path: filePath, reason: "patch_failed" });
+        continue;
+      }
+
+      // Count line additions/deletions from the patches
+      let pathAdd = 0;
+      let pathDel = 0;
+      for (const pm of pathMutations) {
+        const parsed = parsePatch(pm.reversePatch);
+        for (const p of parsed) {
+          for (const hunk of p.hunks) {
+            for (const line of hunk.lines) {
+              if (line.startsWith("+") && !line.startsWith("+++")) pathDel++;
+              if (line.startsWith("-") && !line.startsWith("---")) pathAdd++;
+            }
+          }
+        }
+      }
+      // Reverse: what the forward edit added becomes what revert deletes
+      totalAdditions += pathAdd;
+      totalDeletions += pathDel;
+      fileLineCounts.set(filePath, pathAdd + pathDel);
+
+      if (isDiskModified) {
+        warnings.push({ path: filePath, reason: "disk_modified", mutations: pathMutations });
+      } else {
+        applicable.push({ path: filePath, mutations: pathMutations });
+      }
+    }
+
+    // Summary file: the one with the most changed lines
+    let summaryFile = "";
+    let maxLines = 0;
+    for (const [p, count] of fileLineCounts) {
+      if (count > maxLines) { maxLines = count; summaryFile = p; }
+    }
+    const totalFiles = applicable.length + warnings.length;
+    const otherFileCount = Math.max(0, totalFiles - 1);
+
+    return {
+      fromTurnIndex,
+      applicable,
+      warnings,
+      conflicts,
+      totalAdditions,
+      totalDeletions,
+      summaryFile: summaryFile ? join(relative(this._projectRoot, summaryFile)) : "",
+      otherFileCount,
+    };
+  }
+
+  /**
+   * Rewind conversation only: truncate log from the given turn onward.
+   */
+  rewindConversation(toTurnIndex: number): { removed: number; error?: string } {
     if (this._turnInFlight) {
       return { removed: 0, error: "Cannot rewind while a turn is in progress." };
     }
 
-    // Find the first entry of the target turn
     const cutoff = this._log.findIndex(
       (e) => e.turnIndex >= toTurnIndex && e.type === "turn_start" && !e.discarded,
     );
@@ -1596,23 +1778,136 @@ export class Session {
       return { removed: 0, error: `Turn ${toTurnIndex} not found in log.` };
     }
 
-    // Kill any active child sessions and shells
+    this._killChildSessionsAndShells();
+    const removed = this._log.length - cutoff;
+    this._log.length = cutoff;
+    this._resetAfterRewind();
+    return { removed };
+  }
+
+  /**
+   * Rewind files only: apply reverse patches and mark mutations as reverted.
+   * Does not truncate the conversation log.
+   */
+  async rewindFiles(plan: RewindPlan): Promise<RewindApplyResult> {
+    if (this._turnInFlight) {
+      return { revertedPaths: [], conflictPaths: [], error: "Cannot rewind while a turn is in progress." };
+    }
+
+    const journalPath = this._writeRewindJournal(plan);
+
+    const revertedPaths: string[] = [];
+    const conflictPaths: string[] = [];
+    const allPaths = [...plan.applicable, ...plan.warnings];
+
+    try {
+      for (const entry of allPaths) {
+        let content = readFileSync(entry.path, { encoding: "utf-8" });
+        let failed = false;
+        for (const mut of entry.mutations) {
+          const result = applyPatch(content, mut.reversePatch);
+          if (result === false) { failed = true; break; }
+          content = result;
+        }
+        if (failed) {
+          conflictPaths.push(entry.path);
+          continue;
+        }
+        // If reverted content is empty and earliest mutation created the file, delete it
+        const earliestMut = entry.mutations[entry.mutations.length - 1];
+        const createdFile = this._isMutationFileCreation(earliestMut.entryId);
+        if (content === "" && createdFile) {
+          try { unlinkSync(entry.path); } catch { /* ignore ENOENT */ }
+        } else {
+          writeFileSync(entry.path, content, { encoding: "utf-8" });
+        }
+        revertedPaths.push(entry.path);
+
+        // Mark tool_result entries as reverted
+        for (const mut of entry.mutations) {
+          this._markMutationReverted(mut.entryId);
+        }
+      }
+    } catch (e) {
+      // Crash recovery: restore preimages from journal
+      this._restoreFromRewindJournal(journalPath);
+      return { revertedPaths: [], conflictPaths: [], error: `Rewind failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+
+    // Clean up journal
+    this._deleteRewindJournal(journalPath);
+
+    this._bumpLogRevision();
+    this._notifyLogListeners();
+    this.onSaveRequest?.();
+
+    return { revertedPaths, conflictPaths };
+  }
+
+  /**
+   * Rewind both conversation and files.
+   */
+  async rewindBoth(
+    toTurnIndex: number,
+    plan: RewindPlan,
+  ): Promise<RewindApplyResult & { removed: number }> {
+    const fileResult = await this.rewindFiles(plan);
+    if (fileResult.error) {
+      return { ...fileResult, removed: 0 };
+    }
+    const convResult = this.rewindConversation(toTurnIndex);
+    return { ...fileResult, removed: convResult.removed, error: convResult.error };
+  }
+
+  // ---- Rewind helpers ----
+
+  private _collectLiveFileMutations(
+    fromTurnIndex: number,
+  ): Array<{ entryId: string; turnIndex: number; mutation: FileMutation }> {
+    const results: Array<{ entryId: string; turnIndex: number; mutation: FileMutation }> = [];
+    for (const entry of this._log) {
+      if (entry.turnIndex < fromTurnIndex) continue;
+      if (entry.type !== "tool_result" || entry.discarded) continue;
+      const meta = entry.meta as Record<string, unknown>;
+      if (meta.fileMutationReverted) continue;
+      const toolMeta = meta.toolMetadata as Record<string, unknown> | undefined;
+      const fm = toolMeta?.fileMutation as FileMutation | undefined;
+      if (!fm) continue;
+      results.push({ entryId: entry.id, turnIndex: entry.turnIndex, mutation: fm });
+    }
+    return results;
+  }
+
+  private _isMutationFileCreation(entryId: string): boolean {
+    const entry = this._log.find(e => e.id === entryId);
+    if (!entry) return false;
+    const meta = entry.meta as Record<string, unknown>;
+    const toolMeta = meta.toolMetadata as Record<string, unknown> | undefined;
+    const fm = toolMeta?.fileMutation as FileMutation | undefined;
+    return fm?.kind === "created";
+  }
+
+  private _markMutationReverted(entryId: string): void {
+    const entry = this._log.find(e => e.id === entryId);
+    if (entry) {
+      (entry.meta as Record<string, unknown>).fileMutationReverted = true;
+    }
+  }
+
+  private _killChildSessionsAndShells(): void {
     if (this._childSessions.size > 0) {
       this._archiveAllChildSessions();
     }
     if (this._shellManager.hasTrackedShells()) {
       this._forceKillAllShells();
     }
+  }
 
-    // Truncate
-    const removed = this._log.length - cutoff;
-    this._log.length = cutoff;
+  private _resetAfterRewind(): void {
+    const log = this._log;
+    this._turnCount = log.length > 0 ? (log[log.length - 1]?.turnIndex ?? 0) : 0;
+    this._idAllocator.restoreFrom(log);
 
-    // Reset counters from remaining log
-    this._turnCount = cutoff > 0 ? (this._log[cutoff - 1]?.turnIndex ?? 0) : 0;
-    this._idAllocator.restoreFrom(this._log);
-
-    // Reset transient state
     this._compactInProgress = false;
     this._summarizeToolWhitelist = null;
     this._hintState = "none";
@@ -1626,10 +1921,9 @@ export class Session {
     this._lastTurnEndStatus = null;
     this._cachedSummary = undefined;
 
-    // Rebuild used context IDs and compact count from remaining log
     this._usedContextIds.clear();
     this._compactCount = 0;
-    for (const entry of this._log) {
+    for (const entry of log) {
       const ctx = (entry.meta as Record<string, unknown>)?.["contextId"];
       if (typeof ctx === "string") this._usedContextIds.add(ctx);
       if (entry.type === "compact_marker" && !entry.discarded) {
@@ -1637,13 +1931,62 @@ export class Session {
       }
     }
 
-    // Refresh plan state and notify
     this._refreshPlanState();
     this._bumpLogRevision();
     this._notifyLogListeners();
     this.onSaveRequest?.();
+  }
 
-    return { removed };
+  private _getRewindJournalPath(): string {
+    const dir = this._getArtifactsDirIfAvailable() ?? join(homedir(), ".vigil", "tmp");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    return join(dir, "rewind-journal.json");
+  }
+
+  private _writeRewindJournal(plan: RewindPlan): string {
+    const journalPath = this._getRewindJournalPath();
+    const preimages: Array<{ path: string; existed: boolean; content: string | null }> = [];
+    const allPaths = [...plan.applicable, ...plan.warnings];
+    for (const entry of allPaths) {
+      try {
+        const content = readFileSync(entry.path, { encoding: "utf-8" });
+        preimages.push({ path: entry.path, existed: true, content });
+      } catch {
+        preimages.push({ path: entry.path, existed: false, content: null });
+      }
+    }
+    writeFileSync(journalPath, JSON.stringify(preimages), { encoding: "utf-8" });
+    return journalPath;
+  }
+
+  private _restoreFromRewindJournal(journalPath: string): void {
+    try {
+      const raw = readFileSync(journalPath, { encoding: "utf-8" });
+      const preimages: Array<{ path: string; existed: boolean; content: string | null }> = JSON.parse(raw);
+      for (const img of preimages) {
+        try {
+          if (img.existed && img.content !== null) {
+            writeFileSync(img.path, img.content, { encoding: "utf-8" });
+          } else if (!img.existed) {
+            try { unlinkSync(img.path); } catch { /* ignore */ }
+          }
+        } catch { /* best effort */ }
+      }
+    } catch { /* journal corrupt or missing */ }
+  }
+
+  private _deleteRewindJournal(journalPath: string): void {
+    try { unlinkSync(journalPath); } catch { /* ignore */ }
+  }
+
+  /**
+   * Check for and recover from a crashed rewind on session restore.
+   */
+  recoverRewindIfNeeded(): void {
+    const journalPath = this._getRewindJournalPath();
+    if (!existsSync(journalPath)) return;
+    this._restoreFromRewindJournal(journalPath);
+    this._deleteRewindJournal(journalPath);
   }
 
   /**

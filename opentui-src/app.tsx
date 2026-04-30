@@ -6,6 +6,7 @@ import { execSync } from "node:child_process";
 import type {
   CommandRegistry,
   CommandContext,
+  CommandOption,
   Session as TuiSession,
 } from "../src/ui/contracts.js";
 import type { SessionStore } from "../src/persistence.js";
@@ -1067,13 +1068,14 @@ export function OpenTuiApp({
     const command = commandRegistry.lookup(cmdName);
     const options = buildCommandOptions(cmdName);
     if (options.length === 0) return false;
+    const canonicalCommandName = command?.name ?? cmdName;
 
     setCommandOverlay(EMPTY_COMMAND_OVERLAY);
 
     if (command?.checkboxMode) {
       setCheckboxPicker(
         createCheckboxPicker(
-          cmdName,
+          canonicalCommandName,
           options.map((option) => ({
             label: option.label,
             value: option.value,
@@ -1087,9 +1089,10 @@ export function OpenTuiApp({
 
     setCommandPicker(
       createCommandPicker(
-        cmdName,
+        canonicalCommandName,
         options,
         pickerMaxVisible,
+        command?.pickerTitle,
       ),
     );
     return true;
@@ -1359,7 +1362,7 @@ export function OpenTuiApp({
           });
         });
       },
-      promptCommandPicker: async (options: Array<{ label: string; value: string; children?: any[] }>) => {
+      promptCommandPicker: async (options: CommandOption[]) => {
         resolvePromptSelect(undefined);
         resolvePromptSecret(undefined);
         return await new Promise<string | undefined>((resolve) => {

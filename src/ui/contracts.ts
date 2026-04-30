@@ -21,6 +21,51 @@ import type {
   CommandOption as ActualCommandOption,
 } from "../commands.js";
 
+// ------------------------------------------------------------------
+// Rewind plan types
+// ------------------------------------------------------------------
+
+export interface RewindPathMutation {
+  entryId: string;
+  turnIndex: number;
+  reversePatch: string;
+}
+
+export interface RewindPlanApplicable {
+  path: string;
+  mutations: RewindPathMutation[];
+}
+
+export interface RewindPlanWarning {
+  path: string;
+  reason: "disk_modified";
+  mutations: RewindPathMutation[];
+}
+
+export interface RewindPlanConflict {
+  path: string;
+  reason: "patch_failed" | "untracked" | "file_deleted" | "file_not_readable";
+}
+
+export interface RewindPlan {
+  fromTurnIndex: number;
+  applicable: RewindPlanApplicable[];
+  warnings: RewindPlanWarning[];
+  conflicts: RewindPlanConflict[];
+  totalAdditions: number;
+  totalDeletions: number;
+  summaryFile: string;
+  otherFileCount: number;
+}
+
+export interface RewindApplyResult {
+  revertedPaths: string[];
+  conflictPaths: string[];
+  error?: string;
+}
+
+// ------------------------------------------------------------------
+
 export type CommandRegistry = ActualCommandRegistry;
 export type SlashCommand = ActualSlashCommand;
 export type CommandOption = ActualCommandOption;
@@ -58,8 +103,20 @@ export interface Session {
   permissionMode?: string;
   hookRuntime?: { hooks: readonly any[]; getAdditionalContext(): string | null };
   getGlobalPreferences?(): any;
-  getRewindTargets?(): Array<{ turnIndex: number; entryIndex: number; preview: string; timestamp: number }>;
-  rewind?(toTurnIndex: number): { removed: number; error?: string };
+  getRewindTargets?(): Array<{
+    turnIndex: number;
+    entryIndex: number;
+    preview: string;
+    timestamp: number;
+    fileCount: number;
+    additions: number;
+    deletions: number;
+    filesReverted: boolean;
+  }>;
+  planRewind?(fromTurnIndex: number): Promise<RewindPlan>;
+  rewindConversation?(toTurnIndex: number): { removed: number; error?: string };
+  rewindFiles?(plan: RewindPlan): Promise<RewindApplyResult>;
+  rewindBoth?(toTurnIndex: number, plan: RewindPlan): Promise<RewindApplyResult & { removed: number }>;
   resumePendingTurn?(options?: { signal?: AbortSignal }): Promise<string>;
   hasPendingTurnToResume?(): boolean;
   runManualSummarize?(options?: { signal?: AbortSignal; targetContextIds?: string[]; focusPrompt?: string }): Promise<string>;

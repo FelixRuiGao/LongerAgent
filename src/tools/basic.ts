@@ -8,7 +8,7 @@
 
 import fs from "node:fs/promises";
 import { existsSync, statSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
@@ -32,6 +32,7 @@ import {
   projectedDocumentLabel,
 } from "../document-projection.js";
 import { classifyFile, IMAGE_MEDIA_TYPES } from "../file-attach.js";
+import { createPatch } from "diff";
 import {
   type FileModifyDisplayData,
   type MatchInfo,
@@ -42,6 +43,68 @@ import {
   buildAppendDisplayData,
   buildWriteDisplayData,
 } from "../diff-hunk.js";
+
+// ------------------------------------------------------------------
+// File mutation tracking (for rewind file revert)
+// ------------------------------------------------------------------
+
+export interface FileMutation {
+  path: string;
+  kind: "created" | "modified";
+  reversePatch: string | null;
+  postImageSha: string;
+  additions: number;
+  deletions: number;
+  untracked?: true;
+}
+
+function computeSha256(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex");
+}
+
+function countDiffLines(before: string, after: string): { additions: number; deletions: number } {
+  const beforeLines = before ? before.split("\n") : [];
+  const afterLines = after ? after.split("\n") : [];
+  if (before === "") return { additions: afterLines.length, deletions: 0 };
+  if (after === "") return { additions: 0, deletions: beforeLines.length };
+  let additions = 0;
+  let deletions = 0;
+  const beforeSet = new Map<string, number>();
+  for (const line of beforeLines) {
+    beforeSet.set(line, (beforeSet.get(line) ?? 0) + 1);
+  }
+  for (const line of afterLines) {
+    const count = beforeSet.get(line) ?? 0;
+    if (count > 0) {
+      beforeSet.set(line, count - 1);
+    } else {
+      additions++;
+    }
+  }
+  for (const count of beforeSet.values()) {
+    deletions += count;
+  }
+  return { additions, deletions };
+}
+
+function buildFileMutation(
+  filePath: string,
+  beforeContent: string,
+  afterContent: string,
+  fileExistedBefore: boolean,
+): FileMutation {
+  const postImageSha = computeSha256(afterContent);
+  const reversePatch = createPatch(filePath, afterContent, beforeContent);
+  const { additions, deletions } = countDiffLines(beforeContent, afterContent);
+  return {
+    path: filePath,
+    kind: fileExistedBefore ? "modified" : "created",
+    reversePatch,
+    postImageSha,
+    additions,
+    deletions,
+  };
+}
 
 // ------------------------------------------------------------------
 // Bash safety limits
@@ -843,6 +906,7 @@ async function toolEditFileAppend(
           truncated: diffPreview.truncated,
         },
         fileModifyData,
+        fileMutation: buildFileMutation(filePath, before, finalContent, true),
       },
     });
   });
@@ -975,6 +1039,7 @@ async function toolEditFileMulti(
           truncated: diffPreview.truncated,
         },
         fileModifyData,
+        fileMutation: buildFileMutation(filePath, content, newContent, true),
       },
     });
   });
@@ -1031,6 +1096,7 @@ async function toolWriteFile(
           lineCount: afterLines.length,
           tui_preview: tuiPreview,
           fileModifyData,
+          fileMutation: buildFileMutation(filePath, before, content, initialVersion.exists),
         },
       });
     } catch (e) {

@@ -52,7 +52,11 @@ function OverlayFrame({ theme, width = "100%", height, children }: OverlayFrameP
 interface OverlayOptionRowProps {
   theme: DisplayTheme;
   label: string;
+  detail?: string;
+  /** Fixed column width for detail text (for cross-row alignment). */
+  detailColumnWidth?: number;
   selected: boolean;
+  disabled?: boolean;
   width: number;
   onPress?: () => void;
 }
@@ -60,19 +64,57 @@ interface OverlayOptionRowProps {
 function OverlayOptionRow({
   theme,
   label,
+  detail,
+  detailColumnWidth,
   selected,
+  disabled = false,
   width,
   onPress,
 }: OverlayOptionRowProps): React.ReactNode {
-  const prefix = selected ? "> " : "  ";
+  const isSelected = selected && !disabled;
+  const fg = disabled ? theme.colors.muted : isSelected ? theme.colors.accent : theme.colors.dim;
+  const prefix = isSelected ? "> " : "  ";
+  if (detail !== undefined && detailColumnWidth) {
+    const gapWidth = 1;
+    const labelWidth = Math.max(1, width - detailColumnWidth - gapWidth);
+    return (
+      <SelectableRow
+        hoverBackgroundColor={theme.colors.border}
+        onPress={disabled ? undefined : onPress}
+      >
+        <box flexDirection="row" width="100%">
+          <text
+            fg={fg}
+            content={truncateToWidth(`${prefix}${label}`, labelWidth)}
+            width={labelWidth}
+            flexShrink={0}
+            wrapMode="none"
+            truncate
+          />
+          <box width={gapWidth} flexShrink={0} />
+          <text
+            fg={fg}
+            content={truncateToWidth(detail, detailColumnWidth)}
+            width={detailColumnWidth}
+            flexShrink={0}
+            wrapMode="none"
+            truncate
+          />
+        </box>
+      </SelectableRow>
+    );
+  }
   return (
     <SelectableRow
       hoverBackgroundColor={theme.colors.border}
-      onPress={onPress}
+      onPress={disabled ? undefined : onPress}
     >
       <text
-        fg={selected ? theme.colors.accent : theme.colors.dim}
+        fg={fg}
         content={truncateToWidth(`${prefix}${label}`, width)}
+        width={width}
+        wrapMode="none"
+        truncate
       />
     </SelectableRow>
   );
@@ -143,9 +185,16 @@ export function CommandPickerView(
   const { start, end } = getCommandPickerVisibleRange(picker);
   const visibleOptions = level.options.slice(start, end);
   const pickerHeight = 1 + visibleOptions.length;
+  const rootTitle = picker.title ?? picker.commandName;
   const title = path.length > 0
-    ? `${picker.commandName} › ${path.join(" › ")}`
-    : picker.commandName;
+    ? `${rootTitle} › ${path.join(" › ")}`
+    : rootTitle;
+
+  // Compute max detail width for column alignment
+  const hasAnyDetail = visibleOptions.some(o => o.detail !== undefined);
+  const detailColumnWidth = hasAnyDetail
+    ? Math.max(...visibleOptions.map(o => (o.detail ?? "").length))
+    : 0;
 
   return (
     <OverlayFrame theme={theme} height={pickerHeight}>
@@ -157,7 +206,10 @@ export function CommandPickerView(
             key={`picker-${picker.stack.length}-${actualIndex}`}
             theme={theme}
             label={item.label}
+            detail={item.detail}
+            detailColumnWidth={detailColumnWidth}
             selected={actualIndex === level.selected}
+            disabled={item.disabled}
             width={contentWidth}
             onPress={() => onItemClick(actualIndex)}
           />
