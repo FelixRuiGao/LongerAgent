@@ -138,16 +138,16 @@ describe("projectToTuiEntries", () => {
 
   it("keeps summarized entries visible in TUI and hides summary entries", () => {
     const entries = basicLog();
-    entries[2].summarized = true; // Mark user message as summarized
-    entries[3].summarized = true;
-    const summary = createSummary("sum-001", 1, "Summary of conversation", "Summary of conversation", "c3", ["user-001", "asst-001"], 1);
-    // Insert summary at position 2 (where the first summarized entry was)
-    entries.splice(2, 0, summary);
+    // Summary covers contextIds "c1" and "c2" (the user and assistant entries).
+    // The coverage system hides entries whose contextId is in coveredContextIds,
+    // AND hides the summary itself if its own contextId is covered by a later summary.
+    const summary = createSummary("sum-001", 1, "Summary of conversation", "Summary of conversation", "c3", ["c1", "c2"], 1);
+    entries.push(summary);
 
     const tui = projectToTuiEntries(entries);
-    expect(tui).toHaveLength(2);
-    expect(tui[0]).toEqual({ kind: "user", text: "Hello", id: "user-001" });
-    expect(tui[1]).toEqual({ kind: "assistant", text: "Hi there!", id: "asst-001" });
+    // Covered entries (c1, c2) are hidden; summary (c3) is visible
+    expect(tui).toHaveLength(1);
+    expect(tui[0]).toMatchObject({ kind: "user", text: "Summary of conversation", id: "sum-001" });
   });
 
   it("skips discarded entries", () => {
@@ -641,20 +641,20 @@ describe("projectToApiMessages", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
       createUserMessage("user-001", 1, "old", "old", "c1"),
-      createAssistantText("asst-001", 1, 0, "old reply", "old reply"),
+      createAssistantText("asst-001", 1, 0, "old reply", "old reply", "c1"),
       createUserMessage("user-002", 2, "newer", "newer", "c2"),
     ];
-    entries[1].summarized = true;
-    entries[2].summarized = true;
 
-    // Insert summary
-    const summary = createSummary("sum-001", 1, "Summary", "Summary text", "c3", ["user-001", "asst-001"], 1);
+    // Summary covers contextId "c1" (both user + assistant share it).
+    // Place summary before user-002 so API order is: system, summary, user-002.
+    const summary = createSummary("sum-001", 1, "Summary", "Summary text", "c3", ["c1"], 1);
     entries.splice(1, 0, summary);
 
     const msgs = projectToApiMessages(entries);
-    // system + summary(user) + user
+    // system + summary(user) + user-002 (covered entries c1 hidden)
     expect(msgs).toHaveLength(3);
     expect(msgs[1]).toMatchObject({ role: "user", content: "Summary text" });
+    expect(msgs[2]).toMatchObject({ role: "user", content: "newer" });
   });
 
   it("skips discarded entries", () => {

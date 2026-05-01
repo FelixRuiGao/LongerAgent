@@ -260,18 +260,20 @@ export function OpenTuiApp({
   const [todoPanelOpen, setTodoPanelOpen] = useState(false);
   const [scrolledAway, setScrolledAway] = useState(false);
   const [queuedUserInputs, setQueuedUserInputs] = useState<string[]>([]);
+  const prevUserEntryCountRef = useRef(0);
 
-  // Clear queued inputs when they appear in the conversation (drain happened)
+  // Clear queued inputs when drain creates new user entries in the conversation.
+  // Only count on root transcript (selectedChildId === null) to avoid miscounting
+  // when switching to/from child tabs.
   useEffect(() => {
-    if (queuedUserInputs.length === 0) return;
-    const userEntries = presentationEntries.filter((e) => e.kind === "user");
-    if (userEntries.length > 0) {
-      const lastUserText = userEntries[userEntries.length - 1].userText ?? "";
-      if (queuedUserInputs.some((q) => q === lastUserText)) {
-        setQueuedUserInputs([]);
-      }
+    if (selectedChildId !== null) return;
+    const count = presentationEntries.filter((e) => e.kind === "user").length;
+    const newUsers = count - prevUserEntryCountRef.current;
+    prevUserEntryCountRef.current = count;
+    if (newUsers > 0 && queuedUserInputs.length > 0) {
+      setQueuedUserInputs((prev) => prev.slice(newUsers));
     }
-  }, [presentationEntries, queuedUserInputs]);
+  }, [presentationEntries, selectedChildId]);
 
   // Fallback: clear when processing ends
   useEffect(() => {

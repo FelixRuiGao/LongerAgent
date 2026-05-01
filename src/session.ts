@@ -1281,7 +1281,7 @@ export class Session {
           this._appendEntry(createUserMessageEntry(
             this._nextLogId("user_message"),
             this._turnCount,
-            msg.content.slice(0, 200),
+            msg.content,
             msg.content,
             ctxId,
           ), false);
@@ -1300,10 +1300,11 @@ export class Session {
           break;
         }
         case "system_notice": {
+          const display = msg.tuiVisible ? msg.content : "[System]";
           const entry = createUserMessageEntry(
             this._nextLogId("user_message"),
             this._turnCount,
-            `[System]`,
+            display,
             `<system-message>\n${msg.content}\n</system-message>`,
             ctxId,
           );
@@ -1464,9 +1465,6 @@ export class Session {
     if (this._childSessions.size > 0) {
       this._cascadeKillRunningChildren("user_mass_interrupt");
     }
-    if (this._shellManager.hasTrackedShells()) {
-      this._forceKillAllShells();
-    }
   }
 
   hasRunningChildAgents(): boolean {
@@ -1489,11 +1487,22 @@ export class Session {
    */
   denyPendingAsk(): boolean {
     const ask = this._activeAsk;
-    if (!ask) return false;
+    if (!ask) {
+      // Find the child that owns the visible ask and deny via routing
+      const pendingAsk = this.getPendingAsk();
+      if (!pendingAsk) return false;
+      const child = this._findChildWithPendingAsk(pendingAsk.id);
+      if (!child) return false;
+      child.session.denyPendingAsk();
+      this._resumeChildPendingTurn(child);
+      this._notifyLogListeners();
+      this.onSaveRequest?.();
+      return true;
+    }
 
     if (ask.kind === "approval") {
       const denyIndex = ask.options.length - 1;
-      this.resolveApprovalAsk(ask.id, denyIndex);
+      this._resolveOwnApprovalAsk(ask.id, denyIndex);
       return true;
     }
 
@@ -5449,13 +5458,15 @@ export class Session {
     askId: string,
     decision: AgentQuestionDecision,
   ): void {
-    const ask = this._activeAsk;
-    if (!ask) {
-      throw new Error("No active ask to resolve.");
-    }
-    if (ask.id !== askId) {
-      throw new Error(`Ask id mismatch (active=${ask.id}, got=${askId}).`);
-    }
+    this._withAskRouting(
+      askId,
+      () => this._resolveOwnAgentQuestionAsk(askId, decision),
+      (child) => child.session.resolveAgentQuestionAsk(askId, decision),
+    );
+  }
+
+  private _resolveOwnAgentQuestionAsk(askId: string, decision: AgentQuestionDecision): void {
+    const ask = this._activeAsk!;
     if (ask.kind !== "agent_question") {
       throw new Error(`Ask kind mismatch (active=${ask.kind}, expected=agent_question).`);
     }
@@ -5523,17 +5534,15 @@ export class Session {
    * @param choiceIndex  Index into the ask's options array. Last option is always "Deny".
    */
   resolveApprovalAsk(askId: string, choiceIndex: number): void {
-    const ask = this._activeAsk;
-    if (!ask) {
-      const child = this._findChildWithPendingAsk(askId);
-      if (!child) throw new Error("No active ask to resolve.");
-      child.session.resolveApprovalAsk(askId, choiceIndex);
-      this._resumeChildPendingTurn(child);
-      this._notifyLogListeners();
-      this.onSaveRequest?.();
-      return;
-    }
-    if (ask.id !== askId) throw new Error(`Ask id mismatch (active=${ask.id}, got=${askId}).`);
+    this._withAskRouting(
+      askId,
+      () => this._resolveOwnApprovalAsk(askId, choiceIndex),
+      (child) => child.session.resolveApprovalAsk(askId, choiceIndex),
+    );
+  }
+
+  private _resolveOwnApprovalAsk(askId: string, choiceIndex: number): void {
+    const ask = this._activeAsk!;
     if (ask.kind !== "approval") throw new Error(`Ask kind mismatch (active=${ask.kind}, expected=approval).`);
 
     const payload = ask.payload as ApprovalRequest["payload"];
@@ -5599,6 +5608,26 @@ export class Session {
       if (ask?.id === askId) return handle;
     }
     return null;
+  }
+
+  /**
+   * Route an ask operation to the correct session (self or child).
+   * If the ask belongs to this session, runs onSelf. If it belongs to a
+   * child, runs onChild then resumes the child's pending turn.
+   */
+  private _withAskRouting<T>(
+    askId: string,
+    onSelf: () => T,
+    onChild: (child: ChildSessionHandle) => T,
+  ): T {
+    if (this._activeAsk?.id === askId) return onSelf();
+    const child = this._findChildWithPendingAsk(askId);
+    if (!child) throw new Error("No active ask to resolve.");
+    const result = onChild(child);
+    this._resumeChildPendingTurn(child);
+    this._notifyLogListeners();
+    this.onSaveRequest?.();
+    return result;
   }
 
   private _execShowContext(args: Record<string, unknown>): ToolResult {

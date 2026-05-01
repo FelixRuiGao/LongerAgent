@@ -240,7 +240,7 @@ describe("Factory functions", () => {
     expect(e.tuiVisible).toBe(true);
     expect(e.displayKind).toBe("user");
     expect(e.apiRole).toBe("user");
-    expect(e.meta.summarizedEntryIds).toEqual(["user-001", "asst-001"]);
+    expect(e.meta.coveredContextIds).toEqual(["user-001", "asst-001"]);
     expect(e.meta.summaryDepth).toBe(1);
   });
 
