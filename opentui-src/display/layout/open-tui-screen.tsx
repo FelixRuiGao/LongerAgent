@@ -115,6 +115,8 @@ export interface OpenTuiScreenProps {
   activeShells?: Array<{ id: string; command: string; status: string }>;
   /** Pre-rendered status panel (agents + todos, between conversation and input) */
   statusPanel?: React.ReactNode;
+  /** Pre-rendered pending queued messages (above input, compact user bubble style) */
+  pendingMessages?: React.ReactNode;
   /** Pre-rendered plan panel for sidebar (deprecated) */
   sidebarPlanSection?: React.ReactNode;
   /** Pre-rendered context usage card for sidebar */
@@ -202,6 +204,7 @@ export function OpenTuiScreen({
   sidebarMode = "close",
   activeShells = [],
   statusPanel,
+  pendingMessages,
   sidebarPlanSection,
   sidebarContextSection,
   sidebarCodexSection,
@@ -418,6 +421,9 @@ export function OpenTuiScreen({
                 {/* Status panel (agents + todos) */}
                 {statusPanel}
 
+                {/* Pending queued messages (above input, compact user bubble style) */}
+                {pendingMessages}
+
                 {/* Input area — inside the scrollbox */}
                 {inputAreaElement}
 
@@ -448,6 +454,7 @@ export function OpenTuiScreen({
         <>
           <box height={1} />
           {statusPanel}
+          {pendingMessages}
           {inputAreaElement}
           {overlaysBlock}
         </>

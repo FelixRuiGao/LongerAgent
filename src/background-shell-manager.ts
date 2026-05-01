@@ -196,6 +196,7 @@ export class BackgroundShellManager {
       this._deliverMessage({
         type: "system_notice", sender: "system", timestamp: Date.now(),
         content: `Background shell '${shellId}' failed to start: ${error}. Use \`bash_output(id="${shellId}")\` to inspect ${logPath}.`,
+        tuiVisible: true,
       });
     });
     child.on("close", (code, signal) => {
@@ -217,6 +218,7 @@ export class BackgroundShellManager {
       this._deliverMessage({
         type: "system_notice", sender: "system", timestamp: Date.now(),
         content: `Background shell '${shellId}' ${statusText}. Use \`bash_output(id="${shellId}")\` to inspect logs at ${logPath}.`,
+        tuiVisible: true,
       });
     });
 

@@ -259,6 +259,26 @@ export function OpenTuiApp({
   const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
   const [todoPanelOpen, setTodoPanelOpen] = useState(false);
   const [scrolledAway, setScrolledAway] = useState(false);
+  const [queuedUserInputs, setQueuedUserInputs] = useState<string[]>([]);
+
+  // Clear queued inputs when they appear in the conversation (drain happened)
+  useEffect(() => {
+    if (queuedUserInputs.length === 0) return;
+    const userEntries = presentationEntries.filter((e) => e.kind === "user");
+    if (userEntries.length > 0) {
+      const lastUserText = userEntries[userEntries.length - 1].userText ?? "";
+      if (queuedUserInputs.some((q) => q === lastUserText)) {
+        setQueuedUserInputs([]);
+      }
+    }
+  }, [presentationEntries, queuedUserInputs]);
+
+  // Fallback: clear when processing ends
+  useEffect(() => {
+    if (!processing && queuedUserInputs.length > 0) {
+      setQueuedUserInputs([]);
+    }
+  }, [processing]);
 
   // Auto-open panels on first appearance (once per session)
   const hasAutoOpenedAgents = useRef(false);
@@ -1533,8 +1553,8 @@ export function OpenTuiApp({
     if (isProcessing) {
       if (typeof session.deliverMessage === "function") {
         session.deliverMessage("user", input);
-        session.appendStatusMessage?.(`[Queued user message]\n${input}`, "queued_user_message");
-        showHint("Message queued for the next activation boundary.");
+        setQueuedUserInputs((prev) => [...prev, input]);
+        showHint("Message queued");
       } else {
         showHint("The assistant is busy and this prototype cannot queue input here.");
       }
@@ -2036,8 +2056,10 @@ export function OpenTuiApp({
     }
 
     if (pendingAsk?.kind === "agent_question") {
-      // Esc / Ctrl+C: pass through to performInterrupt below (deny + abort)
-      if (!(event.name === "escape" || (event.name === "c" && event.ctrl))) {
+      // Esc / Ctrl+C pass through to performInterrupt (deny + abort) ONLY when
+      // not in a sub-mode. Sub-modes handle Esc as "exit sub-mode" (not deny).
+      const inSubMode = reviewMode || customInputMode || noteInputMode;
+      if (inSubMode || !(event.name === "escape" || (event.name === "c" && event.ctrl))) {
         const questions = (pendingAsk.payload["questions"] as AgentQuestionItem[]) ?? [];
         const question = questions[currentQuestionIndex];
         const totalOptions = question?.options.length ?? 0;
@@ -2794,6 +2816,15 @@ export function OpenTuiApp({
           />
         );
       })()}
+      pendingMessages={queuedUserInputs.length > 0 ? (
+        <box flexDirection="column" gap={0}>
+          {queuedUserInputs.map((text, idx) => (
+            <box key={idx} backgroundColor={theme.colors.userBg} paddingLeft={1} paddingRight={1}>
+              <text fg={theme.colors.dim} content={text} wrapMode="word" width="100%" />
+            </box>
+          ))}
+        </box>
+      ) : undefined}
       todoOpenCount={planCheckpoints.filter((cp) => cp.status !== "done").length}
       todoDoneCount={planCheckpoints.filter((cp) => cp.status === "done").length}
       todoPanelOpen={todoPanelOpen}

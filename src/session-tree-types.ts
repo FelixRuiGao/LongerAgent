@@ -64,6 +64,8 @@ export interface MessageEnvelope {
   sender: string;        // display only — not used for routing
   content: string;
   timestamp: number;
+  /** When true, the TUI entry created from this message is visible to the user. Default: false for system_notice/peer_message. */
+  tuiVisible?: boolean;
 }
 
 /**

@@ -1307,7 +1307,7 @@ export class Session {
             `<system-message>\n${msg.content}\n</system-message>`,
             ctxId,
           );
-          entry.tuiVisible = false;
+          if (!msg.tuiVisible) entry.tuiVisible = false;
           this._appendEntry(entry, false);
           break;
         }
