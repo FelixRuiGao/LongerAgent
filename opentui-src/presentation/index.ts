@@ -6,7 +6,7 @@ export type {
   InlineResultData,
 } from "./types.js";
 
-export { CATEGORY_COLORS, THINKING_COLOR, SUCCESS_COLOR, ERROR_COLOR } from "./colors.js";
+export { THINKING_COLOR, SUCCESS_COLOR, ERROR_COLOR } from "./colors.js";
 export { getToolProfile, TOOL_PROFILES, HIDDEN_TOOLS } from "./tool-profiles.js";
 export type { ToolDisplayProfile } from "./tool-profiles.js";
 export { presentationTransform } from "./transform.js";

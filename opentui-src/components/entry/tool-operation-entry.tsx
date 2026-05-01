@@ -8,7 +8,7 @@ import { RGBA, createTextAttributes } from "@opentui/core";
 
 const ATTRS_UNDERLINE = createTextAttributes({ underline: true });
 const ATTRS_BOLD = createTextAttributes({ bold: true });
-import type { PresentationEntry, ToolCategory } from "../../presentation/types.js";
+import type { PresentationEntry } from "../../presentation/types.js";
 import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
 import { InlineResult } from "./inline-result.js";
@@ -19,12 +19,7 @@ import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
 const TOOL_NAME_COLOR = DEFAULT_DISPLAY_THEME.presentation.toolNameColor;
 const TOOL_NAME_RGBA = RGBA.fromHex(TOOL_NAME_COLOR);
 
-// Unified left bar — warm neutral gray for all tool categories.
-const BAR_COLORS: Record<ToolCategory, string> = {
-  observe: "#66635c",
-  modify: "#66635c",
-  orchestrate: "#66635c",
-};
+const BAR_COLOR = "#66635c";
 
 const TOOL_STREAM_MAX_LINES = 10;
 
@@ -135,8 +130,7 @@ function ToolOperationEntryInner(
   const active = entry.state === "active";
 
   const displayName = entry.toolDisplayName ?? "Tool";
-  const category = entry.toolCategory ?? "observe";
-  const barColor = BAR_COLORS[category];
+  const barColor = BAR_COLOR;
   const shimmer = useShimmer(displayName, TOOL_NAME_RGBA, active, ATTRS_BOLD);
   const interrupted = entry.toolInterrupted === true;
 

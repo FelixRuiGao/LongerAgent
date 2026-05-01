@@ -187,48 +187,6 @@ function transformTurnEnd(entry: ReconciledConversationEntry): PresentationEntry
   };
 }
 
-/**
- * Matches the display text produced by session.ts for sub-agent completion:
- *   [#1 code-review-1] [done] (123.6s)\n<preview>
- *   [#2 foo] [error]\n<preview>
- * Groups: numericId, agentName, outcome, elapsedStr, preview
- */
-const SUB_AGENT_END_PATTERN = /^\[#(\d+) ([^\]]+)\] \[(\w+)\](?: \(([\d.]+)s\))?(?:\n([\s\S]*))?$/;
-
-function transformSubAgentDone(entry: ReconciledConversationEntry): PresentationEntry | null {
-  const text = entry.entry.text ?? "";
-  const match = text.match(SUB_AGENT_END_PATTERN);
-  if (!match) return null;
-
-  const [, , agentName, outcome, elapsedStr, previewRaw] = match;
-  const preview = (previewRaw ?? "").trimEnd();
-
-  const state: PresentationState = outcome === "error" || outcome === "interrupted"
-    ? "error"
-    : "done";
-
-  const inlineResult: InlineResultData | null = preview.length > 0
-    ? {
-        text: preview,
-        dim: false,
-        maxLines: 50,
-      }
-    : null;
-
-  return {
-    id: entry.id,
-    contentVersion: entry.contentVersion,
-    kind: "tool_operation",
-    state,
-    toolDisplayName: "Agent",
-    toolCategory: "orchestrate",
-    toolText: agentName,
-    toolSuffix: elapsedStr ? `(${elapsedStr}s)` : "",
-    toolAgentName: agentName,
-    toolInlineResult: inlineResult,
-  };
-}
-
 function transformAgentResult(entry: ReconciledConversationEntry): PresentationEntry {
   const meta = getMeta(entry);
   const agentName = typeof meta.agentId === "string" && meta.agentId.trim()
@@ -237,6 +195,7 @@ function transformAgentResult(entry: ReconciledConversationEntry): PresentationE
   const outcome = typeof meta.outcome === "string" ? meta.outcome : "completed";
   const elapsedMs = typeof meta.elapsedMs === "number" ? meta.elapsedMs : 0;
   const preview = typeof meta.preview === "string" ? meta.preview.trimEnd() : "";
+  const fullText = entry.entry.fullText ?? preview;
 
   const state: PresentationState = outcome === "failed" ? "error" : "done";
   const elapsedStr = elapsedMs > 0 ? `${(elapsedMs / 1000).toFixed(1)}s` : "";
@@ -252,7 +211,7 @@ function transformAgentResult(entry: ReconciledConversationEntry): PresentationE
       : "";
 
   const inlineResult: InlineResultData | null = preview.length > 0
-    ? { text: preview, dim: false, maxLines: 50 }
+    ? { text: preview, dim: false, maxLines: 8 }
     : null;
 
   return {
@@ -267,6 +226,7 @@ function transformAgentResult(entry: ReconciledConversationEntry): PresentationE
     toolInterrupted: outcome === "interrupted",
     toolAgentName: agentName,
     toolInlineResult: inlineResult,
+    toolResultFullText: fullText,
   };
 }
 
@@ -358,6 +318,18 @@ function buildToolOperation(
     }
   }
 
+  // Compute linesAdded/linesRemoved from fileModifyData hunks for suffix display
+  let suffixMeta = resultMeta;
+  if (fileModifyData && fileModifyData.hunks.length > 0 && resultMeta) {
+    let linesAdded = 0;
+    let linesRemoved = 0;
+    for (const hunk of fileModifyData.hunks) {
+      linesAdded += hunk.additions.length;
+      linesRemoved += hunk.deletions.length;
+    }
+    suffixMeta = { ...resultMeta, linesAdded, linesRemoved };
+  }
+
   // Resolve dynamic display name for variants
   let displayName = profile.displayName;
   let noDiffBackground = false;
@@ -403,7 +375,7 @@ function buildToolOperation(
     toolDisplayName: displayName,
     toolCategory: profile.category,
     toolText: profile.text(toolArgs),
-    toolSuffix: profile.suffix?.(resultMeta) ?? "",
+    toolSuffix: profile.suffix?.(suffixMeta) ?? "",
     toolInterrupted,
     toolAgentName,
     toolStartedAt: callEntry.entry.startedAt,
@@ -574,13 +546,36 @@ export function presentationTransform(
 
       case "tool_call": {
         const callEntry = entry;
+        const callToolName = getToolName(callEntry);
         i++;
         let resultEntry: ReconciledConversationEntry | null = null;
         if (i < entries.length && entries[i].entry.kind === "tool_result") {
           resultEntry = entries[i];
           i++;
         }
-        result.push(buildToolOperation(callEntry, resultEntry, activeEntryId));
+        const toolOp = buildToolOperation(callEntry, resultEntry, activeEntryId);
+
+        // Fold subsequent summary entries into the summarize tool's inline result
+        if (callToolName === "summarize" && resultEntry) {
+          const summaryTexts: string[] = [];
+          while (i < entries.length && getMeta(entries[i]).isSummary) {
+            const summaryText = entries[i].entry.text;
+            const stripped = summaryText.replace(/^\[Summary of [^\]]*\]\n?/, "");
+            if (stripped.trim()) summaryTexts.push(stripped.trim());
+            i++;
+          }
+          if (summaryTexts.length > 0) {
+            const merged = summaryTexts.join("\n---\n");
+            toolOp.toolInlineResult = {
+              text: merged,
+              dim: false,
+              maxLines: 5,
+            };
+            toolOp.toolResultFullText = merged;
+          }
+        }
+
+        result.push(toolOp);
         break;
       }
 
@@ -599,9 +594,6 @@ export function presentationTransform(
       default: {
         if (isTurnEndEntry(entry)) {
           result.push(transformTurnEnd(entry));
-        } else if (entry.entry.meta?.statusType === "sub_agent_end") {
-          const synthetic = transformSubAgentDone(entry);
-          result.push(synthetic ?? transformSystem(entry));
         } else {
           result.push(transformSystem(entry));
         }

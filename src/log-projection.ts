@@ -138,6 +138,7 @@ function toConversationEntry(
       kind: "agent_result",
       text: "",
       id: entry.id,
+      fullText: typeof entry.content === "string" ? entry.content : undefined,
       meta: { ...(entry.meta as Record<string, unknown>) },
     };
   }

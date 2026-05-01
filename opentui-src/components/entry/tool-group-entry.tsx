@@ -13,6 +13,7 @@ import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
 import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
 import { getActivityIndicatorColor } from "../../display/entries/entry-variants.js";
+import { SelectableRow } from "../../display/primitives/selectable-row.js";
 
 const TOOL_NAME_COLOR = DEFAULT_DISPLAY_THEME.presentation.toolNameColor;
 const TOOL_NAME_RGBA = RGBA.fromHex(TOOL_NAME_COLOR);
@@ -75,39 +76,36 @@ function ToolGroupEntryInner(
 
   const indicator = active ? "›" : entry.state === "error" ? "⏺" : "⏺";
 
-  const toggleExpand = (e: any) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setExpanded((prev) => !prev);
-  };
+  const toggleExpand = () => setExpanded((prev) => !prev);
 
   return (
     <box flexDirection="column" width="100%" gap={0}>
-      {/* Header line — only the triangle toggles expand */}
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingTop={1}
-        width="100%"
-      >
-        <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
-        {active ? (
-          <>
-            <text content={shimmer} flexShrink={0} />
-            <text content="  " flexShrink={0} />
-            <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={entry.groupLatestToolName ?? ""} flexShrink={0} />
-            <text content="  " flexShrink={0} />
-            <text fg={colors.dim} content={entry.groupLatestToolText ?? ""} truncate flexGrow={1} flexShrink={1} />
-          </>
-        ) : (
-          <>
-            <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={summary} flexShrink={0} />
-            <text content=" " flexShrink={0} onMouseDown={toggleExpand} />
-            <text fg={colors.dim} content={expanded ? "▾" : "▸"} flexShrink={0} onMouseDown={toggleExpand} />
-            <text content=" " flexShrink={0} onMouseDown={toggleExpand} />
-          </>
-        )}
-      </box>
+      {active ? (
+        <box
+          flexDirection="row"
+          paddingLeft={1}
+          paddingTop={1}
+          width="100%"
+        >
+          <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
+          <text content={shimmer} flexShrink={0} />
+          <text content="  " flexShrink={0} />
+          <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={entry.groupLatestToolName ?? ""} flexShrink={0} />
+          <text content="  " flexShrink={0} />
+          <text fg={colors.dim} content={entry.groupLatestToolText ?? ""} truncate flexGrow={1} flexShrink={1} />
+        </box>
+      ) : (
+        <box paddingTop={1}>
+          <SelectableRow hoverBackgroundColor={colors.border} onPress={toggleExpand}>
+            <box flexDirection="row" paddingLeft={1} width="100%">
+              <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
+              <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={summary} flexShrink={0} />
+              <text content=" " flexShrink={0} />
+              <text fg={colors.dim} content={expanded ? "▾" : "▸"} flexShrink={0} />
+            </box>
+          </SelectableRow>
+        </box>
+      )}
 
       {/* Expanded detail */}
       {expanded && !active ? (

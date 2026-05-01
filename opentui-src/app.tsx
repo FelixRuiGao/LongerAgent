@@ -260,6 +260,22 @@ export function OpenTuiApp({
   const [todoPanelOpen, setTodoPanelOpen] = useState(false);
   const [scrolledAway, setScrolledAway] = useState(false);
 
+  // Auto-open panels on first appearance (once per session)
+  const hasAutoOpenedAgents = useRef(false);
+  const hasAutoOpenedTodos = useRef(false);
+  useEffect(() => {
+    if (childSessions.length > 0 && !hasAutoOpenedAgents.current) {
+      hasAutoOpenedAgents.current = true;
+      setAgentsPanelOpen(true);
+    }
+  }, [childSessions.length]);
+  useEffect(() => {
+    if (planCheckpoints.length > 0 && !hasAutoOpenedTodos.current) {
+      hasAutoOpenedTodos.current = true;
+      setTodoPanelOpen(true);
+    }
+  }, [planCheckpoints.length]);
+
   // Agent list modal state
   const [agentListOpen, setAgentListOpen] = useState(false);
   const [agentListSelectedIndex, setAgentListSelectedIndex] = useState(0);

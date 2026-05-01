@@ -121,6 +121,7 @@ describe("projectToTuiEntries", () => {
         kind: "agent_result",
         text: "",
         id: "ar-001",
+        fullText: "[Agent \"reviewer-1\" failed]\nBoom",
         meta: {
           contextId: "c-ar-1",
           agentId: "reviewer-1",

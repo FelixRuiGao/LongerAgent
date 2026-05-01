@@ -196,6 +196,15 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     },
     inlineResult: false,
   },
+  summarize: {
+    category: "observe",
+    displayName: "Summarize",
+    text: (args) => {
+      const ops = args.operations;
+      return Array.isArray(ops) ? `${ops.length} ${ops.length === 1 ? "group" : "groups"}` : "";
+    },
+    inlineResult: { maxLines: 5 },
+  },
 };
 
 export const HIDDEN_TOOLS = new Set<string>();
