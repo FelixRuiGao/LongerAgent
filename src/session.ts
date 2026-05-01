@@ -1159,21 +1159,13 @@ export class Session {
 
   /**
    * Unified message delivery entry point.
-   * Routes based on _agentState:
-   *   idle    → inbox + schedule auto-resume (kicks off a new turn)
-   *   working → inbox (delivered via tool_result push or activation boundary drain)
-   *   waiting → inbox + wake wait
+   * All states push to inbox. Idle state also schedules auto-resume.
+   * Working/waiting: the activation boundary or await_event poll drains.
    */
   private _deliverMessage(msg: MessageEnvelope): void {
     this._inbox.push(msg);
     if (this._agentState === "idle") {
       this._scheduleAutoResume();
-      return;
-    }
-    // working / waiting → enqueue
-    // Check _waitHandle (not _agentState) to wake — eliminates race window
-    if (this._waitHandle) {
-      this._wakeWait();
     }
   }
 
@@ -1269,29 +1261,76 @@ export class Session {
   }
 
   // ------------------------------------------------------------------
-  // Unified inbox drain — single renderer for all message consumers
+  // Inbox drain — per-entry rendering
   // ------------------------------------------------------------------
 
   /**
-   * Drain (or peek at) the inbox, rendering each message by type in arrival order.
-   * Returns null if inbox is empty. This is the SOLE rendering function for inbox content.
-   *
-   * @param opts.peek  If true, read without draining (for interrupt snapshots).
+   * Drain the inbox, writing each message as a separate log entry.
+   * user_input → visible user_message (raw text, no XML wrapper).
+   * peer_message / system_notice → hidden user_message (<system-message> wrapped).
    */
-  private _drainInbox(opts?: { peek?: boolean }): string | null {
+  private _drainInboxAsEntries(): void {
+    if (this._inbox.length === 0) return;
+    const messages = [...this._inbox];
+    this._inbox = [];
+
+    for (const msg of messages) {
+      const ctxId = this._allocateContextId();
+      switch (msg.type) {
+        case "user_input": {
+          this._appendEntry(createUserMessageEntry(
+            this._nextLogId("user_message"),
+            this._turnCount,
+            msg.content.slice(0, 200),
+            msg.content,
+            ctxId,
+          ), false);
+          break;
+        }
+        case "peer_message": {
+          const entry = createUserMessageEntry(
+            this._nextLogId("user_message"),
+            this._turnCount,
+            `[Agent ${msg.sender}]`,
+            `<system-message>\n${msg.content}\n</system-message>`,
+            ctxId,
+          );
+          entry.tuiVisible = false;
+          this._appendEntry(entry, false);
+          break;
+        }
+        case "system_notice": {
+          const entry = createUserMessageEntry(
+            this._nextLogId("user_message"),
+            this._turnCount,
+            `[System]`,
+            `<system-message>\n${msg.content}\n</system-message>`,
+            ctxId,
+          );
+          entry.tuiVisible = false;
+          this._appendEntry(entry, false);
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * Drain inbox as a single string for child session turn input.
+   * Used only by _takeQueuedMessagesAsTurnInput (child session resume).
+   */
+  private _drainInboxToString(): string | null {
     if (this._inbox.length === 0) return null;
-
-    const messages = opts?.peek ? [...this._inbox] : this._inbox;
-    if (!opts?.peek) this._inbox = [];
-
+    const messages = [...this._inbox];
+    this._inbox = [];
     const sections: string[] = [];
     for (const msg of messages) {
       switch (msg.type) {
         case "user_input":
-          sections.push(`<user-message>\n${msg.content}\n</user-message>`);
+          sections.push(msg.content);
           break;
         case "peer_message":
-          sections.push(`<sub-agent-message from="${msg.sender}">\n${msg.content}\n</sub-agent-message>`);
+          sections.push(`<system-message>\n${msg.content}\n</system-message>`);
           break;
         case "system_notice":
           sections.push(`<system-message>\n${msg.content}\n</system-message>`);
@@ -1302,54 +1341,10 @@ export class Session {
   }
 
   /**
-   * Inject all pending messages at activation boundary.
-   * Drains inbox → pushes as user_message log entry.
-   */
-  private _injectPendingMessages(): void {
-    const drained = this._drainInbox();
-    if (!drained) return;
-    const content = `[New Messages]\n\n${drained}`;
-    const ctxId = this._allocateContextId();
-    const entry = createUserMessageEntry(
-      this._nextLogId("user_message"),
-      this._turnCount,
-      "[New Messages]",
-      content,
-      ctxId,
-    );
-    // Hide from TUI: inbox-delivered peer/system messages shouldn't render as
-    // user bubbles. API still receives them via apiRole="user".
-    entry.tuiVisible = false;
-    this._appendEntry(entry, false);
-  }
-
-  /**
-   * Build notification content for push delivery into tool results.
-   * Drains the inbox. Returns null if nothing pending.
-   */
-  private _buildNotificationContent(): string | null {
-    const drained = this._drainInbox();
-    if (!drained) return null;
-    return `\n\n[Incoming Messages]\n${drained}`;
-  }
-
-  /**
    * Drain inbox as turn input for idle agent activation.
    */
   _takeQueuedMessagesAsTurnInput(): string | null {
-    return this._drainInbox();
-  }
-
-  // Atomic wait handle — resolver is installed BEFORE state transitions.
-  // _deliverMessage checks _waitHandle (not _agentState) to wake, eliminating the race window.
-  private _waitHandle: { resolve: () => void } | null = null;
-
-  private _wakeWait(): void {
-    const handle = this._waitHandle;
-    if (handle) {
-      this._waitHandle = null;
-      handle.resolve();
-    }
+    return this._drainInboxToString();
   }
 
   private _makeAbortPromise(signal: AbortSignal | null | undefined): Promise<"aborted"> | null {
@@ -1452,27 +1447,98 @@ export class Session {
       return { accepted: false, reason: "compact_in_progress" };
     }
 
+    // Abort main turn ONLY. Sub-agents and background shells are independent
+    // background work — they continue running. Explicit Ctrl+X / Ctrl+K
+    // kills them separately.
     this._currentTurnAbortController?.abort();
-
     this._activeAsk = null;
     this._pendingTurnState = null;
-    this._inbox = [];
-    this._wakeWait();
+    return { accepted: true };
+  }
+
+  /**
+   * Cascade-kill all running child agents and background shells.
+   * Called by TUI on Ctrl+X.
+   */
+  interruptAllChildAgents(): void {
     if (this._childSessions.size > 0) {
-      const interruptedChildren = this._cascadeKillRunningChildren("user_mass_interrupt");
-      if (interruptedChildren > 0) {
-        this._appendEntry(createStatus(
-          this._nextLogId("status"),
-          this._turnCount,
-          `Interrupted ${interruptedChildren} sub-agent${interruptedChildren === 1 ? "" : "s"}.`,
-          "children_interrupted",
-        ), false);
-      }
+      this._cascadeKillRunningChildren("user_mass_interrupt");
     }
     if (this._shellManager.hasTrackedShells()) {
       this._forceKillAllShells();
     }
-    return { accepted: true };
+  }
+
+  hasRunningChildAgents(): boolean {
+    for (const handle of this._childSessions.values()) {
+      if (handle.lifecycle === "running" || handle.lifecycle === "blocked") return true;
+    }
+    return false;
+  }
+
+  killAllShells(): void {
+    if (this._shellManager.hasTrackedShells()) {
+      this._forceKillAllShells();
+    }
+  }
+
+  /**
+   * If a permission approval or agent_question ask is pending, synthesize
+   * Deny/Decline resolution + denial tool_result. Returns true if anything
+   * was denied. Called by TUI on ESC/Ctrl+C while a prompt is showing.
+   */
+  denyPendingAsk(): boolean {
+    const ask = this._activeAsk;
+    if (!ask) return false;
+
+    if (ask.kind === "approval") {
+      const denyIndex = ask.options.length - 1;
+      this.resolveApprovalAsk(ask.id, denyIndex);
+      return true;
+    }
+
+    // agent_question: synthesize decline resolution + error tool_result.
+    this._appendEntry(createAskResolution(
+      this._nextLogId("ask_resolution"),
+      this._turnCount,
+      { declined: true },
+      ask.id,
+      "agent_question",
+    ), false);
+
+    const toolCallId = (ask.payload as Record<string, unknown>)["toolCallId"] as string ?? "ask";
+    const contextId = this._findToolCallContextId(toolCallId, ask.roundIndex)
+      ?? this._allocateContextId();
+    this._appendEntry(createToolResultEntry(
+      this._nextLogId("tool_result"),
+      this._turnCount,
+      ask.roundIndex ?? this._computeNextRoundIndex(),
+      {
+        toolCallId,
+        toolName: "ask",
+        content: "ERROR: User declined to answer the question.",
+        toolSummary: "ask declined",
+      },
+      { isError: true, contextId },
+    ), false);
+
+    this._askHistory.push({
+      askId: ask.id,
+      kind: ask.kind,
+      summary: ask.summary,
+      decidedAt: new Date().toISOString(),
+      decision: "declined",
+      source: ask.source,
+    });
+    if (this._askHistory.length > 100) {
+      this._askHistory = this._askHistory.slice(-100);
+    }
+
+    this._activeAsk = null;
+    this._emitAskResolvedProgress(ask.id, "declined", "agent_question");
+    this._pendingTurnState = { stage: "activation" };
+    this.onSaveRequest?.();
+    return true;
   }
 
   /**
@@ -1490,7 +1556,7 @@ export class Session {
     this._hintState = "none";
     this._agentState = "idle";
     this._inbox = [];
-    this._waitHandle = null;
+    // _waitHandle removed — await_event uses polling now
     this._activeAsk = null;
     this._askHistory = [];
     this._pendingTurnState = null;
@@ -2325,7 +2391,7 @@ export class Session {
     this._currentTurnAbortController = null;
     this._turnInFlight = null;
     this._turnRelease = null;
-    this._waitHandle = null;
+    // _waitHandle removed — await_event uses polling now
     this.primaryAgent.replaceModelConfig({ ...shadow.primaryAgent.modelConfig });
     this._persistedModelSelection = { ...shadow._persistedModelSelection };
 
@@ -2494,13 +2560,14 @@ export class Session {
     }
 
     this._rebuildRuntimeSignalsFromLog();
+    // ESC-deny model: resolve open asks as Deny/Decline FIRST so the
+    // subsequent normalization sees them as completed tool_call → tool_result
+    // pairs and doesn't add spurious "interrupted" markers.
+    this._resolveOpenAsksAsDenyOnRestore();
     this._normalizeInterruptedTurnFromLog("Last turn was interrupted unexpectedly and recovered after restart.");
     if (opts?.restoreChildren !== false) {
       this._restoreChildSessionsFromLog(meta.childSessions ?? [], opts?.warnings);
     }
-
-    // Restore ask state from log: find unclosed ask_request
-    this._restoreAskStateFromLog(entries);
 
     // Rebuild ask history from ask_resolution entries
     this._askHistory = [];
@@ -3621,47 +3688,89 @@ export class Session {
    * Restore ask state from log entries.
    * Scans for unclosed ask_request (no matching ask_resolution).
    */
-  private _restoreAskStateFromLog(entries: LogEntry[]): void {
-    // Build set of resolved ask IDs
+  /**
+   * ESC-deny model: on restore, any open ask_request without a matching
+   * ask_resolution is treated as "user never decided" → synthesize a
+   * Deny/Decline resolution + a matching tool_result so the model sees
+   * a definite outcome. Must run BEFORE _normalizeInterruptedTurnFromLog.
+   */
+  private _resolveOpenAsksAsDenyOnRestore(): void {
+    const log = this._log;
     const resolvedAskIds = new Set<string>();
-    for (const e of entries) {
-      if (e.type === "ask_resolution" && !e.discarded) {
+    for (const e of log) {
+      if (e.discarded) continue;
+      if (e.type === "ask_resolution") {
         resolvedAskIds.add(String((e.meta as Record<string, unknown>)["askId"] ?? ""));
       }
     }
 
-    // Find unclosed ask_request (has no matching ask_resolution)
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i];
-      if (e.type !== "ask_request" || e.discarded) continue;
+    const openAsks: LogEntry[] = [];
+    for (const e of log) {
+      if (e.discarded) continue;
+      if (e.type !== "ask_request") continue;
       const askId = String((e.meta as Record<string, unknown>)["askId"] ?? "");
-      if (resolvedAskIds.has(askId)) continue;
-      const interruptedTurn = entries.some((candidate) =>
-        !candidate.discarded &&
-        candidate.turnIndex === e.turnIndex &&
-        candidate.type === "turn_end" &&
-        (((candidate.meta as Record<string, unknown>)["status"] as string | undefined) === "interrupted" ||
-          ((candidate.meta as Record<string, unknown>)["status"] as string | undefined) === "error"),
-      );
-      if (interruptedTurn) continue;
+      if (!resolvedAskIds.has(askId)) openAsks.push(e);
+    }
+    if (openAsks.length === 0) return;
 
-      // Found an unclosed ask — restore it as active
-      const payload = e.content as Record<string, unknown>;
-      const askKind = String((e.meta as Record<string, unknown>)["askKind"] ?? "agent_question");
-      if (askKind === "agent_question") {
-        const meta = e.meta as Record<string, unknown>;
-        this._activeAsk = {
-          id: askId,
-          kind: "agent_question",
-          createdAt: new Date(e.timestamp).toISOString(),
-          source: { agentId: this.primaryAgent.name, agentName: this.primaryAgent.name },
-          roundIndex: typeof meta["roundIndex"] === "number" ? (meta["roundIndex"] as number) : undefined,
-          summary: `Restored ask`,
-          payload: payload as any,
-          options: [],
-        };
+    for (const askEntry of openAsks) {
+      const askId = String((askEntry.meta as Record<string, unknown>)["askId"] ?? "");
+      const askKind = String((askEntry.meta as Record<string, unknown>)["askKind"] ?? "agent_question");
+      const roundIndex = typeof (askEntry.meta as Record<string, unknown>)["roundIndex"] === "number"
+        ? ((askEntry.meta as Record<string, unknown>)["roundIndex"] as number)
+        : (askEntry.roundIndex ?? this._computeNextRoundIndex());
+      const payload = askEntry.content as Record<string, unknown> | null;
+      const toolCallId = String((askEntry.meta as Record<string, unknown>)["toolCallId"] ?? "");
+
+      if (askKind === "approval") {
+        const toolName = String(payload?.["toolName"] ?? "");
+        this._appendEntry(createAskResolution(
+          this._nextLogId("ask_resolution"),
+          askEntry.turnIndex,
+          { choice: "Deny", toolName, restored: true },
+          askId,
+          "approval",
+        ), false);
+        if (toolCallId) {
+          const ctxId = this._findToolCallContextId(toolCallId, roundIndex)
+            ?? this._allocateContextId();
+          this._appendEntry(createToolResultEntry(
+            this._nextLogId("tool_result"),
+            askEntry.turnIndex,
+            roundIndex,
+            {
+              toolCallId,
+              toolName: toolName || "bash",
+              content: "ERROR: Tool execution was cancelled before user decision (session restored).",
+              toolSummary: `${toolName || "tool"} cancelled`,
+            },
+            { isError: true, contextId: ctxId },
+          ), false);
+        }
+      } else {
+        this._appendEntry(createAskResolution(
+          this._nextLogId("ask_resolution"),
+          askEntry.turnIndex,
+          { declined: true, restored: true },
+          askId,
+          "agent_question",
+        ), false);
+        const askToolCallId = toolCallId || (payload?.["toolCallId"] as string | undefined) || "ask";
+        const ctxId = this._findToolCallContextId(askToolCallId, roundIndex)
+          ?? this._allocateContextId();
+        this._appendEntry(createToolResultEntry(
+          this._nextLogId("tool_result"),
+          askEntry.turnIndex,
+          roundIndex,
+          {
+            toolCallId: askToolCallId,
+            toolName: "ask",
+            content: "ERROR: User declined to answer the question (session restored).",
+            toolSummary: "ask declined",
+          },
+          { isError: true, contextId: ctxId },
+        ), false);
       }
-      break;
     }
   }
 
@@ -4257,8 +4366,8 @@ export class Session {
         this.onSaveRequest?.();
 
         if (result.compactNeeded && result.compactScenario) {
-          if (this._hasInboxMessages() || this._hasActiveAgents()) {
-            this._injectPendingMessages();
+          if (this._hasInboxMessages()) {
+            this._drainInboxAsEntries();
           }
           const logLenBefore = this._log.length;
           try {
@@ -4300,53 +4409,20 @@ export class Session {
           this._checkAndInjectHint(result);
         }
 
-        // Wait for active agents (if any and no queued messages yet)
-        if (
-          this._hasActiveAgents()
-          && !this._hasInboxMessages()
-        ) {
-          await this._waitForAnyAgent(activeSignal);
-          if (activeSignal.aborted) {
-            this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
-              activationCompleted: true,
-            });
-            this.onSaveRequest?.();
-            finalText = textAccumulator.text.trim() || "";
-            turnEndStatus = "interrupted";
-            break;
-          }
-
-          this.onSaveRequest?.();
+        // Final output (no tool calls) → turn ends.
+        // Sub-agent results are processed via auto-resume in a new turn.
+        // Model should use await_event explicitly to wait for sub-agents.
+        if (result.toolHistory.length === 0) {
+          reachedLimit = false;
+          turnEndStatus = "completed";
+          break;
         }
 
-        // ★ ACTIVATION BOUNDARY DRAIN — unified exit point ★
+        // ★ ACTIVATION BOUNDARY DRAIN — after tool_results, before next activation ★
         if (this._hasInboxMessages()) {
-          this._injectPendingMessages();
-          continue;  // new activation to process injected messages
+          this._drainInboxAsEntries();
+          continue;  // new activation to process drained messages
         }
-
-        // Still have active agents but nothing pending yet — wait more
-        if (this._hasActiveAgents()) {
-          await this._waitForAnyAgent(activeSignal);
-          if (activeSignal.aborted) {
-            this._handleInterruption(logLenBeforeActivation, textAccumulator.text, {
-              activationCompleted: true,
-            });
-            this.onSaveRequest?.();
-            finalText = textAccumulator.text.trim() || "";
-            turnEndStatus = "interrupted";
-            break;
-          }
-
-          this.onSaveRequest?.();
-          continue;  // loop back to drain check
-        }
-
-        // Nothing pending, no active agents → turn ends
-        reachedLimit = false;
-        this._agentState = "idle";
-        turnEndStatus = "completed";
-        break;
       }
 
       if (reachedLimit && !activeSignal.aborted) {
@@ -4363,10 +4439,9 @@ export class Session {
       if (turnEndStatus === "interrupted" && this._hasActiveAgents()) {
         await this._waitForAllChildTurnsSettled();
       }
-      // Drain any messages that arrived after the last activation boundary check.
-      // Without this, messages queued during the final activation would be orphaned.
+      // Drain any messages that arrived after the last activation boundary.
       if (!this._deferQueuedMessageInjectionOnTurnExit && this._hasInboxMessages()) {
-        this._injectPendingMessages();
+        this._drainInboxAsEntries();
       }
       this._agentState = "idle";
       // Finalize tool_call entries stuck in non-terminal state (e.g. abort during await_event).
@@ -4446,9 +4521,8 @@ export class Session {
       return resumed;
     }
 
-    // skipUserInput path: auto-resume from idle. Inbox already has queued
-    // messages; we drain them as a hidden user_message entry instead of
-    // writing a synthetic empty user input.
+    // skipUserInput path: auto-resume from idle. Drain inbox as individual
+    // entries instead of writing a synthetic empty user input.
     if (options?.skipUserInput) {
       this._lastTurnEndStatus = null;
       this._turnCount += 1;
@@ -4456,7 +4530,7 @@ export class Session {
         createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
         false,
       );
-      this._injectPendingMessages();
+      this._drainInboxAsEntries();
       this.onSaveRequest?.();
     } else {
       let userContent: string | Array<Record<string, unknown>>;
@@ -5211,7 +5285,7 @@ export class Session {
       this._promptCacheKey,
       this._compactInProgress ? undefined : (() => this.onSaveRequest?.()),
       this._beforeToolExecute,
-      () => this._buildNotificationContent(),
+      () => null,
       !suppressStreaming,
       emitRetryAttempt,
       emitRetrySuccess,
@@ -6372,14 +6446,12 @@ export class Session {
       this._allocateContextId(),
       agentResult.fullOutputPath,
     ), false);
-    if (cause !== "user_mass_interrupt") {
-      this._deliverMessage({
-        type: "peer_message",
-        sender: handle.id,
-        content: agentResult.content,
-        timestamp: Date.now(),
-      });
-    }
+    this._deliverMessage({
+      type: "peer_message",
+      sender: handle.id,
+      content: agentResult.content,
+      timestamp: Date.now(),
+    });
     handle.terminationCause = undefined;
 
     // Lifecycle transition: oneshot → archived, persistent → idle
@@ -6851,86 +6923,52 @@ export class Session {
       return new ToolResult({ content: "Error: 'seconds' must be a number." });
     }
     const seconds = Math.max(15, secondsRaw);
+    const signal = this._currentTurnSignal;
 
-    this._agentState = "waiting";
-    const abortPromise = this._makeAbortPromise(this._currentTurnSignal);
-
-    const throwIfTurnAborted = (): never => {
-      this._waitHandle = null;
-      this._agentState = "working";
-      this._setSelfPhase("idle");
+    if (signal?.aborted) {
       throw new DOMException("The operation was aborted.", "AbortError");
-    };
-
-    if (this._currentTurnSignal?.aborted) {
-      throwIfTurnAborted();
     }
 
-    // Pre-check: if inbox already has messages, return immediately
+    // Pre-check: if inbox already has messages, return immediately.
+    // Inbox content is NOT included in tool_result — the activation boundary
+    // drain writes them as individual entries after this tool_result.
     if (this._hasInboxMessages()) {
-      this._agentState = "working";
-      this._setSelfPhase("idle");
-      const drained = this._drainInbox() ?? "";
       const brief = this._buildDetailedChildStatusReport();
-      const parts = [drained, brief].filter(Boolean);
-      return new ToolResult({ content: `Messages pending.\n\n${parts.join("\n\n")}` });
+      const shell = this._buildShellReport();
+      const parts = ["Messages pending.", brief, shell].filter(Boolean);
+      return new ToolResult({ content: parts.join("\n\n") });
     }
 
-    // No tracked workers, no shells, no message wake source — fall through to
-    // the Promise.race below; it still races on timeout + messageWake. When
-    // child sessions exist (even if all are blocked/idle/archived), settleResolve
-    // resolves on lifecycle changes, so we can wait for state transitions too.
-    // Previously this short-circuited and returned immediately when children
-    // were blocked, causing the model to busy-loop.
-
-    // Atomic: install resolver BEFORE state transition → no race window
-    const messageWake = new Promise<"message">((resolve) => {
-      this._waitHandle = { resolve: () => resolve("message") };
-    });
+    // 1s polling loop: check inbox every second until timeout or message.
+    this._agentState = "waiting";
     this._setSelfPhase("waiting");
+    const startMs = Date.now();
+    const deadline = startMs + seconds * 1000;
 
-    let wakeReason: "timeout" | "message" | "event" = "timeout";
-
-    const timeout = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), seconds * 1000),
-    );
-    const racers = this._getWorkingChildRacers();
-
-    const winner = await Promise.race([
-      ...racers,
-      timeout,
-      messageWake,
-      ...(abortPromise ? [abortPromise] : []),
-    ]);
-    if (winner === "aborted") {
-      throwIfTurnAborted();
-    }
-    if (winner === "message") {
-      wakeReason = "message";
-    } else if (winner !== "timeout") {
-      wakeReason = "event";
+    while (Date.now() < deadline) {
+      if (this._hasInboxMessages()) break;
+      if (signal?.aborted) {
+        this._agentState = "working";
+        this._setSelfPhase("idle");
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
+      const sleepMs = Math.min(1000, deadline - Date.now());
+      if (sleepMs <= 0) break;
+      await new Promise<void>((r) => setTimeout(r, sleepMs));
     }
 
-    this._waitHandle = null;
     this._agentState = "working";
     this._setSelfPhase("idle");
 
-    const hasNewContent = this._hasInboxMessages();
-    let header: string;
-    if (wakeReason === "message") {
-      header = `Waited — new message arrived.`;
-    } else if (wakeReason === "event") {
-      header = `Waited — sub-session or shell state changed.`;
-    } else if (hasNewContent) {
-      header = `Waited ${seconds}s. New event arrived during wait.`;
-    } else {
-      header = `Waited ${seconds}s. No new event arrived during this period.`;
-    }
-
-    const drained = this._drainInbox() ?? "";
+    // Build tool_result: header + status report only (no inbox content).
+    const elapsed = Math.round((Date.now() - startMs) / 1000);
+    const hasMessages = this._hasInboxMessages();
+    const header = hasMessages
+      ? `Waited for ${elapsed}s — new message arrived.`
+      : `Waited for ${elapsed}s — no new events.`;
     const brief = this._buildDetailedChildStatusReport();
     const shell = this._buildShellReport();
-    const parts = [header, drained, brief, shell].filter(Boolean);
+    const parts = [header, brief, shell].filter(Boolean);
     return new ToolResult({ content: parts.join("\n\n") });
   }
 
@@ -7261,23 +7299,9 @@ export class Session {
     return "";
   }
 
-  private async _waitForAnyAgent(signal?: AbortSignal): Promise<void> {
-    const racers = this._getWorkingChildRacers();
-    if (racers.length === 0) return;
-    const abortPromise = this._makeAbortPromise(signal);
-    // Install inbox watcher so messages can also wake this wait
-    const inboxWake = new Promise<"message">((resolve) => {
-      this._waitHandle = { resolve: () => resolve("message") };
-    });
-    const winner = await Promise.race([
-      ...racers,
-      inboxWake,
-      ...(abortPromise ? [abortPromise] : []),
-    ]);
-    this._waitHandle = null;  // cleanup
-    if (winner === "aborted") return;
-    await Promise.resolve();
-  }
+  // _waitForAnyAgent removed — await_event uses 1s polling now, and the
+  // activation loop no longer does implicit waits. Model should call
+  // await_event explicitly to wait for sub-agent completion.
 
   // ==================================================================
   // Image file storage (v2 — image_ref)

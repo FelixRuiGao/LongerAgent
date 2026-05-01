@@ -1996,8 +1996,9 @@ export function OpenTuiApp({
     }
 
     if (pendingAsk?.kind === "approval") {
-      if (event.name === "c" && event.ctrl) {
-        // Let Ctrl+C pass through to interrupt handler
+      // Esc / Ctrl+C: pass through to performInterrupt below (deny + abort)
+      if (event.name === "escape" || (event.name === "c" && event.ctrl)) {
+        // fall through
       } else {
         const totalOptions = pendingAsk.options.length;
         if (event.name === "up") {
@@ -2035,7 +2036,8 @@ export function OpenTuiApp({
     }
 
     if (pendingAsk?.kind === "agent_question") {
-      if (!(event.name === "c" && event.ctrl)) {
+      // Esc / Ctrl+C: pass through to performInterrupt below (deny + abort)
+      if (!(event.name === "escape" || (event.name === "c" && event.ctrl))) {
         const questions = (pendingAsk.payload["questions"] as AgentQuestionItem[]) ?? [];
         const question = questions[currentQuestionIndex];
         const totalOptions = question?.options.length ?? 0;
@@ -2383,122 +2385,97 @@ export function OpenTuiApp({
       return;
     }
 
-    // Esc on main page: interrupt current turn (no exit behavior)
-    if (event.name === "escape" && activeTabId === "main") {
-      if (commandPicker) {
-        setCommandPicker(null);
-        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
-        event.preventDefault();
-        event.stopPropagation();
-        return;
+    // Unified interrupt helper: deny pending ask (if any) + abort main turn.
+    const performInterrupt = (): boolean => {
+      if (pendingAsk) {
+        session.denyPendingAsk?.();
+        setPendingAsk(null);
       }
-      if (checkboxPicker) {
-        setCheckboxPicker(null);
-        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
-        event.preventDefault();
-        event.stopPropagation();
-        return;
+      if (!processingRef.current && !pendingAsk) return false;
+      const decision = session.requestTurnInterrupt
+        ? session.requestTurnInterrupt()
+        : (session.cancelCurrentTurn?.(), { accepted: true as const });
+      if (decision.accepted) {
+        abortControllerRef.current?.abort();
+        setPhase("Working");
+      } else {
+        showHint(
+          decision.reason === "compact_in_progress"
+            ? "Interrupt is disabled during compact phase"
+            : "Interrupt is currently disabled.",
+        );
       }
-      if (commandOverlay.visible) {
-        setCommandOverlay(EMPTY_COMMAND_OVERLAY);
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (processingRef.current) {
-        const decision = session.requestTurnInterrupt
-          ? session.requestTurnInterrupt()
-          : (session.cancelCurrentTurn?.(), { accepted: true as const });
-        if (decision.accepted) {
-          abortControllerRef.current?.abort();
-          setPhase("Working");
-        } else {
-          showHint(
-            decision.reason === "compact_in_progress"
-              ? "Interrupt is disabled during compact phase"
-              : "Interrupt is currently disabled.",
-          );
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
+      return true;
+    };
 
-      // Double-Esc while idle: open rewind picker
-      const now = Date.now();
-      if (now - lastEscRef.current < DOUBLE_ESC_WINDOW_MS) {
-        lastEscRef.current = 0;
-        void handleSubmit("/rewind");
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      lastEscRef.current = now;
-    }
-
-    if (event.name === "c" && event.ctrl) {
+    // Esc / Ctrl+C on main page: close overlays → deny+abort → idle double-tap
+    if ((event.name === "escape" || (event.name === "c" && event.ctrl)) && activeTabId === "main") {
       event.preventDefault();
       event.stopPropagation();
 
+      // 1. Close overlays first
       if (commandPicker) {
         setCommandPicker(null);
         setCommandOverlay(EMPTY_COMMAND_OVERLAY);
         return;
       }
-
       if (checkboxPicker) {
         setCheckboxPicker(null);
         setCommandOverlay(EMPTY_COMMAND_OVERLAY);
         return;
       }
-
       if (commandOverlay.visible) {
         setCommandOverlay(EMPTY_COMMAND_OVERLAY);
         return;
       }
 
+      // 2. Processing or pending ask → interrupt
+      if (processingRef.current || pendingAsk) {
+        performInterrupt();
+        return;
+      }
+
+      // 3. Idle double-tap: Esc → /rewind, Ctrl+C → exit
+      if (event.name === "escape") {
+        const now = Date.now();
+        if (now - lastEscRef.current < DOUBLE_ESC_WINDOW_MS) {
+          lastEscRef.current = 0;
+          void handleSubmit("/rewind");
+          return;
+        }
+        lastEscRef.current = now;
+        return;
+      }
+      // Ctrl+C idle path
       const now = Date.now();
       if (now - lastCtrlCRef.current < CTRL_C_EXIT_WINDOW_MS) {
-        if (processingRef.current) {
-          const decision = session.requestTurnInterrupt
-            ? session.requestTurnInterrupt()
-            : (session.cancelCurrentTurn?.(), { accepted: true as const });
-          if (decision.accepted) {
-            abortControllerRef.current?.abort();
-          }
-        }
         beginClosing();
         return;
       }
-
       lastCtrlCRef.current = now;
-
-      if (processingRef.current) {
-        const decision = session.requestTurnInterrupt
-          ? session.requestTurnInterrupt()
-          : (session.cancelCurrentTurn?.(), { accepted: true as const });
-        if (decision.accepted) {
-          abortControllerRef.current?.abort();
-          // Do NOT set processing=false here — let runTurn's finally block
-          // handle it after the turn actually finishes. This prevents a new
-          // turn from starting before the old one unwinds.
-          setPhase("Working");
-        } else {
-          showHint(
-            decision.reason === "compact_in_progress"
-              ? "Interrupt is disabled during compact phase"
-              : "Interrupt is currently disabled.",
-          );
-        }
-        return;
-      }
-
       if (lastInputValueRef.current.trim()) {
         clearInput();
         return;
       }
-
       showHint("Press Ctrl+C again to exit");
+      return;
+    }
+
+    // Ctrl+X: kill all sub-agents (any state)
+    if (event.name === "x" && event.ctrl) {
+      event.preventDefault();
+      event.stopPropagation();
+      session.interruptAllChildAgents?.();
+      showHint("All sub-agents interrupted");
+      return;
+    }
+
+    // Ctrl+K: kill all background shells (any state)
+    if (event.name === "k" && event.ctrl) {
+      event.preventDefault();
+      event.stopPropagation();
+      session.killAllShells?.();
+      showHint("All background shells killed");
       return;
     }
 

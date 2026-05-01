@@ -211,6 +211,16 @@ export function registerSessionRpc(opts: SessionRpcOptions): { dispose: () => vo
     session.cancelCurrentTurn();
     return { ok: true };
   });
+  server.on("session.interruptAllChildAgents", () => {
+    session.interruptAllChildAgents();
+    return { ok: true };
+  });
+  server.on("session.hasRunningChildAgents", () => session.hasRunningChildAgents());
+  server.on("session.denyPendingAsk", () => ({ denied: session.denyPendingAsk() }));
+  server.on("session.killAllShells", () => {
+    session.killAllShells();
+    return { ok: true };
+  });
 
   // ── Ask resolution ──
   server.on("session.getPendingAsk", () => session.getPendingAsk());

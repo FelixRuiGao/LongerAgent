@@ -100,6 +100,10 @@ export interface Session {
   close(): Promise<void>;
   requestTurnInterrupt?(): { accepted: boolean; reason?: "compact_in_progress" };
   cancelCurrentTurn?(): void;
+  interruptAllChildAgents?(): void;
+  hasRunningChildAgents?(): boolean;
+  denyPendingAsk?(): boolean;
+  killAllShells?(): void;
   primaryAgent: {
     name: string;
     modelConfig?: {

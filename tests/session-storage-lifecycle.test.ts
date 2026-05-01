@@ -790,19 +790,22 @@ describe("session storage lifecycle", () => {
 
       const decision = session.requestTurnInterrupt();
 
+      // requestTurnInterrupt aborts main turn only — no cascade to children or shells
       expect(decision).toEqual({ accepted: true });
-      expect(workingAbort.signal.aborted).toBe(true);
-      expect(finishedAbort.signal.aborted).toBe(false);
-      expect((session as any)._childSessions.size).toBe(2);
-      expect(killShell).toHaveBeenCalledWith("SIGTERM");
-      expect((session as any)._shellManager._activeShells.size).toBe(0);
-      expect((session as any)._inbox).toEqual([]);
-      expect(woke).toBe(true);
-      expect((session as any)._waitHandle).toBeNull();
       expect((session as any)._activeAsk).toBeNull();
       expect((session as any)._pendingTurnState).toBeNull();
-      expect((session as any)._interruptSnapshot).toBeUndefined();
+      // Children and shells are NOT killed by requestTurnInterrupt (use interruptAllChildAgents / killAllShells separately)
+      expect(workingAbort.signal.aborted).toBe(false);
+      expect(finishedAbort.signal.aborted).toBe(false);
+      expect(killShell).not.toHaveBeenCalled();
+      // Inbox is preserved (sub-agent messages should not be discarded)
+      expect((session as any)._inbox.length).toBe(1);
+
+      // Explicit cascade via interruptAllChildAgents
+      session.interruptAllChildAgents();
       expect((session as any)._childSessions.get("working-agent")?.terminationCause).toBe("user_mass_interrupt");
+      session.killAllShells();
+      expect(killShell).toHaveBeenCalledWith("SIGTERM");
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
@@ -890,13 +893,14 @@ describe("session storage lifecycle", () => {
           startedAt: expect.any(Number),
           elapsedMs: expect.any(Number),
           meta: {
+            toolCallId: "call-1",
             toolName: "edit_file",
             toolArgs: { path: "src/a.ts" },
             rawArguments: "{\"path\":\"src/a.ts\"}",
           },
         },
         { kind: "assistant", text: "partial", id: "as-001" },
-        { kind: "tool_result", text: "[Interrupted] Tool was not executed.", fullText: "[Interrupted] Tool was not executed.", id: expect.any(String), dim: true, meta: { toolName: "edit_file", isError: false } },
+        { kind: "tool_result", text: "[Interrupted] Tool was not executed.", fullText: "[Interrupted] Tool was not executed.", id: expect.any(String), dim: true, meta: { toolCallId: "call-1", toolName: "edit_file", isError: false } },
       ]);
 
       const apiMessages = projectToApiMessages(log);
