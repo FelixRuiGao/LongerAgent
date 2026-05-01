@@ -20,8 +20,10 @@ The TUI is built on [OpenTUI](https://github.com/anomalyco/opentui).
 
 ## Install
 
+Requires [Bun](https://bun.com) 1.3 or later.
+
 ```bash
-npm install -g fermi-code
+bun install -g fermi-code
 fermi init
 fermi
 ```
@@ -148,11 +150,11 @@ Fermi is built around a **Session → Agent → Provider** pipeline:
 <summary><strong>Development</strong></summary>
 
 ```bash
-pnpm install        # Install dependencies
-pnpm dev            # Run the TUI (OpenTUI)
-pnpm build          # Build
-pnpm test           # Run tests (vitest)
-pnpm typecheck      # Type check
+bun install         # Install dependencies
+bun run dev         # Run the TUI (OpenTUI)
+bun run build       # Build
+bun test            # Run tests (bun:test)
+bun run typecheck   # Type check
 ```
 
 </details>

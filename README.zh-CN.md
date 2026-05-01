@@ -20,8 +20,10 @@ TUI 基于 [OpenTUI](https://github.com/anomalyco/opentui) 构建。
 
 ## 安装
 
+需要 [Bun](https://bun.com) 1.3 或更高版本。
+
 ```bash
-npm install -g fermi-code
+bun install -g fermi-code
 fermi init
 fermi
 ```
@@ -148,11 +150,11 @@ Fermi 围绕 **Session → Agent → Provider** 流水线构建：
 <summary><strong>开发</strong></summary>
 
 ```bash
-pnpm install        # 安装依赖
-pnpm dev            # 运行 TUI（OpenTUI）
-pnpm build          # 构建
-pnpm test           # 运行测试（vitest）
-pnpm typecheck      # 类型检查
+bun install         # 安装依赖
+bun run dev         # 运行 TUI（OpenTUI）
+bun run build       # 构建
+bun test            # 运行测试（bun:test）
+bun run typecheck   # 类型检查
 ```
 
 </details>
