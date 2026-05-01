@@ -10,8 +10,11 @@
  * Safe command list synthesized from Claude Code, Codex CLI, and Fermi.
  */
 
+import { statSync } from "node:fs";
+import path from "node:path";
 import type { InvocationAssessment, PermissionClass } from "./types.js";
 import type { BashParseResult, ParsedBashCommand, ParsedBashSegment } from "./bash/types.js";
+import { isTrackableBashMutation, parseTrackableBashMutation } from "../tools/basic.js";
 
 // ------------------------------------------------------------------
 // Tree-sitter parser (lazy async init)
@@ -79,8 +82,12 @@ const BASH_SAFE_COMMANDS = new Set([
 ]);
 
 const BASH_REVERSIBLE_COMMANDS = new Set([
-  "mkdir", "touch", "cp", "mv", "ln",
+  "mkdir",
 ]);
+
+// cp/mv are dynamically classified: write_reversible if target doesn't exist
+// or is a file, write_potent if target is an existing directory.
+const BASH_DYNAMIC_REVERSIBLE = new Set(["cp", "mv"]);
 
 const BASH_DANGER_COMMANDS = new Set([
   "rm", "rmdir",
@@ -97,6 +104,7 @@ const BASH_DANGER_COMMANDS = new Set([
 ]);
 
 const BASH_POTENT_COMMANDS = new Set([
+  "touch", "ln",
   "npm", "npx", "pnpm", "yarn", "bun",
   "pip", "pip3", "uv",
   "cargo", "go",
@@ -220,6 +228,9 @@ export function classifyTool(
 /**
  * Async classification that uses tree-sitter when available.
  * Falls back to sync regex classification.
+ *
+ * For cp/mv, performs a filesystem check on the target path:
+ * if the target is an existing directory, upgrades to write_potent.
  */
 export async function classifyToolAsync(
   toolName: string,
@@ -234,14 +245,53 @@ export async function classifyToolAsync(
     return { permissionClass: "write_potent", toolName };
   }
 
+  let assessment: InvocationAssessment;
+
   // Try tree-sitter (skip regex catastrophic — tree-sitter handles quoting correctly)
   if (parserModule) {
     const result = await parserModule.parseBashCommand(command);
-    return classifyFromParseResult(toolName, command, result);
+    assessment = classifyFromParseResult(toolName, command, result);
+  } else {
+    // Regex fallback (includes catastrophic check)
+    assessment = classifyBashCommand(toolName, command);
   }
 
-  // Regex fallback (includes catastrophic check)
-  return classifyBashCommand(toolName, command);
+  // Dynamic check for cp/mv: enforce classifier/tracker contract.
+  // If the shared parser can't track the syntax, upgrade to write_potent.
+  // If trackable but target is an existing directory, also upgrade.
+  if (assessment.permissionClass === "write_reversible" && assessment.commands?.some(c => BASH_DYNAMIC_REVERSIBLE.has(c))) {
+    const bashCwd = typeof toolArgs["cwd"] === "string" ? toolArgs["cwd"] : undefined;
+    const effectiveCwd = bashCwd ? path.resolve(bashCwd) : process.cwd();
+
+    const segments = splitCompoundCommandRegex(command);
+    for (const seg of segments) {
+      const lead = extractLeadCommandRegex(stripProcessWrappersRegex(seg));
+      if (!BASH_DYNAMIC_REVERSIBLE.has(lead)) continue;
+
+      const parsed = parseTrackableBashMutation(seg);
+      if (!parsed) {
+        assessment.permissionClass = "write_potent";
+        break;
+      }
+
+      const rawTarget = parsed.args[parsed.args.length - 1];
+      if (rawTarget) {
+        const resolvedTarget = path.isAbsolute(rawTarget)
+          ? path.resolve(rawTarget)
+          : path.resolve(effectiveCwd, rawTarget);
+        try {
+          if (statSync(resolvedTarget).isDirectory()) {
+            assessment.permissionClass = "write_potent";
+            break;
+          }
+        } catch {
+          // Target doesn't exist — stays write_reversible
+        }
+      }
+    }
+  }
+
+  return assessment;
 }
 
 // ------------------------------------------------------------------
@@ -341,6 +391,7 @@ function classifyParsedCommand(cmd: ParsedBashCommand): PermissionClass {
 
   if (BASH_DANGER_COMMANDS.has(name)) return "write_danger";
   if (BASH_REVERSIBLE_COMMANDS.has(name)) return "write_reversible";
+  if (BASH_DYNAMIC_REVERSIBLE.has(name)) return "write_reversible";
   if (BASH_SAFE_COMMANDS.has(name)) return "read";
   if (BASH_POTENT_COMMANDS.has(name)) return "write_potent";
 
@@ -519,6 +570,7 @@ function classifySingleCommandRegex(cmd: string, fullSegment: string): Permissio
 
   if (BASH_DANGER_COMMANDS.has(cmd)) return "write_danger";
   if (BASH_REVERSIBLE_COMMANDS.has(cmd)) return "write_reversible";
+  if (BASH_DYNAMIC_REVERSIBLE.has(cmd)) return "write_reversible";
   if (BASH_SAFE_COMMANDS.has(cmd)) return "read";
   if (BASH_POTENT_COMMANDS.has(cmd)) return "write_potent";
 

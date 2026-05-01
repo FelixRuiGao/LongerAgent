@@ -7,7 +7,7 @@
  */
 
 import fs from "node:fs/promises";
-import { existsSync, statSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, statSync, readFileSync, readdirSync, realpathSync, writeFileSync as fsWriteFileSync, unlinkSync, mkdirSync, copyFileSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -56,6 +56,272 @@ export interface FileMutation {
   additions: number;
   deletions: number;
   untracked?: true;
+}
+
+// ------------------------------------------------------------------
+// Bash mutation tracking (mkdir/cp/mv)
+// ------------------------------------------------------------------
+
+export interface BashMutationEntry {
+  kind: "mkdir" | "cp" | "mv";
+  /** mkdir: directories created (in creation order, revert removes deepest first). */
+  createdDirs?: string[];
+  /** cp/mv: source path. */
+  source?: string;
+  /** cp/mv: target path. */
+  target?: string;
+  /** Whether the target file existed before the operation. */
+  targetExisted?: boolean;
+  /** Path to backup of overwritten file (in session artifacts). */
+  backupPath?: string;
+  /** cp -r: recursive copy created a new directory tree. */
+  recursive?: boolean;
+  /** SHA256 of the target file after execution (for conflict detection). */
+  postImageSha?: string;
+}
+
+export interface BashMutation {
+  command: string;
+  entries: BashMutationEntry[];
+}
+
+// ------------------------------------------------------------------
+// Bash mutation tracking: pre-exec snapshot → execute → post-exec record
+// ------------------------------------------------------------------
+
+interface BashPreExecState {
+  kind: "mkdir" | "cp" | "mv";
+  args: string[];
+  /** mkdir -p: which path segments already existed before execution. */
+  existingAncestors?: string[];
+  /** cp/mv: resolved target path. */
+  targetPath?: string;
+  /** cp/mv: whether target existed before. */
+  targetExisted?: boolean;
+  /** cp/mv: backup file path (if target was an existing file). */
+  backupPath?: string;
+  /** cp -r flag. */
+  recursive?: boolean;
+  /** cp/mv: source path. */
+  sourcePath?: string;
+}
+
+const TRACKED_BASH_COMMANDS = new Set(["mkdir", "cp", "mv"]);
+
+export interface TrackableBashParsed {
+  cmd: "mkdir" | "cp" | "mv";
+  flags: string[];
+  args: string[];
+}
+
+/**
+ * Parse a bash segment into a trackable mutation command.
+ * Returns null for unsupported syntax (multi-source, -t flag, complex quoting, etc.).
+ * Classifier and tracker both call this to enforce the contract:
+ * if this returns null, the command cannot be accurately tracked for rewind.
+ */
+export function parseTrackableBashMutation(segment: string): TrackableBashParsed | null {
+  const trimmed = segment.trim();
+  if (!trimmed) return null;
+
+  // Quote-aware tokenization
+  const tokens: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]!;
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
+    if (ch === "\\" && !inSingle && i + 1 < trimmed.length) { current += trimmed[i + 1]; i++; continue; }
+    if (!inSingle && !inDouble && /\s/.test(ch)) {
+      if (current) { tokens.push(current); current = ""; }
+      continue;
+    }
+    current += ch;
+  }
+  if (current) tokens.push(current);
+  // Unclosed quotes → can't parse reliably
+  if (inSingle || inDouble) return null;
+
+  if (tokens.length < 2) return null;
+  const cmd = (tokens[0]!.split("/").pop() ?? tokens[0]!) as string;
+  if (!TRACKED_BASH_COMMANDS.has(cmd)) return null;
+
+  const flags: string[] = [];
+  const args: string[] = [];
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (t.startsWith("-")) flags.push(t);
+    else args.push(t);
+  }
+
+  // Reject unsupported cp/mv syntax
+  if (cmd === "cp" || cmd === "mv") {
+    // -t / --target-directory not supported (including grouped flags like -rt)
+    if (flags.some(f => f.startsWith("--target-directory") || (!f.startsWith("--") && f.includes("t")))) return null;
+    // --parents not supported
+    if (flags.some(f => f === "--parents")) return null;
+    // Need exactly 2 positional args (single source + single target)
+    if (args.length !== 2) return null;
+  }
+
+  return { cmd: cmd as "mkdir" | "cp" | "mv", flags, args };
+}
+
+/**
+ * Check if a bash segment is a trackable mutation that can be accurately
+ * recorded for rewind. Used by the permission classifier to enforce the
+ * contract: if not trackable, the command must not be classified as write_reversible.
+ */
+export function isTrackableBashMutation(segment: string): boolean {
+  return parseTrackableBashMutation(segment) !== null;
+}
+
+function prepareBashPreExec(
+  segment: string,
+  backupsDir: string,
+  cwd: string,
+): BashPreExecState | null {
+  const parsed = parseTrackableBashMutation(segment);
+  if (!parsed) return null;
+
+  const resolve = (p: string) => path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
+
+  if (parsed.cmd === "mkdir") {
+    const hasDashP = parsed.flags.some(f => f === "-p" || (f.startsWith("-") && f.includes("p") && !f.startsWith("--")));
+    const dirs = parsed.args.map(resolve);
+    if (hasDashP && dirs.length > 0) {
+      const existingAncestors: string[] = [];
+      for (const dir of dirs) {
+        let current = dir;
+        while (current !== path.dirname(current)) {
+          if (existsSync(current)) {
+            existingAncestors.push(current);
+            break;
+          }
+          current = path.dirname(current);
+        }
+      }
+      return { kind: "mkdir", args: dirs, existingAncestors };
+    }
+    return { kind: "mkdir", args: dirs };
+  }
+
+  if (parsed.cmd === "cp" || parsed.cmd === "mv") {
+    // parseTrackableBashMutation already enforces args.length === 2
+    const sourcePath = resolve(parsed.args[0]!);
+    let targetPath = resolve(parsed.args[1]!);
+    const recursive = parsed.flags.some(f => f === "-r" || f === "-R" || f === "--recursive" ||
+      (f.startsWith("-") && !f.startsWith("--") && f.includes("r")));
+
+    // When target is an existing directory, shell writes to dir/basename(source)
+    if (existsSync(targetPath)) {
+      try {
+        if (statSync(targetPath).isDirectory()) {
+          targetPath = path.join(targetPath, path.basename(sourcePath));
+        }
+      } catch { /* ignore stat errors */ }
+    }
+
+    let targetExisted = false;
+    let backupPath: string | undefined;
+
+    if (existsSync(targetPath)) {
+      try {
+        if (statSync(targetPath).isFile()) {
+          targetExisted = true;
+          mkdirSync(backupsDir, { recursive: true });
+          backupPath = path.join(backupsDir, randomUUID());
+          copyFileSync(targetPath, backupPath);
+        }
+      } catch { /* ignore */ }
+    }
+
+    return {
+      kind: parsed.cmd as "cp" | "mv",
+      args: [sourcePath, targetPath],
+      targetPath,
+      targetExisted,
+      backupPath,
+      recursive,
+      sourcePath,
+    };
+  }
+
+  return null;
+}
+
+function recordBashPostExec(
+  preExec: BashPreExecState,
+): BashMutationEntry | null {
+  if (preExec.kind === "mkdir") {
+    const createdDirs: string[] = [];
+    for (const dir of preExec.args) {
+      if (!existsSync(dir)) continue;
+      if (preExec.existingAncestors) {
+        // mkdir -p: walk from target up, collect all dirs that are new
+        let current = dir;
+        const newDirs: string[] = [];
+        while (current !== path.dirname(current)) {
+          if (preExec.existingAncestors.includes(current)) break;
+          if (existsSync(current)) newDirs.push(current);
+          current = path.dirname(current);
+        }
+        createdDirs.push(...newDirs.reverse());
+      } else {
+        if (existsSync(dir)) createdDirs.push(dir);
+      }
+    }
+    if (createdDirs.length === 0) return null;
+    return { kind: "mkdir", createdDirs };
+  }
+
+  if (preExec.kind === "cp" || preExec.kind === "mv") {
+    if (!preExec.targetPath) return null;
+    if (!existsSync(preExec.targetPath)) return null;
+
+    let postImageSha: string | undefined;
+    try {
+      const st = statSync(preExec.targetPath);
+      if (st.isFile()) {
+        postImageSha = createHash("sha256").update(readFileSync(preExec.targetPath)).digest("hex");
+      }
+    } catch { /* ignore */ }
+
+    return {
+      kind: preExec.kind,
+      source: preExec.sourcePath,
+      target: preExec.targetPath,
+      targetExisted: preExec.targetExisted,
+      backupPath: preExec.backupPath,
+      recursive: preExec.recursive || undefined,
+      postImageSha,
+    };
+  }
+
+  return null;
+}
+
+function splitCompoundBash(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!;
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
+    if (ch === "\\" && !inSingle && i + 1 < command.length) { current += ch + command[i + 1]; i++; continue; }
+    if (!inSingle && !inDouble) {
+      if (ch === "&" && command[i + 1] === "&") { if (current.trim()) segments.push(current.trim()); current = ""; i++; continue; }
+      if (ch === "|" && command[i + 1] === "|") { if (current.trim()) segments.push(current.trim()); current = ""; i++; continue; }
+      if (ch === ";") { if (current.trim()) segments.push(current.trim()); current = ""; continue; }
+    }
+    current += ch;
+  }
+  if (current.trim()) segments.push(current.trim());
+  return segments;
 }
 
 function computeSha256(content: string): string {
@@ -2275,7 +2541,47 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
             { mustExist: true, expectDirectory: true },
           );
         }
-        return await toolBash(command, timeout, cwd, { signal: rtCtx?.signal });
+
+        const effectiveCwd = cwd || toolRoot(ctx);
+        const backupsDir = path.join(ctx?.sessionArtifactsDir ?? effectiveCwd, "rewind-backups");
+
+        // Pre-exec: detect tracked commands and snapshot state
+        const segments = splitCompoundBash(command);
+        const preExecStates: Array<{ segmentIndex: number; state: BashPreExecState }> = [];
+        for (let i = 0; i < segments.length; i++) {
+          const state = prepareBashPreExec(segments[i]!, backupsDir, effectiveCwd);
+          if (state) preExecStates.push({ segmentIndex: i, state });
+        }
+
+        const output = await toolBash(command, timeout, cwd, { signal: rtCtx?.signal });
+
+        // Post-exec: only record mutations if command succeeded (exit code 0)
+        const isError = output.startsWith("ERROR:");
+        if (!isError && preExecStates.length > 0) {
+          const entries: BashMutationEntry[] = [];
+          for (const { state } of preExecStates) {
+            const entry = recordBashPostExec(state);
+            if (entry) entries.push(entry);
+          }
+          if (entries.length > 0) {
+            const mutation: BashMutation = { command, entries };
+            return new ToolResult({
+              content: output,
+              metadata: { bashMutation: mutation },
+            });
+          }
+        }
+
+        // Clean up backups if command failed
+        if (isError) {
+          for (const { state } of preExecStates) {
+            if (state.backupPath) {
+              try { unlinkSync(state.backupPath); } catch { /* ignore */ }
+            }
+          }
+        }
+
+        return output;
       } catch (e) {
         return formatToolError("bash", e);
       }

@@ -47,11 +47,30 @@ export interface RewindPlanConflict {
   reason: "patch_failed" | "untracked" | "file_deleted" | "file_not_readable";
 }
 
+// Bash mutation rewind types
+
+export interface BashRewindEntry {
+  entryId: string;
+  turnIndex: number;
+  /** Index within the BashMutation.entries array (for per-entry revert tracking). */
+  bashEntryIndex: number;
+  /** Position in the session log (for chronological ordering with file mutations). */
+  logIndex: number;
+  kind: "mkdir" | "cp" | "mv";
+  description: string;
+  status: "applicable" | "conflict";
+  conflictReason?: "dir_not_empty" | "dir_deleted" | "backup_missing" | "source_occupied" | "disk_modified" | "target_deleted";
+  conflictDetails?: string[];
+  /** Original BashMutationEntry for execution. */
+  mutation: import("../tools/basic.js").BashMutationEntry;
+}
+
 export interface RewindPlan {
   fromTurnIndex: number;
   applicable: RewindPlanApplicable[];
   warnings: RewindPlanWarning[];
   conflicts: RewindPlanConflict[];
+  bashEntries: BashRewindEntry[];
   totalAdditions: number;
   totalDeletions: number;
   summaryFile: string;
@@ -61,6 +80,8 @@ export interface RewindPlan {
 export interface RewindApplyResult {
   revertedPaths: string[];
   conflictPaths: string[];
+  bashReverted: string[];
+  bashSkipped: string[];
   error?: string;
 }
 

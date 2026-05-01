@@ -2077,8 +2077,10 @@ async function cmdRewind(ctx: CommandContext, args: string): Promise<void> {
   const plan = await session.planRewind(turnIndex);
   const hasFiles = plan.applicable.length + plan.warnings.length > 0;
   const hasConflicts = plan.conflicts.length > 0;
+  const hasBash = plan.bashEntries.length > 0;
+  const hasBashConflicts = plan.bashEntries.some((e: { status: string }) => e.status === "conflict");
 
-  if (!hasFiles && !hasConflicts) {
+  if (!hasFiles && !hasConflicts && !hasBash) {
     if (mode === "both") {
       const result = session.rewindConversation(turnIndex);
       if (result.error) {
@@ -2093,10 +2095,26 @@ async function cmdRewind(ctx: CommandContext, args: string): Promise<void> {
     return;
   }
 
+  // Show file conflicts (plan-time, these won't change at execution time)
   if (hasConflicts) {
     const conflictList = plan.conflicts.map((c: { path: string; reason: string }) => `  ${c.path} (${c.reason})`).join("\n");
     ctx.showMessage(`Warning: ${plan.conflicts.length} file(s) cannot be auto-reverted:\n${conflictList}`);
   }
+  // Note: bash conflicts are NOT shown here — they are re-evaluated at execution
+  // time, so plan-time status may not reflect the final result.
+
+  const formatBashResult = (result: { bashReverted?: string[]; bashSkipped?: string[] }): string => {
+    const parts: string[] = [];
+    if (result.bashReverted && result.bashReverted.length > 0) {
+      parts.push(`Reverted ${result.bashReverted.length} shell operation(s):`);
+      for (const desc of result.bashReverted) parts.push(`  ✓ ${desc}`);
+    }
+    if (result.bashSkipped && result.bashSkipped.length > 0) {
+      parts.push(`Skipped ${result.bashSkipped.length} shell operation(s):`);
+      for (const desc of result.bashSkipped) parts.push(`  ✗ ${desc}`);
+    }
+    return parts.join("\n");
+  };
 
   if (mode === "files") {
     const result = await session.rewindFiles(plan);
@@ -2104,10 +2122,11 @@ async function cmdRewind(ctx: CommandContext, args: string): Promise<void> {
       ctx.showMessage(`File rewind failed: ${result.error}`);
       return;
     }
-    const msg = result.revertedPaths.length > 0
-      ? `Reverted ${result.revertedPaths.length} file(s).`
-      : "No files were reverted.";
-    ctx.showMessage(msg);
+    const filePart = result.revertedPaths.length > 0
+      ? `Reverted ${result.revertedPaths.length} file edit(s).`
+      : "No file edits were reverted.";
+    const bashPart = formatBashResult(result);
+    ctx.showMessage([filePart, bashPart].filter(Boolean).join("\n"));
   } else {
     // mode === "both"
     const result = await session.rewindBoth(turnIndex, plan);
@@ -2116,10 +2135,18 @@ async function cmdRewind(ctx: CommandContext, args: string): Promise<void> {
       return;
     }
     const filePart = result.revertedPaths.length > 0
-      ? `Reverted ${result.revertedPaths.length} file(s).`
+      ? `Reverted ${result.revertedPaths.length} file edit(s).`
       : "";
     const convPart = `Removed ${result.removed} log entries.`;
-    ctx.showMessage(`Rewound to turn ${turnIndex}. ${convPart} ${filePart}`.trim());
+    const bashPart = formatBashResult(result);
+    const hasSkipped =
+      plan.conflicts.length > 0 ||
+      result.conflictPaths.length > 0 ||
+      (result.bashSkipped?.length ?? 0) > 0;
+    const warnPart = hasSkipped
+      ? "Some disk changes could not be reverted. Inspect the working tree before continuing."
+      : "";
+    ctx.showMessage([`Rewound to turn ${turnIndex}. ${convPart} ${filePart}`.trim(), bashPart, warnPart].filter(Boolean).join("\n"));
   }
 
   ctx.autoSave();

@@ -33,7 +33,8 @@ export function AskPanelView({
 }: AskPanelProps & { theme: DisplayTheme }): React.ReactNode {
   if (ask.kind === "approval") {
     const options = ask.options ?? [];
-    const panelHeight = 3 + options.length + 1 + (error ? 1 : 0) + 2;
+    const persistentWarning = (ask.payload as Record<string, unknown>)["persistentWarning"] as string | undefined;
+    const panelHeight = 3 + options.length + (persistentWarning ? 1 : 0) + 1 + (error ? 1 : 0) + 2;
     return (
       <PanelSurface colors={theme.colors} spacing={theme.spacing} height={panelHeight}>
         <text fg={theme.colors.yellow} content={`⚠ ${ask.summary}`} />
@@ -42,12 +43,15 @@ export function AskPanelView({
         {options.map((label, index) => {
           const isSelected = index === selectedIndex;
           const isDeny = label === "Deny";
+          const showWarningBefore = persistentWarning && index === 1;
           return (
-            <text
-              key={`approval-opt-${index}`}
-              fg={isSelected ? (isDeny ? theme.colors.red : theme.colors.accent) : theme.colors.text}
-              content={`${isSelected ? "> " : "  "}${label}`}
-            />
+            <box key={`approval-opt-${index}`} flexDirection="column">
+              {showWarningBefore ? <text fg={theme.colors.dim} content={`    ${persistentWarning}`} /> : null}
+              <text
+                fg={isSelected ? (isDeny ? theme.colors.red : theme.colors.accent) : theme.colors.text}
+                content={`${isSelected ? "> " : "  "}${label}`}
+              />
+            </box>
           );
         })}
         <text fg={theme.colors.dim} content="Use ↑/↓ to select, Enter to confirm." />

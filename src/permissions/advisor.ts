@@ -152,6 +152,11 @@ export class PermissionAdvisor implements GateAdvisor {
       return offers;
     }
 
+    const scopeLabel = (scope: "session" | "project" | "global"): string =>
+      scope === "session" ? "in this session"
+        : scope === "project" ? "in this project"
+        : "globally";
+
     // If memoizable, offer tool_pattern rules at each scope
     if (assessment.canMemoize && assessment.canonicalPattern) {
       const pattern = assessment.canonicalPattern;
@@ -167,7 +172,7 @@ export class PermissionAdvisor implements GateAdvisor {
         };
         offers.push({
           type: "tool_pattern",
-          label: `Allow "${pattern}" (${scope})`,
+          label: `Always allow "${pattern}" ${scopeLabel(scope)}`,
           scope,
           rule: rule as PermissionRule, // id/createdAt filled on accept
         });
@@ -184,7 +189,7 @@ export class PermissionAdvisor implements GateAdvisor {
         };
         offers.push({
           type: "tool_pattern",
-          label: `Allow ${tool} (${scope})`,
+          label: `Always allow ${tool} ${scopeLabel(scope)}`,
           scope,
           rule: rule as PermissionRule,
         });

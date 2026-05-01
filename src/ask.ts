@@ -66,6 +66,8 @@ export interface ApprovalRequest extends AskBase {
       scope?: string;
       rule?: Record<string, unknown>;
     }>;
+    /** Warning shown before persistent rule options (dim text, not selectable). */
+    persistentWarning?: string;
   };
   options: string[];
 }
