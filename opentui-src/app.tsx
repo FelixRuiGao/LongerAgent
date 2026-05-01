@@ -2236,8 +2236,8 @@ export function OpenTuiApp({
       return;
     }
 
-    // Shift+Tab: cycle permission mode (when no overlay is active)
-    if (event.name === "tab" && event.shift && !shouldHandleInputOverlay) {
+    // Ctrl+Q: cycle permission mode (when no overlay is active)
+    if (event.name === "q" && event.ctrl && !shouldHandleInputOverlay) {
       cyclePermissionMode();
       event.preventDefault();
       event.stopPropagation();

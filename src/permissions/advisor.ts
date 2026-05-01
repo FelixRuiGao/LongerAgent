@@ -65,15 +65,17 @@ export class PermissionAdvisor implements GateAdvisor {
       return { kind: "allow" };
     }
 
-    // 2. Check persisted rules (deny takes priority)
-    const matchingRule = this._ruleStore.findMatchingRule(assessment);
-    if (matchingRule) {
-      if (matchingRule.action === "deny") {
-        return { kind: "deny", message: `Denied by rule: ${matchingRule.id}` };
-      }
-      // allow rule — but catastrophic ALWAYS asks
-      if (assessment.permissionClass !== "catastrophic") {
-        return { kind: "allow" };
+    // 2. Check persisted rules (skip in read_only — mode is the hard ceiling)
+    if (mode !== "read_only") {
+      const matchingRule = this._ruleStore.findMatchingRule(assessment);
+      if (matchingRule) {
+        if (matchingRule.action === "deny") {
+          return { kind: "deny", message: `Denied by rule: ${matchingRule.id}` };
+        }
+        // allow rule — but catastrophic ALWAYS asks
+        if (assessment.permissionClass !== "catastrophic") {
+          return { kind: "allow" };
+        }
       }
     }
 
@@ -83,12 +85,14 @@ export class PermissionAdvisor implements GateAdvisor {
       return { kind: "allow" };
     }
 
-    // 4. Build approval offers
-    const offers = this._buildOffers(assessment);
+    // 4. Build approval offers (read_only: only allow-once, no persistent rules)
+    const offers = this._buildOffers(assessment, mode);
     return {
       kind: "ask",
       question: this._buildQuestion(ctx, assessment),
       toolCallId: ctx.toolCallId,
+      offers,
+      assessment,
     };
   }
 
@@ -134,7 +138,7 @@ export class PermissionAdvisor implements GateAdvisor {
 
   // -- Offer building --------------------------------------------------
 
-  private _buildOffers(assessment: InvocationAssessment): ApprovalOffer[] {
+  private _buildOffers(assessment: InvocationAssessment, mode?: PermissionMode): ApprovalOffer[] {
     const offers: ApprovalOffer[] = [];
 
     // Always offer "allow once"
@@ -143,8 +147,8 @@ export class PermissionAdvisor implements GateAdvisor {
       label: "Allow once",
     });
 
-    // Catastrophic: only allow once, no persistent rules
-    if (assessment.permissionClass === "catastrophic") {
+    // read_only / catastrophic: only allow once, no persistent rules
+    if (mode === "read_only" || assessment.permissionClass === "catastrophic") {
       return offers;
     }
 

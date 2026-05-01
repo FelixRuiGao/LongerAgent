@@ -82,7 +82,7 @@ import {
   type GateAdvisor,
 } from "./tool-runtime.js";
 import { BackgroundShellManager } from "./background-shell-manager.js";
-import { PermissionAdvisor, PermissionRuleStore, classifyTool, classifyToolAsync, initBashParser, type PermissionMode } from "./permissions/index.js";
+import { PermissionAdvisor, PermissionRuleStore, initBashParser, type PermissionMode } from "./permissions/index.js";
 import { HookRuntime, type HookEvent, type HookPayload } from "./hooks/index.js";
 import type { HookManifest } from "./hooks/types.js";
 import { assembleFullSystemPrompt } from "./prompt-assembler.js";
@@ -924,7 +924,10 @@ export class Session {
     });
 
     // Permission system
-    this._permissionRuleStore = opts.permissionRuleStore ?? new PermissionRuleStore(this._projectRoot);
+    this._permissionRuleStore = opts.permissionRuleStore ?? new PermissionRuleStore({
+      projectStoreDir: this._store?.projectDir ?? this._projectRoot,
+      workspaceRoot: this._projectRoot,
+    });
     this._permissionAdvisor = new PermissionAdvisor({
       ruleStore: this._permissionRuleStore,
       sessionMode: opts.permissionMode ?? "reversible",
@@ -3483,9 +3486,7 @@ export class Session {
         case "deny":
           return { kind: "deny", message: decision.message };
         case "ask": {
-          const assessment = await classifyToolAsync(ctx.toolName, ctx.toolArgs);
-          const offers = this._permissionAdvisor["_buildOffers"](assessment);
-          const options = offers.map((o: any) => o.label);
+          const options = decision.offers.map((o) => o.label);
           options.push("Deny");
 
           const ask: ApprovalRequest = {
@@ -3499,17 +3500,17 @@ export class Session {
               toolCallId: ctx.toolCallId,
               toolName: ctx.toolName,
               toolSummary: ctx.summary,
-              permissionClass: assessment.permissionClass,
-              offers: offers.map((o: any) => ({
+              permissionClass: decision.assessment.permissionClass,
+              offers: decision.offers.map((o) => ({
                 type: o.type,
                 label: o.label,
                 scope: o.scope,
-                rule: o.rule,
+                rule: o.rule as Record<string, unknown> | undefined,
               })),
             },
             options,
           };
-          throw new AskPendingError(ask);
+          return { kind: "ask", ask };
         }
       }
     }
@@ -3598,35 +3599,13 @@ export class Session {
 
       let denyMessage: string | undefined;
       let allowOnce = false;
-      try {
-        // Skip the permission gate if this tool_call was already approved
-        // (allow-once grant was set in resolveApprovalAsk before resume).
-        allowOnce = this._permissionAdvisor["_allowOnceGrants"].has(next.toolCallId);
-        if (!allowOnce) {
-          const decision = await this._beforeToolExecute(ctx);
-          if (decision && decision.kind === "deny") {
-            denyMessage = decision.message;
-          }
-        } else {
-          // Gate already passed; still run hooks
-          if (this.hookRuntime.hooks.length > 0) {
-            const hookResult = await this.hookRuntime.evaluate("PreToolUse", {
-              event: "PreToolUse",
-              timestamp: Date.now(),
-              toolName: next.toolName,
-              toolArgs: next.toolArgs,
-              toolCallId: next.toolCallId,
-            });
-            if (hookResult.decision === "deny") {
-              denyMessage = hookResult.denyReason ?? "Denied by hook";
-            } else if (hookResult.updatedInput) {
-              Object.assign(next.toolArgs, hookResult.updatedInput);
-            }
-          }
-        }
-      } catch (e) {
-        if ((e as { name?: string })?.name === "AskPendingError") {
-          const ask = (e as { ask: ApprovalRequest }).ask;
+      // Skip the permission gate if this tool_call was already approved
+      // (allow-once grant was set in resolveApprovalAsk before resume).
+      allowOnce = this._permissionAdvisor["_allowOnceGrants"].has(next.toolCallId);
+      if (!allowOnce) {
+        const decision = await this._beforeToolExecute(ctx);
+        if (decision && decision.kind === "ask") {
+          const ask = decision.ask;
           const askContextId = this._findToolCallContextId(next.toolCallId, next.roundIndex);
           this._updateToolCallExecState(next.toolCallId, "not_started");
           this._activeAsk = ask;
@@ -3645,7 +3624,25 @@ export class Session {
           this.onSaveRequest?.();
           return true;
         }
-        throw e;
+        if (decision && decision.kind === "deny") {
+          denyMessage = decision.message;
+        }
+      } else {
+        // Gate already passed; still run hooks
+        if (this.hookRuntime.hooks.length > 0) {
+          const hookResult = await this.hookRuntime.evaluate("PreToolUse", {
+            event: "PreToolUse",
+            timestamp: Date.now(),
+            toolName: next.toolName,
+            toolArgs: next.toolArgs,
+            toolCallId: next.toolCallId,
+          });
+          if (hookResult.decision === "deny") {
+            denyMessage = hookResult.denyReason ?? "Denied by hook";
+          } else if (hookResult.updatedInput) {
+            Object.assign(next.toolArgs, hookResult.updatedInput);
+          }
+        }
       }
 
       // Execute (or deny)

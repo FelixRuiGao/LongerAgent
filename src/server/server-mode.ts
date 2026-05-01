@@ -74,7 +74,7 @@ export async function runServerMode(opts: ServerModeOptions): Promise<void> {
   const store = new SessionStore({ projectPath });
 
   const globalSettings = loadGlobalSettings(homeDir);
-  const localSettings = loadLocalSettings(projectPath);
+  const localSettings = loadLocalSettings(projectPath, store.projectDir);
   const settings = mergeSettings(globalSettings, localSettings);
 
   const { providerEnvVars, localProviders, mcpServers } = settingsToConfigInputs(settings);

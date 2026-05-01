@@ -15,6 +15,7 @@ import type { ToolDef } from "./providers/base.js";
 import { ToolResult } from "./providers/base.js";
 import type { ToolExecutor, ToolExecutorContext } from "./tools/executor-types.js";
 import type { ToolPreflightContext, ToolPreflightDecision } from "./agents/tool-loop.js";
+import type { ApprovalOffer, InvocationAssessment } from "./permissions/types.js";
 import {
   SPAWN_TOOL,
   KILL_AGENT_TOOL,
@@ -40,7 +41,7 @@ import type { Agent } from "./agents/agent.js";
 export type GateDecision =
   | { kind: "allow" }
   | { kind: "deny"; message: string }
-  | { kind: "ask"; question: string; toolCallId: string };
+  | { kind: "ask"; question: string; toolCallId: string; offers: ApprovalOffer[]; assessment: InvocationAssessment };
 
 export interface GateAdvisor {
   evaluate(ctx: ToolPreflightContext): GateDecision | Promise<GateDecision>;
@@ -322,8 +323,9 @@ export class ToolGate {
 
   /**
    * Create a BeforeToolExecuteCallback compatible with tool-loop.ts.
-   * This is the bridge between the new Gate system and the existing
-   * tool loop's preflight mechanism.
+   * Not used directly — Session wraps this with additional logic
+   * (artifacts-dir bypass, hooks, ApprovalRequest construction).
+   * Kept as a reference implementation of the Gate→ToolPreflight bridge.
    */
   asBeforeToolExecute(): (ctx: ToolPreflightContext) => Promise<ToolPreflightDecision | void> {
     return async (ctx: ToolPreflightContext): Promise<ToolPreflightDecision | void> => {
@@ -334,8 +336,8 @@ export class ToolGate {
         case "deny":
           return { kind: "deny", message: decision.message };
         case "ask":
-          // Future: hook into ask system for approval
-          // For now, treat as allow (no permissions configured = allow all)
+          // Callers that need the full ask flow should use evaluate() directly
+          // and construct the ApprovalRequest themselves.
           return undefined;
       }
     };

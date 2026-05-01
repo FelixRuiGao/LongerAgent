@@ -63,7 +63,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
 
   // ── Load settings (global + local merge) ──
   const globalSettings = loadGlobalSettings(homeDir);
-  const localSettings = loadLocalSettings(projectPath);
+  const localSettings = loadLocalSettings(projectPath, store.projectDir);
   const settings = mergeSettings(globalSettings, localSettings);
 
   // Check if any providers are configured

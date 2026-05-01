@@ -269,13 +269,15 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
       {!commandOverlayVisible && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !pendingAsk ? (
         <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
           <box
+            flexDirection="row"
             flexShrink={0}
             onMouseDown={onPermissionClick ? (e: any) => { e.stopPropagation(); e.preventDefault(); onPermissionClick(); } : undefined}
           >
             <text
-              fg={permissionMode === "yolo" ? colors.green : permissionMode === "read_only" ? colors.yellow : colors.accent}
-              content={permissionMode === "yolo" ? "Auto-accept" : permissionMode === "read_only" ? "Read-only" : "Auto-edit"}
+              fg={permissionMode === "yolo" ? colors.red : permissionMode === "read_only" ? "#2dd4a8" : colors.accent}
+              content={permissionMode === "yolo" ? "Full auto" : permissionMode === "read_only" ? "Read-only" : "Reversible"}
             />
+            <text fg={colors.dim} content=" (Ctrl+Q to toggle)" />
           </box>
           {hint ? (
             <text fg={colors.dim} content={`  ${hint}`} truncate flexGrow={1} flexShrink={1} />

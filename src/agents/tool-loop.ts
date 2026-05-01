@@ -646,7 +646,8 @@ export interface ToolPreflightContext {
 
 export type ToolPreflightDecision =
   | { kind: "allow" }
-  | { kind: "deny"; message: string };
+  | { kind: "deny"; message: string }
+  | { kind: "ask"; ask: AskRequest };
 
 export type BeforeToolExecuteCallback = (
   ctx: ToolPreflightContext,
@@ -1190,6 +1191,13 @@ export async function asyncRunToolLoop(
               toolCallId: callId,
               summary,
             });
+          }
+
+          if (preflight && preflight.kind === "ask") {
+            const ask = preflight.ask;
+            ask.payload.toolCallId = callId;
+            ask.roundIndex = roundIndex;
+            return { suspendedAsk: { ask, toolCallId: callId, roundIndex } };
           }
 
           pending.execPhase = "running";

@@ -332,6 +332,7 @@ export class SessionStore {
           providerEnvVars: raw.provider_env_vars ?? undefined,
           localProviders: raw.local_providers ?? undefined,
           contextRatio: typeof raw.context_ratio === "number" ? raw.context_ratio : undefined,
+          permissionMode: raw.permission_mode ?? undefined,
         });
       } catch {
         continue;
@@ -363,6 +364,7 @@ export class SessionStore {
             provider_env_vars: payload.providerEnvVars ?? null,
             local_providers: payload.localProviders ?? null,
             context_ratio: payload.contextRatio ?? null,
+            permission_mode: payload.permissionMode ?? null,
           }, null, 2),
         );
         renameSync(tmp, file);
@@ -1277,15 +1279,35 @@ export function loadGlobalSettings(homeDir?: string): FermiSettings {
   }
 }
 
-/** Load project-local settings from {projectPath}/.fermi/settings.json (JSONC). */
-export function loadLocalSettings(projectPath: string): FermiSettings {
-  const path = join(projectPath, ".fermi", SETTINGS_FILE);
-  if (!existsSync(path)) return {};
+/**
+ * Load project-local settings.
+ *
+ * Two layers (project-store < workspace, workspace wins on conflict):
+ *   1. ~/.fermi/projects/<slug>/.fermi/settings.json  (system-managed)
+ *   2. {projectPath}/.fermi/settings.json             (user-authored)
+ *
+ * When projectStoreDir is omitted, only the workspace layer is loaded
+ * (backwards-compatible with callers that don't have the slug yet).
+ */
+export function loadLocalSettings(projectPath: string, projectStoreDir?: string): FermiSettings {
+  let base: FermiSettings = {};
+
+  if (projectStoreDir) {
+    const storePath = join(projectStoreDir, ".fermi", SETTINGS_FILE);
+    if (existsSync(storePath)) {
+      try {
+        base = parseJsonc<FermiSettings>(readFileSync(storePath, "utf-8")) ?? {};
+      } catch { /* ignore */ }
+    }
+  }
+
+  const workspacePath = join(projectPath, ".fermi", SETTINGS_FILE);
+  if (!existsSync(workspacePath)) return base;
   try {
-    const text = readFileSync(path, "utf-8");
-    return parseJsonc<FermiSettings>(text) ?? {};
+    const workspace = parseJsonc<FermiSettings>(readFileSync(workspacePath, "utf-8")) ?? {};
+    return Object.keys(base).length > 0 ? mergeSettings(base, workspace) : workspace;
   } catch {
-    return {};
+    return base;
   }
 }
 

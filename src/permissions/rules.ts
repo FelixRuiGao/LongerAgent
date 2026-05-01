@@ -1,13 +1,17 @@
 /**
  * Permission rules — storage and matching.
  *
- * Three scopes:
- *   session — in-memory only, dies with the session
- *   project — {projectRoot}/.fermi/permissions.json
- *   global  — ~/.fermi/permissions.json
+ * Four layers (most specific wins):
+ *   session   — in-memory only, dies with the session
+ *   workspace — {projectRoot}/.fermi/permissions.json (user-authored, read-only by system)
+ *   project   — ~/.fermi/projects/<slug>/permissions.json (system-managed)
+ *   global    — ~/.fermi/permissions.json
  *
  * Rule matching: deny rules take priority over allow rules.
- * Within the same action, more specific scope wins (session > project > global).
+ * Within the same action, more specific scope wins.
+ *
+ * System writes (from approval choices) go to project or global.
+ * Workspace rules are read-only — only the user creates/edits them.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -17,15 +21,22 @@ import { getFermiHomeDir } from "../home-path.js";
 import type { PermissionRule, PermissionRuleFile, InvocationAssessment } from "./types.js";
 
 // ------------------------------------------------------------------
-// PermissionRuleStore — manages rules across all three scopes
+// PermissionRuleStore — manages rules across all layers
 // ------------------------------------------------------------------
 
 export class PermissionRuleStore {
   private _sessionRules: PermissionRule[] = [];
-  private _projectRoot: string;
+  /** ~/.fermi/projects/<slug>/ — system-managed project store. */
+  private _projectStoreDir: string;
+  /** {projectRoot} — workspace root (read-only for rules). */
+  private _workspaceRoot: string | undefined;
 
-  constructor(projectRoot: string) {
-    this._projectRoot = projectRoot;
+  constructor(opts: {
+    projectStoreDir: string;
+    workspaceRoot?: string;
+  }) {
+    this._projectStoreDir = opts.projectStoreDir;
+    this._workspaceRoot = opts.workspaceRoot;
   }
 
   // -- Query ----------------------------------------------------------
@@ -40,17 +51,18 @@ export class PermissionRuleStore {
     );
     if (denyMatch) return denyMatch;
 
-    // Allow rules (session > project > global, so allRules is already ordered)
+    // Allow rules (ordered most-specific first)
     const allowMatch = allRules.find(
       (r) => r.action === "allow" && this._ruleMatches(r, assessment),
     );
     return allowMatch ?? null;
   }
 
-  /** Get all effective rules, ordered: session first, then project, then global. */
+  /** Get all effective rules, ordered: session > workspace > project > global. */
   private _getEffectiveRules(): PermissionRule[] {
     return [
       ...this._sessionRules,
+      ...(this._workspaceRoot ? this._loadFileRules(this._workspaceFilePath()) : []),
       ...this._loadFileRules(this._projectFilePath()),
       ...this._loadFileRules(this._globalFilePath()),
     ];
@@ -147,8 +159,14 @@ export class PermissionRuleStore {
 
   // -- File I/O --------------------------------------------------------
 
+  /** System-managed project rules: ~/.fermi/projects/<slug>/permissions.json */
   private _projectFilePath(): string {
-    return join(this._projectRoot, ".fermi", "permissions.json");
+    return join(this._projectStoreDir, "permissions.json");
+  }
+
+  /** User-authored workspace rules: {projectRoot}/.fermi/permissions.json (read-only) */
+  private _workspaceFilePath(): string {
+    return join(this._workspaceRoot!, ".fermi", "permissions.json");
   }
 
   private _globalFilePath(): string {
@@ -170,7 +188,6 @@ export class PermissionRuleStore {
     const dir = dirname(filePath);
     mkdirSync(dir, { recursive: true });
     const data: PermissionRuleFile = { version: 1, rules };
-    // Atomic write: write to temp then rename
     const tmpPath = filePath + ".tmp." + process.pid;
     writeFileSync(tmpPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
     const { renameSync } = require("node:fs") as typeof import("node:fs");

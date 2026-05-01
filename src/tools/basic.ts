@@ -1698,6 +1698,8 @@ function requiredIntegerArg(
   return v;
 }
 
+const READ_ACCESS_KINDS = new Set<PathAccessKind>(["read", "list", "search", "attach"]);
+
 function scopedPath(
   requestedPath: string,
   accessKind: PathAccessKind,
@@ -1741,6 +1743,15 @@ function scopedPath(
         throw inner;
       }
     }
+
+    // Read-like operations outside scope: resolve and allow without boundary enforcement
+    if (READ_ACCESS_KINDS.has(accessKind)) {
+      const resolved = path.isAbsolute(requestedPath)
+        ? path.resolve(requestedPath)
+        : path.resolve(baseDir, requestedPath);
+      return resolved;
+    }
+
     throw err;
   }
 }

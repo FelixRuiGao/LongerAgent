@@ -195,7 +195,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   // ── Load settings (global + local merge) ──
   const homeDir = getFermiHomeDir();
   let globalSettings = loadGlobalSettings(homeDir);
-  const localSettings = loadLocalSettings(process.cwd());
+  const localSettings = loadLocalSettings(process.cwd(), store.projectDir);
   let settings = mergeSettings(globalSettings, localSettings);
 
   // If no providers configured, run initialization wizard
