@@ -405,6 +405,112 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
     expect(resp.toolCalls).toEqual([]);
   });
 
+  it("does not close earlier function calls when multiple output items are announced before argument deltas", async () => {
+    const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
+    const events: string[] = [];
+    const closedCalls: Array<{ id: string; arguments: Record<string, unknown>; parseError: string | null }> = [];
+
+    const finalResponse = {
+      output: [],
+      usage: {
+        input_tokens: 4,
+        output_tokens: 3,
+        input_tokens_details: { cached_tokens: 0 },
+      },
+    };
+
+    (provider as any)._client = {
+      responses: {
+        create: vi.fn(async () =>
+          streamOf([
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: {
+                type: "function_call",
+                id: "fc_1",
+                call_id: "call_1",
+                name: "write_file",
+              },
+            },
+            {
+              type: "response.output_item.added",
+              output_index: 1,
+              item: {
+                type: "function_call",
+                id: "fc_2",
+                call_id: "call_2",
+                name: "write_file",
+              },
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              item_id: "fc_1",
+              output_index: 0,
+              delta: "{\"path\":\"a.txt\",\"content\":\"alpha\"}",
+            },
+            {
+              type: "response.function_call_arguments.done",
+              item_id: "fc_1",
+              output_index: 0,
+              arguments: "{\"path\":\"a.txt\",\"content\":\"alpha\"}",
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              item_id: "fc_2",
+              output_index: 1,
+              delta: "{\"path\":\"b.txt\",\"content\":\"beta\"}",
+            },
+            {
+              type: "response.function_call_arguments.done",
+              item_id: "fc_2",
+              output_index: 1,
+              arguments: "{\"path\":\"b.txt\",\"content\":\"beta\"}",
+            },
+            { type: "response.completed", response: finalResponse },
+          ]),
+        ),
+      },
+    };
+
+    await provider.sendMessage(
+      [{ role: "user", content: "hi" } as any],
+      undefined,
+      {
+        onToolCallPartial: (id, name, rawArguments) => {
+          events.push(`partial:${id}:${name}:${rawArguments}`);
+        },
+        onToolCallClosed: (call) => {
+          events.push(`close:${call.id}`);
+          closedCalls.push({
+            id: call.id,
+            arguments: call.arguments,
+            parseError: call.parseError,
+          });
+        },
+      },
+    );
+
+    const call1PartialIndex = events.indexOf("partial:call_1:write_file:{\"path\":\"a.txt\",\"content\":\"alpha\"}");
+    const call1CloseIndex = events.indexOf("close:call_1");
+    expect(call1PartialIndex).toBeGreaterThanOrEqual(0);
+    expect(call1CloseIndex).toBeGreaterThan(call1PartialIndex);
+    expect(events.filter((event) => event === "close:call_1")).toHaveLength(1);
+    expect(events.filter((event) => event === "close:call_2")).toHaveLength(1);
+    expect(closedCalls).toEqual([
+      {
+        id: "call_1",
+        arguments: { path: "a.txt", content: "alpha" },
+        parseError: null,
+      },
+      {
+        id: "call_2",
+        arguments: { path: "b.txt", content: "beta" },
+        parseError: null,
+      },
+    ]);
+  });
+
   it("falls back to streamed text when the final response omits message content", async () => {
     const provider = new OpenAIResponsesProvider(modelConfig({ model: "gpt-5.2" }));
 
