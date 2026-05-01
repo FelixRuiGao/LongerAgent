@@ -219,7 +219,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   // ── DeepSeek ──
   {
-    id: "deepseek", name: "DeepSeek", envVar: "DEEPSEEK_API_KEY",
+    id: "deepseek", name: "DeepSeek", envVar: getManagedCredentialEnvVar("deepseek")!,
     models: [
       { key: "deepseek-v4-flash", id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
       { key: "deepseek-v4-pro", id: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
@@ -227,7 +227,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   // ── Xiaomi (MiMo) ──
   {
-    id: "xiaomi", name: "Xiaomi (MiMo)", envVar: "XIAOMI_API_KEY",
+    id: "xiaomi", name: "Xiaomi (MiMo)", envVar: getManagedCredentialEnvVar("xiaomi")!,
     models: [
       { key: "mimo-v2.5", id: "mimo-v2.5", label: "MiMo V2.5" },
       { key: "mimo-v2.5-pro", id: "mimo-v2.5-pro", label: "MiMo V2.5 Pro" },

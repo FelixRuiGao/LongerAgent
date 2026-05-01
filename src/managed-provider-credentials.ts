@@ -21,6 +21,8 @@ export const MANAGED_PROVIDER_CREDENTIAL_SPECS: ManagedProviderCredentialSpec[] 
   { providerId: "kimi-code", internalEnvVar: "FERMI_KIMI_CODE_API_KEY", externalEnvVars: ["KIMI_CODE_API_KEY"] },
   { providerId: "minimax", internalEnvVar: "FERMI_MINIMAX_API_KEY", externalEnvVars: ["MINIMAX_API_KEY"] },
   { providerId: "minimax-cn", internalEnvVar: "FERMI_MINIMAX_CN_API_KEY", externalEnvVars: ["MINIMAX_CN_API_KEY"] },
+  { providerId: "deepseek", internalEnvVar: "FERMI_DEEPSEEK_API_KEY", externalEnvVars: ["DEEPSEEK_API_KEY"] },
+  { providerId: "xiaomi", internalEnvVar: "FERMI_XIAOMI_API_KEY", externalEnvVars: ["XIAOMI_API_KEY"] },
 ];
 
 const SPEC_BY_PROVIDER = new Map(
