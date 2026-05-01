@@ -254,7 +254,7 @@ export function OpenTuiApp({
   const [childSessions, setChildSessions] = useState<ChildSessionSnapshot[]>([]);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const presentationEntries = usePresentationEntries({ session, selectedChildId, childSessions, processing });
-  const turnElapsed = useTurnTimer(processing);
+  const turnElapsed = useTurnTimer(phase);
   const planCheckpoints = usePlan(session);
   const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
   const [todoPanelOpen, setTodoPanelOpen] = useState(false);
@@ -520,7 +520,7 @@ export function OpenTuiApp({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
-    setPhase("prefilling");
+    setPhase("Working");
     try {
       await session.resumePendingTurn({ signal: controller.signal });
       setPhase("idle");
@@ -532,7 +532,7 @@ export function OpenTuiApp({
       if (!controller.signal.aborted) {
         setAskError(err instanceof Error ? err.message : String(err));
         session.appendErrorMessage?.(err instanceof Error ? err.message : String(err), "resume_pending_turn");
-        setPhase("error");
+        setPhase("idle");
       }
     } finally {
       abortControllerRef.current = null;
@@ -749,23 +749,14 @@ export function OpenTuiApp({
     switch (event.action) {
       case "reasoning_chunk":
       case "text_chunk":
-        setPhase("decoding");
-        break;
       case "tool_call":
-        if (event.extra?.["tool"] === "await_event") {
-          setPhase("waiting");
-        } else {
-          setPhase("decoding");
-        }
-        break;
       case "tool_result":
-        setPhase("prefilling");
+        setPhase("Working");
         break;
       case "agent_no_reply":
         session.appendStatusMessage?.("[No reply] The model chose not to reply.", "no_reply");
         break;
       case "agent_end":
-        setPhase("idle");
         if (session.lastInputTokens > 0) {
           setContextTokens(session.lastInputTokens);
           setCacheReadTokens(session.lastCacheReadTokens ?? 0);
@@ -774,7 +765,7 @@ export function OpenTuiApp({
       case "ask_requested":
         setPendingAsk(session.getPendingAsk?.() ?? null);
         setAskError(null);
-        setPhase("asking");
+        setPhase("Asking");
         break;
       case "ask_resolved":
         setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -1385,10 +1376,9 @@ export function OpenTuiApp({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
-    setPhase("prefilling");
+    setPhase("Working");
     try {
       await session.turn(input, { signal: controller.signal, inlineImages });
-      setPhase("idle");
       setContextTokens(session.lastInputTokens);
       setCacheReadTokens(session.lastCacheReadTokens ?? 0);
       setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -1397,7 +1387,6 @@ export function OpenTuiApp({
       if (!controller.signal.aborted) {
         const message = err instanceof Error ? err.message : String(err);
         session.appendErrorMessage?.(message, "turn");
-        setPhase("error");
       }
     } finally {
       abortControllerRef.current = null;
@@ -1414,19 +1403,17 @@ export function OpenTuiApp({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
-    setPhase("prefilling");
+    setPhase("Working");
     try {
       await session.runManualSummarize({
         signal: controller.signal,
         targetContextIds: opts.targetContextIds,
         focusPrompt: opts.focusPrompt,
       });
-      setPhase("idle");
       autoSave();
     } catch (err) {
       if (!controller.signal.aborted) {
         session.appendErrorMessage?.(err instanceof Error ? err.message : String(err), "manual_summarize");
-        setPhase("error");
       }
     } finally {
       abortControllerRef.current = null;
@@ -1443,15 +1430,13 @@ export function OpenTuiApp({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setProcessing(true);
-    setPhase("prefilling");
+    setPhase("Working");
     try {
       await session.runManualCompact(instruction, { signal: controller.signal });
-      setPhase("idle");
       autoSave();
     } catch (err) {
       if (!controller.signal.aborted) {
         session.appendErrorMessage?.(err instanceof Error ? err.message : String(err), "manual_compact");
-        setPhase("error");
       }
     } finally {
       abortControllerRef.current = null;
@@ -2410,7 +2395,7 @@ export function OpenTuiApp({
           : (session.cancelCurrentTurn?.(), { accepted: true as const });
         if (decision.accepted) {
           abortControllerRef.current?.abort();
-          setPhase("cancelling");
+          setPhase("Working");
         } else {
           showHint(
             decision.reason === "compact_in_progress"
@@ -2481,7 +2466,7 @@ export function OpenTuiApp({
           // Do NOT set processing=false here — let runTurn's finally block
           // handle it after the turn actually finishes. This prevents a new
           // turn from starting before the old one unwinds.
-          setPhase("cancelling");
+          setPhase("Working");
         } else {
           showHint(
             decision.reason === "compact_in_progress"
@@ -2701,7 +2686,7 @@ export function OpenTuiApp({
     : null;
 
   const effectivePhase: ActivityPhase = childSnapshot
-    ? (childSnapshot.running ? "decoding" : "idle")
+    ? (childSnapshot.running ? "Working" : "idle")
     : phase;
   const effectiveElapsed = childSnapshot ? childSnapshot.turnElapsed : turnElapsed;
   const effectiveModelName = childSnapshot ? (childSnapshot.modelDisplayLabel || childSnapshot.modelConfigName || modelName) : modelName;

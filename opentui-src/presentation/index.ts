@@ -13,10 +13,10 @@ export { presentationTransform } from "./transform.js";
 export { usePresentationEntries } from "./use-presentation.js";
 export {
   useSpinner,
-  THINKING_SPINNER_FRAMES,
-  THINKING_SPINNER_INTERVAL,
-  TOOL_SPINNER_FRAMES,
-  TOOL_SPINNER_INTERVAL,
+  WORKING_SPINNER_FRAMES,
+  WORKING_SPINNER_INTERVAL,
+  ASKING_SPINNER_FRAMES,
+  ASKING_SPINNER_INTERVAL,
 } from "./use-spinner.js";
 export { useShimmer } from "./use-shimmer.js";
 export { useTransition } from "./use-transition.js";

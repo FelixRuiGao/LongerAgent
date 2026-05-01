@@ -1,32 +1,33 @@
 import { useEffect, useRef, useState } from "react";
+import type { ActivityPhase } from "../display/types.js";
 
-export function useTurnTimer(active: boolean): number {
+export function useTurnTimer(phase: ActivityPhase): number {
   const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef<number>(0);
+  const accumulatedRef = useRef(0);
+  const resumeAtRef = useRef<number>(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!active) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      setElapsed(0);
-      return;
+    if (phase === "Working") {
+      resumeAtRef.current = Date.now();
+      intervalRef.current = setInterval(() => {
+        setElapsed(accumulatedRef.current + (Date.now() - resumeAtRef.current) / 1000);
+      }, 100);
+
+      return () => {
+        accumulatedRef.current += (Date.now() - resumeAtRef.current) / 1000;
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      };
     }
 
-    startRef.current = Date.now();
-    intervalRef.current = setInterval(() => {
-      setElapsed((Date.now() - startRef.current) / 1000);
-    }, 100);
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-  }, [active]);
+    if (phase === "idle" || phase === "closing") {
+      accumulatedRef.current = 0;
+      setElapsed(0);
+    }
+  }, [phase]);
 
   return elapsed;
 }

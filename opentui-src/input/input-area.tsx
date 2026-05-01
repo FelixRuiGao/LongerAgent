@@ -12,12 +12,10 @@ import { formatCompactTokensShort } from "../display/utils/format.js";
 import { formatElapsed } from "../presentation/use-turn-timer.js";
 import {
   useSpinner,
-  DECODING_SPINNER_FRAMES,
-  DECODING_SPINNER_INTERVAL,
-  PREFILL_SPINNER_FRAMES,
-  PREFILL_SPINNER_INTERVAL,
-  AWAITING_SPINNER_FRAMES,
-  AWAITING_SPINNER_INTERVAL,
+  WORKING_SPINNER_FRAMES,
+  WORKING_SPINNER_INTERVAL,
+  ASKING_SPINNER_FRAMES,
+  ASKING_SPINNER_INTERVAL,
 } from "../presentation/use-spinner.js";
 
 interface InputAreaProps {
@@ -80,36 +78,14 @@ interface InputAreaProps {
   scrolledAway?: boolean;
 }
 
-function getPhaseLabel(phase: ActivityPhase): string {
-  switch (phase) {
-    case "decoding": return "Decoding";
-    case "waiting": return "Waiting";
-    case "asking": return "Asking";
-    case "cancelling": return "Cancelling";
-    case "error": return "Error";
-    case "prefilling":
-    default: return "Prefilling";
-  }
-}
-
 function getPhaseSpinnerConfig(phase: ActivityPhase): { frames: readonly string[]; interval: number } {
-  switch (phase) {
-    case "decoding": return { frames: DECODING_SPINNER_FRAMES, interval: DECODING_SPINNER_INTERVAL };
-    case "waiting": return { frames: AWAITING_SPINNER_FRAMES, interval: AWAITING_SPINNER_INTERVAL };
-    case "asking": return { frames: AWAITING_SPINNER_FRAMES, interval: AWAITING_SPINNER_INTERVAL };
-    case "prefilling":
-    default: return { frames: PREFILL_SPINNER_FRAMES, interval: PREFILL_SPINNER_INTERVAL };
-  }
+  if (phase === "Asking") return { frames: ASKING_SPINNER_FRAMES, interval: ASKING_SPINNER_INTERVAL };
+  return { frames: WORKING_SPINNER_FRAMES, interval: WORKING_SPINNER_INTERVAL };
 }
 
 function getPhaseColor(phase: ActivityPhase, colors: ConversationPalette): string {
-  switch (phase) {
-    case "decoding": return colors.generatingStatus;
-    case "waiting": return colors.waitingStatus;
-    case "asking": return colors.waitingStatus;
-    case "prefilling":
-    default: return colors.dim;
-  }
+  if (phase === "Asking") return colors.dim;
+  return "#56B6C2";
 }
 
 /**
@@ -183,7 +159,6 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
 
   const spinnerConfig = getPhaseSpinnerConfig(phase);
   const activeSpinner = useSpinner(spinnerConfig.frames, spinnerConfig.interval, processing);
-  const phaseLabel = getPhaseLabel(phase);
   const phaseColor = getPhaseColor(phase, colors);
 
   const cacheLabel = cacheReadTokens > 0 ? ` (${formatCompactTokensShort(cacheReadTokens)} cached)` : "";
@@ -197,7 +172,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
       <box flexDirection="row" width="100%" paddingLeft={1} paddingRight={1}>
         {processing ? (
           <box flexDirection="row" flexShrink={0}>
-            <text fg={phaseColor} content={`${activeSpinner} ${phaseLabel}`} />
+            <text fg={phaseColor} content={`${activeSpinner} ${phase}`} />
             {elapsed > 0 ? (
               <text fg={colors.dim} content={` ${formatElapsed(elapsed)}`} />
             ) : null}

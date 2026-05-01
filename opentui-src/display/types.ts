@@ -15,13 +15,9 @@ export type AnyOAuthTokens = OAuthTokens | GitHubOAuthTokens;
 
 export type ActivityPhase =
   | "idle"
-  | "prefilling"
-  | "decoding"
-  | "waiting"
-  | "asking"
-  | "closing"
-  | "cancelling"
-  | "error";
+  | "Working"
+  | "Asking"
+  | "closing";
 
 export interface CommandOverlayState {
   mode: "command" | "file";
