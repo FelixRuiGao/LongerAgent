@@ -36,6 +36,7 @@ function makeSessionLike(projectRoot: string): any {
   s._turnRelease = null;
   s._inbox = [];
   s._activeAgents = new Map();
+  s._recentSessionEvents = [];
   s._log = [];
   s._idAllocator = new LogIdAllocator();
   s._logListeners = new Set();

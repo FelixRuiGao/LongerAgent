@@ -1160,17 +1160,17 @@ export class Session {
   /**
    * Unified message delivery entry point.
    * Routes based on _agentState:
-   *   idle    → direct injection into _log
+   *   idle    → inbox + schedule auto-resume (kicks off a new turn)
    *   working → inbox (delivered via tool_result push or activation boundary drain)
    *   waiting → inbox + wake wait
    */
   private _deliverMessage(msg: MessageEnvelope): void {
+    this._inbox.push(msg);
     if (this._agentState === "idle") {
-      this._injectMessageDirect(msg);
+      this._scheduleAutoResume();
       return;
     }
     // working / waiting → enqueue
-    this._inbox.push(msg);
     // Check _waitHandle (not _agentState) to wake — eliminates race window
     if (this._waitHandle) {
       this._wakeWait();
@@ -1190,41 +1190,63 @@ export class Session {
     });
   }
 
+  private _autoResumeScheduled = false;
+
   /**
-   * Direct injection (idle-state safety net).
+   * Schedule an auto-resume turn for the idle state. Used when messages arrive
+   * (sub-agent completion, shell exit, etc.) while the parent agent has no
+   * active turn. Without this, the queued messages would sit in the log
+   * unprocessed until the user manually starts a new turn.
    */
-  private _injectMessageDirect(msg: MessageEnvelope): void {
-    const ctxId = this._allocateContextId();
-    let display: string;
-    let content: string;
-    let tuiHide = false;
-    switch (msg.type) {
-      case "user_input":
-        display = msg.content.slice(0, 200);
-        content = `<user-message>\n${msg.content}\n</user-message>`;
-        break;
-      case "peer_message":
-        display = `[Message from ${msg.sender}]`;
-        content = `<sub-agent-message from="${msg.sender}">\n${msg.content}\n</sub-agent-message>`;
-        tuiHide = true;
-        break;
-      case "system_notice":
-        display = `[System] ${msg.content.slice(0, 100)}`;
-        content = `<system-message>\n${msg.content}\n</system-message>`;
-        break;
+  private _scheduleAutoResume(): void {
+    if (this._autoResumeScheduled) return;
+    if (this._activeAsk) return;
+    if (this._pendingTurnState) return;
+    this._autoResumeScheduled = true;
+    queueMicrotask(() => {
+      this._autoResumeScheduled = false;
+      void this._autoResumeFromIdle().catch(() => { /* swallow — caller doesn't await */ });
+    });
+  }
+
+  /**
+   * Run a turn that drains queued messages without taking new user input.
+   * Acquires the turn lock to serialize with normal turn() calls.
+   */
+  private async _autoResumeFromIdle(): Promise<void> {
+    await this._withTurnLock(async () => {
+      if (this._agentState !== "idle") return;
+      if (this._activeAsk) return;
+      if (this._pendingTurnState) return;
+      // Skip if there's nothing to process: no inbox messages AND no recent
+      // user_message entry awaiting a response.
+      if (this._inbox.length === 0 && !this._hasUnprocessedUserMessage()) return;
+      await this._turnInner("", { skipUserInput: true });
+    });
+  }
+
+  /**
+   * Scan the log backward to find whether the most recent turn-relevant entry
+   * is a user_message that hasn't been responded to (no assistant_text/tool_call/
+   * reasoning after it). Used by auto-resume to decide whether to fire a new
+   * turn after a finally-block drain wrote messages without the model seeing
+   * them.
+   */
+  private _hasUnprocessedUserMessage(): boolean {
+    for (let i = this._log.length - 1; i >= 0; i--) {
+      const e = this._log[i];
+      if (e.discarded) continue;
+      if (e.type === "user_message") return true;
+      if (
+        e.type === "assistant_text"
+        || e.type === "tool_call"
+        || e.type === "tool_result"
+        || e.type === "reasoning"
+      ) {
+        return false;
+      }
     }
-    // v2 log (source of truth)
-    const entry = createUserMessageEntry(
-      this._nextLogId("user_message"),
-      this._turnCount,
-      display,
-      content,
-      ctxId,
-    );
-    if (tuiHide) {
-      entry.tuiVisible = false;
-    }
-    this._appendEntry(entry, false);
+    return false;
   }
 
   /**
@@ -3839,7 +3861,14 @@ export class Session {
 
       const textAccumulator = { text: "" };
       const reasoningAccumulator = { text: "" };
-      return this._runTurnActivationLoop(options?.signal, textAccumulator, reasoningAccumulator);
+      const result = await this._runTurnActivationLoop(options?.signal, textAccumulator, reasoningAccumulator);
+      // Notify parent of the resumed turn's output. Without this, post-approval
+      // assistant_text is lost and agent_result.content shows "(no output)".
+      if (!this._activeAsk) {
+        this._turnOutputTarget?.(result?.trim() || "");
+        if (result?.trim()) this._recordSessionEvent("returned output");
+      }
+      return result;
     });
   }
 
@@ -4374,6 +4403,11 @@ export class Session {
         );
         this.onSaveRequest?.();
       }
+      // If the finally drain wrote messages to the log without the model
+      // seeing them, schedule an auto-resume turn to process them.
+      if (!this._activeAsk && this._hasUnprocessedUserMessage()) {
+        this._scheduleAutoResume();
+      }
     }
 
     return finalText;
@@ -4384,7 +4418,7 @@ export class Session {
   }
 
   /** Inner turn logic, called from within the turn lock. */
-  private async _turnInner(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[] }): Promise<string> {
+  private async _turnInner(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[]; skipUserInput?: boolean }): Promise<string> {
     this._ensureSessionStorageReady();
     if (this._mcpManager) {
       await this._ensureMcp();
@@ -4412,79 +4446,93 @@ export class Session {
       return resumed;
     }
 
-    let userContent: string | Array<Record<string, unknown>>;
-    try {
-      userContent = await this._processFileAttachments(userInput);
-    } catch (err) {
-      if (isAskPendingError(err)) {
-        this._pendingTurnState = { stage: "pre_user_input", userInput };
-        this.onSaveRequest?.();
-        return "";
-      }
-      throw err;
-    }
-    // Fire UserPromptSubmit hooks (can deny or modify the prompt)
-    if (this.hookRuntime.hooks.length > 0) {
-      this.hookRuntime.clearTurnContext();
-      const hookResult = await this.hookRuntime.evaluate("UserPromptSubmit", {
-        event: "UserPromptSubmit",
-        timestamp: Date.now(),
-        userPrompt: typeof userContent === "string" ? userContent : userInput,
-      });
-      if (hookResult.decision === "deny") {
-        this.appendStatusMessage(
-          `Prompt blocked by hook: ${hookResult.denyReason ?? "denied"}`,
-          "hook_deny",
-        );
-        return "";
-      }
-    }
-
-    // Assign context_id to user message (metadata only, no visible §{id}§ tag in content)
-    const userCtxId = this._allocateContextId();
-    this._lastTurnEndStatus = null;
-    this._turnCount += 1;
-
-    // v2 log: turn_start + user_message
-    this._appendEntry(
-      createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
-      false,
-    );
-    // Merge inline images (clipboard paste) into multimodal content
-    const inlineImages = options?.inlineImages;
-    if (inlineImages && inlineImages.length > 0) {
-      const parts: Array<Record<string, unknown>> = [];
-      if (typeof userContent === "string") {
-        if (userContent.trim()) {
-          parts.push({ type: "text", text: userContent });
+    // skipUserInput path: auto-resume from idle. Inbox already has queued
+    // messages; we drain them as a hidden user_message entry instead of
+    // writing a synthetic empty user input.
+    if (options?.skipUserInput) {
+      this._lastTurnEndStatus = null;
+      this._turnCount += 1;
+      this._appendEntry(
+        createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
+        false,
+      );
+      this._injectPendingMessages();
+      this.onSaveRequest?.();
+    } else {
+      let userContent: string | Array<Record<string, unknown>>;
+      try {
+        userContent = await this._processFileAttachments(userInput);
+      } catch (err) {
+        if (isAskPendingError(err)) {
+          this._pendingTurnState = { stage: "pre_user_input", userInput };
+          this.onSaveRequest?.();
+          return "";
         }
-      } else {
-        parts.push(...userContent);
+        throw err;
       }
-      for (const img of inlineImages) {
-        parts.push({
-          type: "image",
-          media_type: img.mediaType,
-          data: img.base64,
+      // Fire UserPromptSubmit hooks (can deny or modify the prompt)
+      if (this.hookRuntime.hooks.length > 0) {
+        this.hookRuntime.clearTurnContext();
+        const hookResult = await this.hookRuntime.evaluate("UserPromptSubmit", {
+          event: "UserPromptSubmit",
+          timestamp: Date.now(),
+          userPrompt: typeof userContent === "string" ? userContent : userInput,
         });
+        if (hookResult.decision === "deny") {
+          this.appendStatusMessage(
+            `Prompt blocked by hook: ${hookResult.denyReason ?? "denied"}`,
+            "hook_deny",
+          );
+          return "";
+        }
       }
-      userContent = parts;
-    }
 
-    // display = original user input (what they typed); content = expanded for API
-    const displayText = userInput;
-    // For the log entry, replace inline base64 images with image_ref file paths
-    const logContent = this._extractAndSaveImages(userContent);
-    this._appendEntry(
-      createUserMessageEntry(
-        this._nextLogId("user_message"),
-        this._turnCount,
-        displayText,
-        logContent,
-        userCtxId,
-      ),
-      false,
-    );
+      // Assign context_id to user message (metadata only, no visible §{id}§ tag in content)
+      const userCtxId = this._allocateContextId();
+      this._lastTurnEndStatus = null;
+      this._turnCount += 1;
+
+      // v2 log: turn_start + user_message
+      this._appendEntry(
+        createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
+        false,
+      );
+      // Merge inline images (clipboard paste) into multimodal content
+      const inlineImages = options?.inlineImages;
+      if (inlineImages && inlineImages.length > 0) {
+        const parts: Array<Record<string, unknown>> = [];
+        if (typeof userContent === "string") {
+          if (userContent.trim()) {
+            parts.push({ type: "text", text: userContent });
+          }
+        } else {
+          parts.push(...userContent);
+        }
+        for (const img of inlineImages) {
+          parts.push({
+            type: "image",
+            media_type: img.mediaType,
+            data: img.base64,
+          });
+        }
+        userContent = parts;
+      }
+
+      // display = original user input (what they typed); content = expanded for API
+      const displayText = userInput;
+      // For the log entry, replace inline base64 images with image_ref file paths
+      const logContent = this._extractAndSaveImages(userContent);
+      this._appendEntry(
+        createUserMessageEntry(
+          this._nextLogId("user_message"),
+          this._turnCount,
+          displayText,
+          logContent,
+          userCtxId,
+        ),
+        false,
+      );
+    }
     this.onSaveRequest?.();
 
     // Track streamed content for abort recovery
@@ -6828,17 +6876,12 @@ export class Session {
       return new ToolResult({ content: `Messages pending.\n\n${parts.join("\n\n")}` });
     }
 
-    const working = this._getWorkingChildHandles();
-    const hasRunningShells = this._hasRunningShells();
-    // No tracked workers, no pending messages — still allow waiting for incoming messages.
-    if (!working.length && !hasRunningShells && this._childSessions.size === 0 && !this._statusSource) {
-      // Pure message wait — skip child/shell status, just wait for timeout or message
-    } else if (!working.length && !hasRunningShells) {
-      this._agentState = "working";
-      this._setSelfPhase("idle");
-      const brief = this._buildDetailedChildStatusReport();
-      return new ToolResult({ content: brief || "No tracked workers." });
-    }
+    // No tracked workers, no shells, no message wake source — fall through to
+    // the Promise.race below; it still races on timeout + messageWake. When
+    // child sessions exist (even if all are blocked/idle/archived), settleResolve
+    // resolves on lifecycle changes, so we can wait for state transitions too.
+    // Previously this short-circuited and returned immediately when children
+    // were blocked, causing the model to busy-loop.
 
     // Atomic: install resolver BEFORE state transition → no race window
     const messageWake = new Promise<"message">((resolve) => {
