@@ -1197,6 +1197,7 @@ export class Session {
     const ctxId = this._allocateContextId();
     let display: string;
     let content: string;
+    let tuiHide = false;
     switch (msg.type) {
       case "user_input":
         display = msg.content.slice(0, 200);
@@ -1205,6 +1206,7 @@ export class Session {
       case "peer_message":
         display = `[Message from ${msg.sender}]`;
         content = `<sub-agent-message from="${msg.sender}">\n${msg.content}\n</sub-agent-message>`;
+        tuiHide = true;
         break;
       case "system_notice":
         display = `[System] ${msg.content.slice(0, 100)}`;
@@ -1212,16 +1214,17 @@ export class Session {
         break;
     }
     // v2 log (source of truth)
-    this._appendEntry(
-      createUserMessageEntry(
-        this._nextLogId("user_message"),
-        this._turnCount,
-        display,
-        content,
-        ctxId,
-      ),
-      false,
+    const entry = createUserMessageEntry(
+      this._nextLogId("user_message"),
+      this._turnCount,
+      display,
+      content,
+      ctxId,
     );
+    if (tuiHide) {
+      entry.tuiVisible = false;
+    }
+    this._appendEntry(entry, false);
   }
 
   /**
@@ -6243,19 +6246,6 @@ export class Session {
       handle.phase = "waiting";
       handle.lastOutcome = "none";
       handle.lastActivityAt = Date.now();
-      if (pendingAsk) {
-        const label = pendingAsk.payload.toolName
-          ? `${pendingAsk.kind} for ${pendingAsk.payload.toolName}`
-          : pendingAsk.kind;
-        this._deliverMessage({
-          type: "system_notice",
-          sender: "system",
-          content:
-            `Sub-agent '${handle.id}' is waiting for user approval (${label}). ` +
-            "The parent runtime will be notified after the approval is resolved.",
-          timestamp: Date.now(),
-        });
-      }
       this._saveChildSession(handle);
       this._notifyLogListeners();
       this.onSaveRequest?.();
