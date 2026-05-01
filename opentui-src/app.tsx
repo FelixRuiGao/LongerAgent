@@ -130,6 +130,7 @@ export interface OpenTuiAppProps {
 }
 
 const CTRL_C_EXIT_WINDOW_MS = 2000;
+const DOUBLE_ESC_WINDOW_MS = 500;
 const CUSTOM_EMPTY_HINT =
   'Custom answer is empty. Please enter an answer first, or choose "Discuss further" instead.';
 const GOODBYE_MESSAGES = [
@@ -373,6 +374,7 @@ export function OpenTuiApp({
   const askInputRef = useRef<InputRenderable | null>(null);
   const lastInputValueRef = useRef("");
   const lastCtrlCRef = useRef(0);
+  const lastEscRef = useRef(0);
   const closingRef = useRef(false);
   const closingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -2420,6 +2422,17 @@ export function OpenTuiApp({
         event.stopPropagation();
         return;
       }
+
+      // Double-Esc while idle: open rewind picker
+      const now = Date.now();
+      if (now - lastEscRef.current < DOUBLE_ESC_WINDOW_MS) {
+        lastEscRef.current = 0;
+        void handleSubmit("/rewind");
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      lastEscRef.current = now;
     }
 
     if (event.name === "c" && event.ctrl) {

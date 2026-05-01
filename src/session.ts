@@ -525,6 +525,9 @@ export class Session {
   // /summarize tool whitelist mode
   private _summarizeToolWhitelist: Set<string> | null = null;
 
+  // Pending summary entries to flush after tool_result is appended
+  private _pendingSummaryEntries: LogEntry[] = [];
+
   // Skills
   private _skills = new Map<string, SkillMeta>();
   private _skillRoots: string[] = [];
@@ -1468,6 +1471,7 @@ export class Session {
     this._shellManager.resetCounter();
     this._showContextRoundsRemaining = 0;
     this._showContextAnnotations = null;
+    this._pendingSummaryEntries = [];
   }
 
   // ------------------------------------------------------------------
@@ -1579,7 +1583,7 @@ export class Session {
     deletions: number;
     filesReverted: boolean;
   }> {
-    const userTurns = this.listTurns().filter(t => t.turnKind === "user");
+    const userTurns = this.listTurns().filter(t => t.turnKind === "user" || t.turnKind === "summarize");
 
     // Collect per-turn mutation data: distinct paths, additions, deletions
     interface TurnMutData {
@@ -3151,7 +3155,7 @@ export class Session {
 
     for (const t of this.listTurns()) {
       if (!t.inActiveWindow || t.turnKind !== "user") continue;
-      if (t.turnIndex >= this._turnCount) continue;
+      if (t.turnIndex > this._turnCount) continue;
       items.push({
         kind: "turn",
         turnIndex: t.turnIndex,
@@ -3260,7 +3264,9 @@ export class Session {
       if (options?.focusPrompt?.trim()) {
         prompt += `\n\nUser focus: ${options.focusPrompt.trim()}`;
       }
-      const displayText = `[Targeted summarize: ${targetIds.length} context groups]`;
+      const displayText = options?.focusPrompt?.trim()
+        ? `/summarize ${options.focusPrompt.trim()}`
+        : `/summarize ${targetIds.length} context groups`;
 
       // Enable tool whitelist for this turn
       this._summarizeToolWhitelist = (this.constructor as typeof Session).SUMMARIZE_TOOL_WHITELIST;
@@ -4633,6 +4639,13 @@ export class Session {
     };
 
     const onToolResult = (name: string, tool: string, toolCallId: string, isError: boolean, summary: string) => {
+      // Flush deferred summary entries now that tool_result is in the log
+      if (this._pendingSummaryEntries.length > 0) {
+        const pending = this._pendingSummaryEntries.splice(0);
+        for (const entry of pending) {
+          this._appendEntry(entry, false);
+        }
+      }
       if (this._progress) {
         this._progress.onToolResult(this._turnCount, name, tool, toolCallId, isError, summary);
       }
@@ -5208,10 +5221,9 @@ export class Session {
       this._turnCount,
     );
 
-    // Append new summary entries (append-only — originals are never mutated)
-    for (const entry of result.newEntries) {
-      this._appendEntry(entry, false);
-    }
+    // Defer summary entries — they must appear AFTER the tool_result to avoid
+    // breaking the tool_call → tool_result pairing in API projections.
+    this._pendingSummaryEntries.push(...result.newEntries);
 
     this._annotateLatestSummarizeToolCall(result.results);
 
