@@ -4340,6 +4340,25 @@ export class Session {
         this._injectPendingMessages();
       }
       this._agentState = "idle";
+      // Finalize tool_call entries stuck in non-terminal state (e.g. abort during await_event).
+      // Scan backward: only the current round's tool_calls can be affected; stop at the first
+      // non-tool_call entry after seeing at least one tool_call (entries are interleaved with
+      // tool_result, token_update, etc. so we skip those).
+      {
+        let sawToolCall = false;
+        for (let i = this._log.length - 1; i >= 0; i--) {
+          const entry = this._log[i];
+          if (entry.type !== "tool_call") {
+            if (sawToolCall) break;
+            continue;
+          }
+          sawToolCall = true;
+          const execState = (entry.meta as Record<string, unknown>)["toolExecState"];
+          if (execState === "running" || execState === "not_started") {
+            (entry.meta as Record<string, unknown>)["toolExecState"] = "failed";
+          }
+        }
+      }
       this._activeLogEntryId = null;
       this._setSelfPhase("idle");
       if (!this._activeAsk && this._turnCount > 0 && turnEndStatus) {
