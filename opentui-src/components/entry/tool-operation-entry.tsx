@@ -148,7 +148,7 @@ function ToolOperationEntryInner(
       ? DEFAULT_DISPLAY_THEME.presentation.errorColor
       : DEFAULT_DISPLAY_THEME.presentation.successColor;
 
-  const isAwaitEvent = displayName === "Await Event";
+  const isAwaitEvent = displayName === "Wait";
   const awaitElapsed = useElapsedSince(entry.toolStartedAt, active && isAwaitEvent);
   const toolText = entry.toolText ?? "";
   const suffix = entry.toolSuffix ?? "";

@@ -189,7 +189,7 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
   },
   await_event: {
     category: "orchestrate",
-    displayName: "Await Event",
+    displayName: "Wait",
     text: (args) => {
       const s = args.seconds;
       return typeof s === "number" ? `${s}s` : "";
