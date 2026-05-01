@@ -178,8 +178,9 @@ function toConversationEntry(
       rawArguments?: string;
     } | undefined;
     const toolArgs = content?.arguments;
-    if (toolName || toolArgs) {
+    if (toolName || toolArgs || typeof toolCallId === "string") {
       ce.meta = {};
+      if (typeof toolCallId === "string") ce.meta.toolCallId = toolCallId;
       if (typeof toolName === "string") ce.meta.toolName = toolName;
       if (toolArgs && typeof toolArgs === "object") ce.meta.toolArgs = toolArgs;
       const streamSections = entry.meta["toolStreamSections"];
@@ -217,8 +218,10 @@ function toConversationEntry(
     }
     const toolName = entry.meta["toolName"];
     const toolMetadata = entry.meta["toolMetadata"];
-    if (toolName || (toolMetadata && typeof toolMetadata === "object")) {
+    const toolCallId = entry.meta["toolCallId"];
+    if (toolName || (toolMetadata && typeof toolMetadata === "object") || typeof toolCallId === "string") {
       ce.meta ??= {};
+      if (typeof toolCallId === "string") ce.meta.toolCallId = toolCallId;
       if (typeof toolName === "string") ce.meta.toolName = toolName;
       if (toolMetadata && typeof toolMetadata === "object") ce.meta.toolMetadata = toolMetadata;
     }

@@ -49,6 +49,10 @@ function getToolName(entry: ReconciledConversationEntry): string {
   return (getMeta(entry).toolName as string) ?? "";
 }
 
+function getToolCallId(entry: ReconciledConversationEntry): string {
+  return (getMeta(entry).toolCallId as string) ?? "";
+}
+
 function isToolResultError(entry: ReconciledConversationEntry): boolean {
   const meta = getMeta(entry);
   if (meta.isError === true) return true;
@@ -76,7 +80,7 @@ const FILE_MUTATING_TOOLS = new Set(["write_file", "edit_file"]);
  */
 function isPlanFileOperation(
   callEntry: ReconciledConversationEntry,
-  nextEntry: ReconciledConversationEntry | undefined,
+  resultEntry: ReconciledConversationEntry | null,
 ): boolean {
   // Path 1: early detection from tool_call args (works during streaming)
   const toolName = getToolName(callEntry);
@@ -87,8 +91,8 @@ function isPlanFileOperation(
   }
 
   // Path 2: post-execution metadata flag (authoritative, set by session.ts)
-  if (nextEntry?.entry.kind === "tool_result") {
-    const resultMeta = (nextEntry.entry.meta as Record<string, unknown>) ?? {};
+  if (resultEntry) {
+    const resultMeta = (resultEntry.entry.meta as Record<string, unknown>) ?? {};
     const toolMetadata = resultMeta.toolMetadata as Record<string, unknown> | undefined;
     if (toolMetadata?.planFileOperation === true) return true;
   }
@@ -493,6 +497,27 @@ export function presentationTransform(
     prevById.set(pe.id, pe);
   }
 
+  // Pre-build a toolCallId → tool_result index. Pairing by id (not adjacency)
+  // is necessary because entries like agent_result may appear between a
+  // tool_call and its matching tool_result in the log.
+  const resultByCallId = new Map<string, ReconciledConversationEntry>();
+  const consumedResultIds = new Set<string>();
+  for (const e of entries) {
+    if (e.entry.kind === "tool_result") {
+      const callId = getToolCallId(e);
+      if (callId) resultByCallId.set(callId, e);
+    }
+  }
+  // Pre-mark all tool_results that have a matching tool_call as consumed.
+  // The standalone tool_result switch case will then skip these.
+  for (const e of entries) {
+    if (e.entry.kind === "tool_call") {
+      const callId = getToolCallId(e);
+      const matched = callId ? resultByCallId.get(callId) : null;
+      if (matched) consumedResultIds.add(matched.id);
+    }
+  }
+
   let i = 0;
 
   while (i < entries.length) {
@@ -502,12 +527,11 @@ export function presentationTransform(
     // 1. Skip hidden tools and plan file operations
     if (kind === "tool_call") {
       const toolName = getToolName(entry);
-      const isPlanOp = isPlanFileOperation(entry, entries[i + 1]);
+      const callId = getToolCallId(entry);
+      const pairedResult = callId ? resultByCallId.get(callId) ?? null : null;
+      const isPlanOp = isPlanFileOperation(entry, pairedResult);
       if (HIDDEN_TOOLS.has(toolName) || isPlanOp) {
         i++;
-        if (i < entries.length && entries[i].entry.kind === "tool_result") {
-          i++;
-        }
         continue;
       }
     }
@@ -547,12 +571,11 @@ export function presentationTransform(
       case "tool_call": {
         const callEntry = entry;
         const callToolName = getToolName(callEntry);
+        const callId = getToolCallId(callEntry);
         i++;
-        let resultEntry: ReconciledConversationEntry | null = null;
-        if (i < entries.length && entries[i].entry.kind === "tool_result") {
-          resultEntry = entries[i];
-          i++;
-        }
+        const resultEntry: ReconciledConversationEntry | null = callId
+          ? resultByCallId.get(callId) ?? null
+          : null;
         const toolOp = buildToolOperation(callEntry, resultEntry, activeEntryId);
 
         // Fold subsequent summary entries into the summarize tool's inline result
@@ -580,6 +603,12 @@ export function presentationTransform(
       }
 
       case "tool_result": {
+        // Skip tool_result if already consumed by its tool_call.
+        // Only render orphaned tool_results (no matching tool_call) as system entries.
+        if (consumedResultIds.has(entry.id)) {
+          i++;
+          break;
+        }
         result.push(transformSystem(entry));
         i++;
         break;
