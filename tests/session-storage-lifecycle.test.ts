@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import { countTokens as gptCountTokens, encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
 
 import { Session } from "../src/session.js";
@@ -271,7 +271,7 @@ describe("session storage lifecycle", () => {
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store) as any;
 
-      session._saveChildSession = vi.fn();
+      session._saveChildSession = mock();
       session._childSessions.set("reviewer-crm-dashboard", {
         id: "reviewer-crm-dashboard",
         numericId: 1,
@@ -710,7 +710,7 @@ describe("session storage lifecycle", () => {
       const session = makeSession(projectRoot, store);
       const workingAbort = new AbortController();
       const finishedAbort = new AbortController();
-      const killShell = vi.fn();
+      const killShell = mock();
       let woke = false;
 
       (session as any)._inbox = [
@@ -725,7 +725,7 @@ describe("session storage lifecycle", () => {
         lifecycle: "running",
         status: "working",
         phase: "thinking",
-        session: { _recordSessionEvent: vi.fn() },
+        session: { _recordSessionEvent: mock() },
         sessionDir: "",
         artifactsDir: "",
         resultText: "",
@@ -752,7 +752,7 @@ describe("session storage lifecycle", () => {
         lifecycle: "archived",
         status: "completed",
         phase: "idle",
-        session: { _recordSessionEvent: vi.fn() },
+        session: { _recordSessionEvent: mock() },
         sessionDir: "",
         artifactsDir: "",
         resultText: "ready but undelivered",

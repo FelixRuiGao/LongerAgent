@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { buildDefaultRegistry } from "../src/commands.js";
 import { acceptCommandPickerSelection, createCommandPicker } from "../src/ui/command-picker.js";
 

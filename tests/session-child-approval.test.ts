@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 
 import type { PendingAskUi } from "../src/ask.js";
 import { Session } from "../src/session.js";
@@ -42,28 +42,28 @@ function makeSessionLike(): any {
   s._progress = undefined;
   s._permissionAdvisor = {
     _allowOnceGrants: new Set(),
-    grantAllowOnce: vi.fn(),
-    acceptOffer: vi.fn(),
+    grantAllowOnce: mock(),
+    acceptOffer: mock(),
   };
   s.hookRuntime = {
     hooks: [],
-    evaluate: vi.fn(),
-    fireAndForget: vi.fn(),
+    evaluate: mock(),
+    fireAndForget: mock(),
   };
-  s._emitAskResolvedProgress = vi.fn();
-  s._emitAskRequestedProgress = vi.fn();
+  s._emitAskResolvedProgress = mock();
+  s._emitAskRequestedProgress = mock();
   s._appendEntry = function appendEntry(entry: any): void {
     this._log.push(entry);
   };
   s._nextLogId = function nextLogId(type: any): string {
     return this._idAllocator.next(type);
   };
-  s._allocateContextId = vi.fn(() => "ctx-allocated");
-  s._findToolCallContextId = vi.fn((_toolCallId: string, _roundIndex?: number) => "ctx-tool");
-  s._updateToolCallExecState = vi.fn();
-  s._notifyLogListeners = vi.fn();
-  s._saveChildSession = vi.fn();
-  s.onSaveRequest = vi.fn();
+  s._allocateContextId = mock(() => "ctx-allocated");
+  s._findToolCallContextId = mock((_toolCallId: string, _roundIndex?: number) => "ctx-tool");
+  s._updateToolCallExecState = mock();
+  s._notifyLogListeners = mock();
+  s._saveChildSession = mock();
+  s.onSaveRequest = mock();
   return s;
 }
 
@@ -115,13 +115,13 @@ function makeChildSession(overrides: Record<string, unknown> = {}): any {
     recentSessionEvents: [],
     pendingInboxCount: 0,
     getLogRevision: () => 7,
-    getPendingAsk: vi.fn(() => pendingAsk),
-    hasPendingTurnToResume: vi.fn(() => hasPendingTurnToResume),
-    resolveApprovalAsk: vi.fn(),
-    resumePendingTurn: vi.fn(async () => "resumed"),
-    requestTurnInterrupt: vi.fn(() => ({ accepted: true })),
-    _normalizeInterruptedTurnFromLog: vi.fn(),
-    _deliverMessage: vi.fn(),
+    getPendingAsk: mock(() => pendingAsk),
+    hasPendingTurnToResume: mock(() => hasPendingTurnToResume),
+    resolveApprovalAsk: mock(),
+    resumePendingTurn: mock(async () => "resumed"),
+    requestTurnInterrupt: mock(() => ({ accepted: true })),
+    _normalizeInterruptedTurnFromLog: mock(),
+    _deliverMessage: mock(),
     ...rest,
   };
 }
@@ -152,7 +152,7 @@ function makeHandle(childSession: any): any {
     order: 1,
     suspended: false,
     settlePromise: null,
-    settleResolve: vi.fn(),
+    settleResolve: mock(),
   };
 }
 
@@ -373,12 +373,12 @@ describe("child approval routing", () => {
       { toolCallId: "tool-1", toolName: "write_file", agentName: "Primary", contextId: "ctx-tool" },
     ));
 
-    const executor = vi.fn(async (_args: Record<string, unknown>, ctx?: { signal?: AbortSignal }) => {
+    const executor = mock(async (_args: Record<string, unknown>, ctx?: { signal?: AbortSignal }) => {
       expect(ctx?.signal).toBe(abortController.signal);
       return new ToolResult({ content: "ok" });
     });
     root._toolExecutors = { write_file: executor };
-    root._beforeToolExecute = vi.fn(async () => undefined);
+    root._beforeToolExecute = mock(async () => undefined);
 
     const suspended = await root._drainPendingToolCalls();
 

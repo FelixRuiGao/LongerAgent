@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 
 import { AskPendingError } from "../src/ask.js";
 import { createEphemeralLogState } from "../src/ephemeral-log.js";
@@ -42,9 +42,9 @@ function makeSessionLike(projectRoot: string): any {
   s._agentState = "idle";
   s._currentTurnSignal = null;
   s.onSaveRequest = undefined;
-  s._ensureMcp = vi.fn(async () => {});
-  s._emitAskRequestedProgress = vi.fn();
-  s._emitAskResolvedProgress = vi.fn();
+  s._ensureMcp = mock(async () => {});
+  s._emitAskRequestedProgress = mock();
+  s._emitAskResolvedProgress = mock();
   return s;
 }
 
@@ -118,9 +118,9 @@ describe("P3 ask behavior", () => {
     const root = makeTempDir("fermi-p3-ask-hint-");
     try {
       const s = makeSessionLike(root);
-      s._updateHintStateAfterApiCall = vi.fn();
-      s._checkAndInjectHint = vi.fn();
-      s._runActivation = vi.fn(async () => ({
+      s._updateHintStateAfterApiCall = mock();
+      s._checkAndInjectHint = mock();
+      s._runActivation = mock(async () => ({
         text: "",
         toolHistory: [],
         totalUsage: { inputTokens: 120, outputTokens: 0 },
@@ -201,7 +201,7 @@ describe("P3 pending turn helpers", () => {
     try {
       const s = makeSessionLike(root);
       s._pendingTurnState = { stage: "pre_user_input", userInput: "hello" };
-      s._turnInner = vi.fn(async () => "ok");
+      s._turnInner = mock(async () => "ok");
       const out = await (Session.prototype as any).resumePendingTurn.call(s);
       expect(out).toBe("ok");
       expect(s._turnInner).toHaveBeenCalledWith("hello", undefined);
@@ -216,7 +216,7 @@ describe("P3 pending turn helpers", () => {
     try {
       const s = makeSessionLike(root);
       s._pendingTurnState = { stage: "activation" };
-      s._runTurnActivationLoop = vi.fn(async () => "continued");
+      s._runTurnActivationLoop = mock(async () => "continued");
       const out = await (Session.prototype as any).resumePendingTurn.call(s, { signal: undefined });
       expect(out).toBe("continued");
       expect(s._runTurnActivationLoop).toHaveBeenCalled();

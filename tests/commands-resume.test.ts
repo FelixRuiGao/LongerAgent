@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -39,15 +39,15 @@ function makeStoreMock(initialSessionDir = "") {
   };
   const store = {
     sessionDir: initialSessionDir,
-    captureBindingState: vi.fn(() => ({ ...binding, sessionDir: binding.sessionDir })),
-    restoreBindingState: vi.fn((state: typeof binding) => {
+    captureBindingState: mock(() => ({ ...binding, sessionDir: binding.sessionDir })),
+    restoreBindingState: mock((state: typeof binding) => {
       binding.activeBaseDir = state.activeBaseDir;
       binding.projectDir = state.projectDir;
       binding.sessionDir = state.sessionDir;
       binding.predictedSessionDir = state.predictedSessionDir;
       (store as any).sessionDir = state.sessionDir ?? "";
     }),
-    attachToExistingSession: vi.fn((path: string) => {
+    attachToExistingSession: mock((path: string) => {
       binding.sessionDir = path;
       (store as any).sessionDir = path;
     }),
@@ -129,7 +129,7 @@ describe("resume command", () => {
     const options = resume!.options!({
       session: {},
       store: {
-        listSessions: vi.fn(() => [
+        listSessions: mock(() => [
           {
             sessionId: "s1",
             path: "/tmp/s1",
@@ -161,7 +161,7 @@ describe("resume command", () => {
     const options = resume!.options!({
       session: {},
       store: {
-        listSessions: vi.fn(() => [
+        listSessions: mock(() => [
           {
             sessionId: "s1",
             path: "/tmp/s1",
@@ -185,7 +185,7 @@ describe("resume command", () => {
     const options = resume!.options!({
       session: {},
       store: {
-        listSessions: vi.fn(() => [
+        listSessions: mock(() => [
           {
             sessionId: "s1",
             path: "/tmp/s1",
@@ -216,17 +216,17 @@ describe("resume command", () => {
     const { tmpDir, sessionDir } = makeTempSession(entries);
 
     const store = makeStoreMock("");
-    store.listSessions = vi.fn(() => [
+    store.listSessions = mock(() => [
       { path: sessionDir, created: "2026-03-01 10:00:00", summary: "hello chat", turns: 1 },
     ]);
 
     const prepared = { kind: "prepared" } as any;
-    const prepareRestoreFromLog = vi.fn(() => prepared);
-    const commitPreparedRestore = vi.fn(() => []);
-    const setStore = vi.fn();
-    const resetUiState = vi.fn();
-    const autoSave = vi.fn();
-    const showMessage = vi.fn();
+    const prepareRestoreFromLog = mock(() => prepared);
+    const commitPreparedRestore = mock(() => []);
+    const setStore = mock();
+    const resetUiState = mock();
+    const autoSave = mock();
+    const showMessage = mock();
 
     const ctx: CommandContext = {
       session: {
@@ -275,18 +275,18 @@ describe("resume command", () => {
 
     const store = {
       sessionDir: "",
-      listSessions: vi.fn(() => [
+      listSessions: mock(() => [
         { path: sessionDir, created: "2026-03-01 10:00:00", summary: "test", turns: 1 },
       ]),
     };
 
-    const showMessage = vi.fn();
+    const showMessage = mock();
     const ctx: CommandContext = {
       session: {},
       showMessage,
       store: store as unknown as CommandContext["store"],
-      autoSave: vi.fn(),
-      resetUiState: vi.fn(),
+      autoSave: mock(),
+      resetUiState: mock(),
       commandRegistry: registry,
     };
 
@@ -313,25 +313,25 @@ describe("resume command", () => {
     });
 
     const store = makeStoreMock("");
-    store.listSessions = vi.fn(() => [
+    store.listSessions = mock(() => [
       { path: sessionDir, created: "2026-03-01 10:00:00", summary: "hello chat", turns: 1 },
     ]);
 
-    const showMessage = vi.fn();
-    const setStore = vi.fn();
+    const showMessage = mock();
+    const setStore = mock();
     const ctx: CommandContext = {
       session: {
-        prepareRestoreFromLog: vi.fn(() => {
+        prepareRestoreFromLog: mock(() => {
           throw new Error("Model config 'missing-model' not found.");
         }),
-        commitPreparedRestore: vi.fn(),
+        commitPreparedRestore: mock(),
         setStore,
         lastInputTokens: 0,
       },
       showMessage,
       store: store as unknown as CommandContext["store"],
-      autoSave: vi.fn(),
-      resetUiState: vi.fn(),
+      autoSave: mock(),
+      resetUiState: mock(),
       commandRegistry: registry,
     };
 
@@ -416,18 +416,18 @@ describe("resume command", () => {
 
     const liveStore = new SessionStore({ baseDir: tmpDir, projectPath: projectRoot });
     const session = makeSession(projectRoot, liveStore);
-    const showMessage = vi.fn();
+    const showMessage = mock();
 
     const ctx: CommandContext = {
       session,
       showMessage,
       store: Object.assign(liveStore, {
-        listSessions: vi.fn(() => [
+        listSessions: mock(() => [
           { path: sessionDir, created: "2026-03-01 10:00:00", summary: "hello chat", turns: 1 },
         ]),
       }) as unknown as CommandContext["store"],
-      autoSave: vi.fn(),
-      resetUiState: vi.fn(),
+      autoSave: mock(),
+      resetUiState: mock(),
       commandRegistry: registry,
     };
 
@@ -451,12 +451,12 @@ describe("resume command", () => {
     const resume = registry.lookup("/resume");
     expect(resume).toBeTruthy();
 
-    const showMessage = vi.fn();
+    const showMessage = mock();
     const ctx: CommandContext = {
       session: {},
       showMessage,
       store: {
-        listSessions: vi.fn(() => [
+        listSessions: mock(() => [
           {
             sessionId: "s1",
             path: "/tmp/s1",
@@ -467,8 +467,8 @@ describe("resume command", () => {
           },
         ]),
       } as unknown as CommandContext["store"],
-      autoSave: vi.fn(),
-      resetUiState: vi.fn(),
+      autoSave: mock(),
+      resetUiState: mock(),
       commandRegistry: registry,
     };
 

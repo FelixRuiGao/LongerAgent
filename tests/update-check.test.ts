@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { checkForUpdates } from "../src/update-check.js";
 
 describe("checkForUpdates", () => {
@@ -12,11 +12,11 @@ describe("checkForUpdates", () => {
   beforeEach(() => {
     tempHome = mkdtempSync(join(tmpdir(), "fermi-update-check-"));
     process.env["HOME"] = tempHome;
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    spyOn(console, "log").mockImplementation(() => {});
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    mock.restore();
     if (originalFetch) {
       globalThis.fetch = originalFetch;
     } else {
@@ -57,7 +57,7 @@ describe("checkForUpdates", () => {
     }>((resolve) => {
       resolveFetch = resolve;
     });
-    globalThis.fetch = vi.fn(async () => await pendingFetch) as typeof fetch;
+    globalThis.fetch = mock(async () => await pendingFetch) as typeof fetch;
 
     const showUpdateNotice = checkForUpdates("0.1.0");
     showUpdateNotice();

@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 
 import { Session } from "../src/session.js";
 import { executeTool } from "../src/tools/basic.js";
 
-vi.mock("markitdown-ts", () => ({
+mock.module("markitdown-ts", () => ({
   MarkItDown: class {
     async convert(source: string): Promise<{ markdown: string }> {
       if (source.endsWith(".docx")) {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 
 import type { ModelConfig } from "../src/config.js";
 import { OpenAIResponsesProvider } from "../src/providers/openai-responses.js";
@@ -45,7 +45,7 @@ async function captureCreateCall(
       input_tokens_details: { cached_tokens: 0 },
     },
   };
-  const create = vi.fn(async () => ({
+  const create = mock(async () => ({
     output: [],
     usage: {
       input_tokens: 1,
@@ -252,7 +252,7 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
 
     (provider as any)._client = {
       responses: {
-        create: vi.fn(async () =>
+        create: mock(async () =>
           streamOf([
             {
               type: "response.output_item.added",
@@ -335,7 +335,7 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
 
     (provider as any)._client = {
       responses: {
-        create: vi.fn(async () =>
+        create: mock(async () =>
           streamOf([
             {
               type: "response.output_item.added",
@@ -421,7 +421,7 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
 
     (provider as any)._client = {
       responses: {
-        create: vi.fn(async () =>
+        create: mock(async () =>
           streamOf([
             {
               type: "response.output_item.added",
@@ -516,7 +516,7 @@ describe("OpenAIResponsesProvider streamed tool-call lifecycle", () => {
 
     (provider as any)._client = {
       responses: {
-        create: vi.fn(async () =>
+        create: mock(async () =>
           streamOf([
             { type: "response.output_text.delta", delta: "review" },
             { type: "response.output_text.delta", delta: " complete" },

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 
 import { SessionStore } from "../src/persistence.js";
 import { Session } from "../src/session.js";
@@ -59,8 +59,8 @@ describe("manual summarize / compact commands", () => {
     const projectRoot = makeTempDir("fermi-manual-summarize-");
     try {
       const session = makeSession(projectRoot) as any;
-      session._ensureMcp = vi.fn(async () => {});
-      session._runTurnActivationLoop = vi.fn(async () => "ok");
+      session._ensureMcp = mock(async () => {});
+      session._runTurnActivationLoop = mock(async () => "ok");
       session._log.push(createUserMessage("user-seed", 0, "seed", "seed", "seed1"));
 
       const out = await session.runManualSummarize("keep deployment notes");
@@ -83,7 +83,7 @@ describe("manual summarize / compact commands", () => {
     try {
       const session = makeSession(projectRoot) as any;
       session._hintState = "level2_sent";
-      session._doAutoCompact = vi.fn(async () => {});
+      session._doAutoCompact = mock(async () => {});
 
       await session.runManualCompact("preserve open debugging threads");
 

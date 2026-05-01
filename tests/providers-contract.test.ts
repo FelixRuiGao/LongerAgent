@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 
 import type { ModelConfig } from "../src/config.js";
 import { OpenAIChatProvider } from "../src/providers/openai-chat.js";
@@ -74,7 +74,7 @@ describe("provider response contract (streaming vs non-streaming)", () => {
       },
     ];
 
-    const create = vi.fn(async (params: Record<string, unknown>) => {
+    const create = mock(async (params: Record<string, unknown>) => {
       if (params["stream"]) return streamOf(streamingChunks);
       return nonStreamingResponse;
     });
@@ -137,7 +137,7 @@ describe("provider response contract (streaming vs non-streaming)", () => {
       { type: "response.completed", response: finalResponse },
     ];
 
-    const create = vi.fn(async (params: Record<string, unknown>) => {
+    const create = mock(async (params: Record<string, unknown>) => {
       if (params["stream"]) return streamOf(streamEvents);
       return finalResponse;
     });
@@ -188,7 +188,7 @@ describe("provider response contract (streaming vs non-streaming)", () => {
 
     (provider as any)._client = {
       responses: {
-        create: vi.fn(async () =>
+        create: mock(async () =>
           streamOf([
             { type: "response.reasoning_summary_text.delta", delta: "Reasoning incomplete" },
             { type: "response.output_text.delta", delta: "Answer incomplete" },
@@ -233,7 +233,7 @@ describe("provider response contract (streaming vs non-streaming)", () => {
 
     (provider as any)._client = {
       responses: {
-        create: vi.fn(async () =>
+        create: mock(async () =>
           streamOf([
             { type: "response.output_text.delta", delta: "Answer done" },
             { type: "response.done", response: finalResponse },
@@ -259,7 +259,7 @@ describe("provider response contract (streaming vs non-streaming)", () => {
 
     (provider as any)._client = {
       responses: {
-        create: vi.fn(async () =>
+        create: mock(async () =>
           streamOf([
             { type: "response.reasoning_summary_text.delta", delta: "Fallback reasoning" },
             { type: "response.output_text.delta", delta: "Fallback answer" },

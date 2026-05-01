@@ -1,14 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 
 import { toolWebFetch } from "../src/tools/web-fetch.js";
 
 describe("toolWebFetch", () => {
+  const originalFetch = globalThis.fetch;
   afterEach(() => {
-    vi.restoreAllMocks();
+    globalThis.fetch = originalFetch;
+    mock.restore();
   });
 
   it("uses Jina Reader output when available", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
       expect(String(input)).toBe("https://r.jina.ai/https://example.com/");
       return new Response("# Extracted\n\nHello from Jina", {
         status: 200,
@@ -16,7 +18,7 @@ describe("toolWebFetch", () => {
       });
     });
 
-    vi.stubGlobal("fetch", fetchMock);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const result = await toolWebFetch("https://example.com");
 
@@ -26,7 +28,7 @@ describe("toolWebFetch", () => {
   });
 
   it("falls back to local extraction when Jina is rate limited", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "https://r.jina.ai/https://example.com/") {
         return new Response("Too Many Requests", { status: 429, statusText: "Too Many Requests" });
@@ -40,7 +42,7 @@ describe("toolWebFetch", () => {
       throw new Error(`Unexpected URL: ${url}`);
     });
 
-    vi.stubGlobal("fetch", fetchMock);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const result = await toolWebFetch("https://example.com", "docs");
 

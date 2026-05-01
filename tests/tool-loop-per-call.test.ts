@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 import { asyncRunToolLoop } from "../src/agents/tool-loop.js";
 import { createEphemeralLogState } from "../src/ephemeral-log.js";

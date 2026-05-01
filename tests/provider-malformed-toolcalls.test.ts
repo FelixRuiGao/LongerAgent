@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 
 import type { ModelConfig } from "../src/config.js";
 import { AnthropicProvider } from "../src/providers/anthropic.js";
@@ -62,8 +62,8 @@ describe("Provider malformed tool_call handling", () => {
         modelConfig({ provider: "openai-chat", model: "gpt-4" }),
       );
 
-      const sendMessageSpy = vi.spyOn(provider as any, "sendMessage");
-      const mockCreate = vi.fn(async () => ({
+      const sendMessageSpy = spyOn(provider as any, "sendMessage");
+      const mockCreate = mock(async () => ({
         choices: [{ message: { content: "response", tool_calls: [] } }],
         usage: { prompt_tokens: 10, completion_tokens: 5 },
       }));
@@ -102,7 +102,7 @@ describe("Provider malformed tool_call handling", () => {
         modelConfig({ provider: "anthropic", model: "claude-3-5-sonnet" }),
       );
 
-      const mockCreate = vi.fn(async () => ({
+      const mockCreate = mock(async () => ({
         content: [{ type: "text", text: "response" }],
         usage: { input_tokens: 10, output_tokens: 5 },
       }));
@@ -146,7 +146,7 @@ describe("Provider malformed tool_call handling", () => {
         }),
       );
 
-      const mockCreate = vi.fn(async () => ({
+      const mockCreate = mock(async () => ({
         choices: [{ message: { content: "response", tool_calls: [] } }],
         usage: { prompt_tokens: 10, completion_tokens: 5 },
       }));
@@ -187,7 +187,7 @@ describe("Provider malformed tool_call handling", () => {
         }),
       );
 
-      const mockCreate = vi.fn(async () => ({
+      const mockCreate = mock(async () => ({
         choices: [{ message: { content: "response", tool_calls: [] } }],
         usage: { prompt_tokens: 10, completion_tokens: 5 },
       }));
@@ -228,7 +228,7 @@ describe("Provider malformed tool_call handling", () => {
         }),
       );
 
-      const mockCreate = vi.fn(async () => ({
+      const mockCreate = mock(async () => ({
         choices: [{ message: { content: "response", tool_calls: [] } }],
         usage: { prompt_tokens: 10, completion_tokens: 5 },
       }));
@@ -268,7 +268,7 @@ describe("Provider malformed tool_call handling", () => {
         }),
       );
 
-      const mockCreate = vi.fn(async () => ({
+      const mockCreate = mock(async () => ({
         output: [
           {
             type: "message",

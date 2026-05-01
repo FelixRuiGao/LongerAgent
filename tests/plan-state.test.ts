@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import { parsePlanFile, formatPlanSnapshot } from "../src/plan-state.js";
 
 describe("parsePlanFile", () => {

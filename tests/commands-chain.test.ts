@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import {
   CommandExitSignal,
   buildDefaultRegistry,
@@ -8,9 +8,9 @@ import {
 function baseContext(registry: ReturnType<typeof buildDefaultRegistry>): CommandContext {
   return {
     session: {},
-    showMessage: vi.fn(),
-    autoSave: vi.fn(),
-    resetUiState: vi.fn(),
+    showMessage: mock(),
+    autoSave: mock(),
+    resetUiState: mock(),
     commandRegistry: registry,
   };
 }
@@ -24,7 +24,7 @@ describe("slash command chain", () => {
     const ctx = baseContext(registry);
     await help!.handler(ctx, "");
 
-    const rendered = (ctx.showMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    const rendered = (ctx.showMessage as ReturnType<typeof mock>).mock.calls[0]?.[0] as string;
     expect(rendered).toContain("Option+Enter Insert newline");
     expect(rendered).toContain("Ctrl+N       Insert newline");
     expect(rendered).not.toContain("Shift+Enter");
@@ -36,7 +36,7 @@ describe("slash command chain", () => {
     const cmd = registry.lookup("/summarize");
     expect(cmd).toBeTruthy();
 
-    const onManualSummarizeRequested = vi.fn();
+    const onManualSummarizeRequested = mock();
     const ctx: CommandContext = {
       ...baseContext(registry),
       onManualSummarizeRequested,
@@ -51,7 +51,7 @@ describe("slash command chain", () => {
     const cmd = registry.lookup("/compact");
     expect(cmd).toBeTruthy();
 
-    const onManualCompactRequested = vi.fn();
+    const onManualCompactRequested = mock();
     const ctx: CommandContext = {
       ...baseContext(registry),
       onManualCompactRequested,
@@ -67,10 +67,10 @@ describe("slash command chain", () => {
     expect(cmd).toBeTruthy();
 
     const session = {
-      resetForNewSession: vi.fn(),
+      resetForNewSession: mock(),
     };
     const store = {
-      clearSession: vi.fn(),
+      clearSession: mock(),
     };
 
     const ctx: CommandContext = {
@@ -81,12 +81,12 @@ describe("slash command chain", () => {
 
     await cmd!.handler(ctx, "");
 
-    expect(ctx.resetUiState as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
-    expect(ctx.autoSave as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    expect(ctx.resetUiState as ReturnType<typeof mock>).toHaveBeenCalledTimes(1);
+    expect(ctx.autoSave as ReturnType<typeof mock>).toHaveBeenCalledTimes(1);
     expect(store.clearSession).toHaveBeenCalledTimes(1);
     expect(session.resetForNewSession).toHaveBeenCalledTimes(1);
     expect(session.resetForNewSession).toHaveBeenCalledWith(store);
-    expect(ctx.showMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(ctx.showMessage as ReturnType<typeof mock>).not.toHaveBeenCalled();
   });
 
   it("/new keeps current store when clearSession fails", async () => {
@@ -95,10 +95,10 @@ describe("slash command chain", () => {
     expect(cmd).toBeTruthy();
 
     const session = {
-      resetForNewSession: vi.fn(),
+      resetForNewSession: mock(),
     };
     const store = {
-      clearSession: vi.fn(),
+      clearSession: mock(),
     };
 
     const ctx: CommandContext = {
@@ -112,7 +112,7 @@ describe("slash command chain", () => {
     expect(store.clearSession).toHaveBeenCalledTimes(1);
     expect(session.resetForNewSession).toHaveBeenCalledTimes(1);
     expect(session.resetForNewSession).toHaveBeenCalledWith(store);
-    expect(ctx.showMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(ctx.showMessage as ReturnType<typeof mock>).not.toHaveBeenCalled();
   });
 
   it("/quit delegates to ctx.exit when provided (graceful path)", async () => {
@@ -120,8 +120,8 @@ describe("slash command chain", () => {
     const cmd = registry.lookup("/quit");
     expect(cmd).toBeTruthy();
 
-    const session = { close: vi.fn() };
-    const exit = vi.fn(async () => {});
+    const session = { close: mock() };
+    const exit = mock(async () => {});
     const ctx: CommandContext = {
       ...baseContext(registry),
       session,
@@ -131,7 +131,7 @@ describe("slash command chain", () => {
     await cmd!.handler(ctx, "");
 
     expect(exit).toHaveBeenCalledTimes(1);
-    expect((ctx.autoSave as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect((ctx.autoSave as ReturnType<typeof mock>)).not.toHaveBeenCalled();
     expect(session.close).not.toHaveBeenCalled();
   });
 
@@ -140,14 +140,14 @@ describe("slash command chain", () => {
     const cmd = registry.lookup("/quit");
     expect(cmd).toBeTruthy();
 
-    const close = vi.fn(async () => {});
+    const close = mock(async () => {});
     const ctx: CommandContext = {
       ...baseContext(registry),
       session: { close },
     };
 
     await expect(cmd!.handler(ctx, "")).rejects.toBeInstanceOf(CommandExitSignal);
-    expect((ctx.autoSave as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+    expect((ctx.autoSave as ReturnType<typeof mock>)).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
   });
 

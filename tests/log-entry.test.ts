@@ -2,7 +2,7 @@
  * Tests for LogEntry types, factory functions, and LogIdAllocator.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import {
   LogIdAllocator,
   createSystemPrompt,

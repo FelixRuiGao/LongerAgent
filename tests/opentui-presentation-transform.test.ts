@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 import type { ReconciledConversationEntry } from "../opentui-src/transcript/types.js";
 import { presentationTransform } from "../opentui-src/presentation/transform.js";
