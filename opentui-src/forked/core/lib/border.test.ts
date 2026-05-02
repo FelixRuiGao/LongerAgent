@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect, describe, spyOn, afterEach } from "bun:test"
 import { isValidBorderStyle, parseBorderStyle, type BorderStyle } from "./border.js"
 

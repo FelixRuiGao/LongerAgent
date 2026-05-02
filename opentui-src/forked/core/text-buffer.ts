@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { StyledText } from "./lib/styled-text.js"
 import { RGBA } from "./lib/RGBA.js"
 import { resolveRenderLib, type LineInfo, type RenderLib } from "./zig.js"

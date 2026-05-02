@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect, beforeEach, afterEach, describe } from "bun:test"
 import { decodePasteBytes } from "../lib/paste.js"
 import { nonAlphanumericKeys, type KeyEventType, type ParsedKey } from "../lib/parse.keypress.js"
@@ -84,12 +83,16 @@ async function triggerKittyInput(sequence: string): Promise<KeyEvent> {
   })
 }
 
-function advanceCurrentClock(ms: number = 10): void {
+function advanceCurrentClock(ms: number = 20): void {
   currentClock.advance(ms)
 }
 
-function advanceKittyClock(ms: number = 10): void {
+function advanceKittyClock(ms: number = 20): void {
   kittyClock.advance(ms)
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve()
 }
 
 class MouseTarget extends Renderable {
@@ -98,7 +101,7 @@ class MouseTarget extends Renderable {
   }
 }
 
-function advanceClock(clock: ManualClock, ms: number = 10): void {
+function advanceClock(clock: ManualClock, ms: number = 20): void {
   clock.advance(ms)
 }
 
@@ -118,6 +121,40 @@ async function createRoutingRenderer(options: Partial<TestRendererOptions> = {})
   })
 
   return { renderer, renderOnce, resize, clock }
+}
+
+async function createThemeQueryRenderer(): Promise<{
+  renderer: TestRenderer
+  queryThemeColorsCalls: { count: number }
+  clock: ManualClock
+}> {
+  const clock = new ManualClock()
+  const stdout = {
+    isTTY: true,
+    columns: 80,
+    rows: 24,
+    write: () => true,
+    getColorDepth: () => 24,
+  } as any
+
+  const { renderer } = await createTestRenderer({
+    clock,
+    stdout,
+    useThread: false,
+  })
+
+  // @ts-expect-error - mocking for test
+  renderer.lib.processCapabilityResponse = () => {}
+  // @ts-expect-error - mocking for test
+  renderer.lib.getTerminalCapabilities = () => ({ unicode: "unicode" })
+
+  const queryThemeColorsCalls = { count: 0 }
+  // @ts-expect-error - mocking for test
+  renderer.lib.queryThemeColors = () => {
+    queryThemeColorsCalls.count += 1
+  }
+
+  return { renderer, queryThemeColorsCalls, clock }
 }
 
 test("basic letters via keyInput events", async () => {
@@ -657,6 +694,36 @@ test("Kitty keyboard ctrl+a via keyInput events", async () => {
     capsLock: false,
     numLock: false,
   })
+})
+
+test("Kitty keyboard Ctrl+C with alternate base layout still exits the renderer", async () => {
+  const clock = new ManualClock()
+  const { renderer } = await createTestRenderer({ kittyKeyboard: true, clock })
+
+  try {
+    // Simulate Ctrl+C from a non-Latin IME. Kitty reports the produced
+    // character (`ㅊ`) plus the base-layout key (`c`).
+    const keypress = new Promise<KeyEvent>((resolve) => {
+      renderer.keyInput.once("keypress", resolve)
+    })
+
+    renderer.stdin.emit("data", Buffer.from("\x1b[12618::99;5u"))
+    clock.advance(20)
+
+    const event = await keypress
+    expect(event).toMatchObject({
+      name: "ㅊ",
+      ctrl: true,
+      baseCode: 99,
+    })
+
+    await new Promise<void>((resolve) => process.nextTick(resolve))
+    expect(renderer.isDestroyed).toBe(true)
+  } finally {
+    if (!renderer.isDestroyed) {
+      renderer.destroy()
+    }
+  }
 })
 
 test("Kitty keyboard alt+a via keyInput events", async () => {
@@ -1499,25 +1566,64 @@ test("capability response followed by keypress", async () => {
   expect(keypresses[0].name).toBe("a")
 })
 
-test("partial SGR mouse flushed on timeout should not trigger keypress", async () => {
+test("partial SGR mouse stays pending on timeout, completes when rest arrives", async () => {
   const keypresses: KeyEvent[] = []
   currentRenderer.keyInput.on("keypress", (event) => {
     keypresses.push(event)
   })
 
-  // Incomplete SGR mouse sequence; the native parser flushes this token on timeout.
+  // Incomplete SGR mouse sequence; stays pending (not flushed on timeout).
   currentRenderer.stdin.emit("data", Buffer.from("\x1b[<35;20"))
 
-  // Wait past native stdin parser timeout (10ms)
+  // Wait past native stdin parser timeout (20ms)
   advanceCurrentClock()
   expect(keypresses).toHaveLength(0)
 
-  // Ensure normal key input still works after the filtered flush
+  // Completing the mouse sequence should not trigger keypress either
+  currentRenderer.stdin.emit("data", Buffer.from(";5m"))
+  advanceCurrentClock()
+  expect(keypresses).toHaveLength(0)
+
+  // Normal key input still works after
   currentRenderer.stdin.emit("data", Buffer.from("x"))
   advanceCurrentClock()
 
   expect(keypresses).toHaveLength(1)
   expect(keypresses[0].name).toBe("x")
+})
+
+test("partial OSC flushed on timeout should not block later text", async () => {
+  const keypresses: KeyEvent[] = []
+  currentRenderer.keyInput.on("keypress", (event) => {
+    keypresses.push(event)
+  })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]52;c;"))
+  advanceCurrentClock()
+  expect(keypresses).toHaveLength(0)
+
+  currentRenderer.stdin.emit("data", Buffer.from("abc"))
+  advanceCurrentClock()
+
+  expect(keypresses).toHaveLength(3)
+  expect(keypresses.map((event) => event.name)).toEqual(["a", "b", "c"])
+})
+
+test("partial OSC flushed on timeout should not block later escape sequences", async () => {
+  const keypresses: KeyEvent[] = []
+  currentRenderer.keyInput.on("keypress", (event) => {
+    keypresses.push(event)
+  })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]52;c;"))
+  advanceCurrentClock()
+  expect(keypresses).toHaveLength(0)
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[A"))
+  advanceCurrentClock()
+
+  expect(keypresses).toHaveLength(1)
+  expect(keypresses[0].name).toBe("up")
 })
 
 test("incomplete mouse input resets the timeout when more bytes arrive", async () => {
@@ -1527,9 +1633,9 @@ test("incomplete mouse input resets the timeout when more bytes arrive", async (
   })
 
   currentRenderer.stdin.emit("data", Buffer.from("\x1b[<35;20;"))
-  advanceCurrentClock(9)
+  advanceCurrentClock(19)
   currentRenderer.stdin.emit("data", Buffer.from("5"))
-  advanceCurrentClock(9)
+  advanceCurrentClock(19)
 
   expect(keypresses).toHaveLength(0)
 
@@ -1601,6 +1707,249 @@ test("multiple DECRPM responses in sequence", async () => {
   advanceCurrentClock()
 
   expect(keypresses).toHaveLength(0)
+})
+
+test("OSC 10/11 fallback sets initial theme mode once both colors arrive", () => {
+  const themeModes: string[] = []
+  currentRenderer.on("theme_mode", (mode) => {
+    themeModes.push(mode)
+  })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#ffffff\x07"))
+  advanceCurrentClock()
+
+  expect(currentRenderer.themeMode).toBeNull()
+  expect(themeModes).toEqual([])
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#000000\x07"))
+  advanceCurrentClock()
+
+  expect(currentRenderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+})
+
+test("CSI 997 does not set theme mode directly and triggers an OSC refresh query", async () => {
+  const { renderer, queryThemeColorsCalls, clock } = await createThemeQueryRenderer()
+  const themeModes: string[] = []
+  renderer.on("theme_mode", (mode) => {
+    themeModes.push(mode)
+  })
+
+  renderer.stdin.emit("data", Buffer.from("\x1b[?997;2n"))
+  advanceClock(clock)
+
+  expect(renderer.themeMode).toBeNull()
+  expect(themeModes).toEqual([])
+  expect(queryThemeColorsCalls.count).toBe(1)
+
+  renderer.destroy()
+})
+
+test("CSI 997 does not query theme colors again while a refresh is already pending", async () => {
+  const { renderer, queryThemeColorsCalls, clock } = await createThemeQueryRenderer()
+
+  renderer.stdin.emit("data", Buffer.from("\x1b[?997;1n"))
+  advanceClock(clock)
+
+  expect(queryThemeColorsCalls.count).toBe(1)
+
+  renderer.stdin.emit("data", Buffer.from("\x1b[?997;2n"))
+  advanceClock(clock)
+
+  expect(queryThemeColorsCalls.count).toBe(1)
+
+  renderer.destroy()
+})
+
+test("conflicting CSI 997 before initial OSC replies does not override the OSC-derived mode", () => {
+  const themeModes: string[] = []
+  currentRenderer.on("theme_mode", (mode) => {
+    themeModes.push(mode)
+  })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[?997;2n"))
+  advanceCurrentClock()
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#ffffff\x07"))
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#000000\x07"))
+  advanceCurrentClock()
+
+  expect(currentRenderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+})
+
+test("CSI 997 refreshes theme mode only after fresh OSC 10 and 11 replies arrive", async () => {
+  const { renderer, queryThemeColorsCalls, clock } = await createThemeQueryRenderer()
+  const themeModes: string[] = []
+  renderer.on("theme_mode", (mode) => {
+    themeModes.push(mode)
+  })
+
+  renderer.stdin.emit("data", Buffer.from("\x1b]10;#ffffff\x07"))
+  renderer.stdin.emit("data", Buffer.from("\x1b]11;#000000\x07"))
+  advanceClock(clock)
+
+  expect(renderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+
+  renderer.stdin.emit("data", Buffer.from("\x1b[?997;2n"))
+  advanceClock(clock)
+
+  expect(renderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+  expect(queryThemeColorsCalls.count).toBe(1)
+
+  renderer.stdin.emit("data", Buffer.from("\x1b]10;#000000\x07"))
+  advanceClock(clock)
+
+  expect(renderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+
+  renderer.stdin.emit("data", Buffer.from("\x1b]11;#ffffff\x07"))
+  advanceClock(clock)
+
+  expect(renderer.themeMode).toBe("light")
+  expect(themeModes).toEqual(["dark", "light"])
+
+  renderer.destroy()
+})
+
+test("CSI 997 refresh timeout restores background override state without changing theme mode", async () => {
+  const { renderer, queryThemeColorsCalls, clock } = await createThemeQueryRenderer()
+  const themeModes: string[] = []
+  renderer.on("theme_mode", (mode) => {
+    themeModes.push(mode)
+  })
+
+  renderer.stdin.emit("data", Buffer.from("\x1b]10;#ffffff\x07"))
+  renderer.stdin.emit("data", Buffer.from("\x1b]11;#000000\x07"))
+  advanceClock(clock)
+
+  renderer.stdin.emit("data", Buffer.from("\x1b[?997;2n"))
+  advanceClock(clock, 249)
+
+  expect(renderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+  expect(queryThemeColorsCalls.count).toBe(1)
+
+  advanceClock(clock, 1)
+  await flushMicrotasks()
+
+  expect(renderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+
+  renderer.destroy()
+})
+
+test("CSI 997 refresh with the same OSC-derived mode does not emit twice", () => {
+  const themeModes: string[] = []
+  currentRenderer.on("theme_mode", (mode) => {
+    themeModes.push(mode)
+  })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#ffffff\x07"))
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#000000\x07"))
+  advanceCurrentClock()
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[?997;1n"))
+  advanceCurrentClock()
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#ffffff\x07"))
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#000000\x07"))
+  advanceCurrentClock()
+
+  expect(currentRenderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+})
+
+test("multiple CSI 997 responses while a refresh is pending do not emit early", () => {
+  const themeModes: string[] = []
+  currentRenderer.on("theme_mode", (mode) => {
+    themeModes.push(mode)
+  })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#ffffff\x07"))
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#000000\x07"))
+  advanceCurrentClock()
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[?997;1n"))
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[?997;2n"))
+  advanceCurrentClock()
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#000000\x07"))
+  advanceCurrentClock()
+
+  expect(currentRenderer.themeMode).toBe("dark")
+  expect(themeModes).toEqual(["dark"])
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#ffffff\x07"))
+  advanceCurrentClock()
+
+  expect(currentRenderer.themeMode).toBe("light")
+  expect(themeModes).toEqual(["dark", "light"])
+})
+
+test("waitForThemeMode resolves when initial theme mode is set", async () => {
+  const themeModePromise = currentRenderer.waitForThemeMode(500)
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#ffffff\x07"))
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#000000\x07"))
+  advanceCurrentClock()
+
+  await expect(themeModePromise).resolves.toBe("dark")
+})
+
+test("waitForThemeMode resolves immediately when theme mode is already set", async () => {
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#000000\x07"))
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#ffffff\x07"))
+  advanceCurrentClock()
+
+  await expect(currentRenderer.waitForThemeMode()).resolves.toBe("light")
+})
+
+test("waitForThemeMode ignores CSI 997 until OSC-derived mode is available", async () => {
+  let resolvedThemeMode: string | null | undefined
+
+  currentRenderer.waitForThemeMode(500).then((mode) => {
+    resolvedThemeMode = mode
+  })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[?997;2n"))
+  advanceCurrentClock(249)
+  await flushMicrotasks()
+
+  expect(resolvedThemeMode).toBeUndefined()
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]10;#000000\x07"))
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b]11;#ffffff\x07"))
+  advanceCurrentClock(1)
+  await flushMicrotasks()
+
+  expect(resolvedThemeMode).toBe("light")
+})
+
+test("waitForThemeMode returns current theme mode after the default timeout", async () => {
+  let resolvedThemeMode: string | null | undefined
+
+  currentRenderer.waitForThemeMode().then((mode) => {
+    resolvedThemeMode = mode
+  })
+
+  advanceCurrentClock(999)
+  await flushMicrotasks()
+  expect(resolvedThemeMode).toBeUndefined()
+
+  advanceCurrentClock(1)
+  await flushMicrotasks()
+  expect(resolvedThemeMode).toBeNull()
+})
+
+test("waitForThemeMode resolves with current theme mode when renderer is destroyed", async () => {
+  const themeModePromise = currentRenderer.waitForThemeMode(500)
+
+  currentRenderer.destroy()
+
+  await expect(themeModePromise).resolves.toBeNull()
 })
 
 test("pixel resolution response should not trigger keypress", async () => {
@@ -1715,6 +2064,60 @@ test("delayed capability responses should be processed", async () => {
   // Should have user input but not capability
   expect(keypresses).toHaveLength(3)
   expect(keypresses.map((k) => k.name)).toEqual(["a", "b", "c"])
+})
+
+test("delayed explicit-width CPR stays in response path while setup probe is active", async () => {
+  const keypresses: KeyEvent[] = []
+  currentRenderer.keyInput.on("keypress", (event) => {
+    keypresses.push(event)
+  })
+
+  // @ts-expect-error - accessing private helper for test coverage
+  currentRenderer.updateStdinParserProtocolContext({ explicitWidthCprActive: true })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[1;2"))
+  advanceCurrentClock()
+  currentRenderer.stdin.emit("data", Buffer.from("R"))
+  advanceCurrentClock()
+
+  expect(keypresses).toHaveLength(0)
+})
+
+test("delayed DECRPM stays in response path while capability probing is active", async () => {
+  const keypresses: KeyEvent[] = []
+  currentRenderer.keyInput.on("keypress", (event) => {
+    keypresses.push(event)
+  })
+
+  // @ts-expect-error - accessing private helper for test coverage
+  currentRenderer.updateStdinParserProtocolContext({ privateCapabilityRepliesActive: true })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[?1016;2$"))
+  advanceCurrentClock()
+  currentRenderer.stdin.emit("data", Buffer.from("y"))
+  advanceCurrentClock()
+
+  expect(keypresses).toHaveLength(0)
+})
+
+test("delayed pixel resolution response stays in response path while query is active", async () => {
+  const keypresses: KeyEvent[] = []
+  currentRenderer.keyInput.on("keypress", (event) => {
+    keypresses.push(event)
+  })
+
+  // @ts-expect-error - accessing private property for testing
+  currentRenderer.waitingForPixelResolution = true
+  // @ts-expect-error - accessing private helper for test coverage
+  currentRenderer.updateStdinParserProtocolContext({ pixelResolutionQueryActive: true })
+
+  currentRenderer.stdin.emit("data", Buffer.from("\x1b[4;1080;192"))
+  advanceCurrentClock()
+  currentRenderer.stdin.emit("data", Buffer.from("0t"))
+  advanceCurrentClock()
+
+  expect(keypresses).toHaveLength(0)
+  expect(currentRenderer.resolution).toEqual({ width: 1920, height: 1080 })
 })
 
 test("vscode minimal capability response", async () => {
@@ -1920,77 +2323,6 @@ describe("stdin routing", () => {
     }
   })
 
-  test("scroll burst reuses hit-test target within one gesture", async () => {
-    const { renderer, renderOnce, clock } = await createRoutingRenderer()
-    try {
-      const target = new MouseTarget(renderer, {
-        id: "target-scroll-burst-cache",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: renderer.width,
-        height: renderer.height,
-      })
-      renderer.root.add(target)
-      await renderOnce()
-
-      let scrollCount = 0
-      const originalHitTest = renderer.hitTest.bind(renderer)
-      let hitTestCount = 0
-      renderer.hitTest = ((x: number, y: number) => {
-        hitTestCount += 1
-        return originalHitTest(x, y)
-      }) as typeof renderer.hitTest
-
-      target.onMouseScroll = () => {
-        scrollCount += 1
-      }
-
-      renderer.stdin.emit("data", Buffer.from("\x1b[<64;10;5M"))
-      renderer.stdin.emit("data", Buffer.from("\x1b[<64;10;5M"))
-      renderer.stdin.emit("data", Buffer.from("\x1b[<65;10;5M"))
-      advanceClock(clock)
-
-      expect(scrollCount).toBe(3)
-      expect(hitTestCount).toBe(1)
-    } finally {
-      renderer.destroy()
-    }
-  })
-
-  test("scroll burst cache expires after inactivity", async () => {
-    const { renderer, renderOnce, clock } = await createRoutingRenderer()
-    try {
-      const target = new MouseTarget(renderer, {
-        id: "target-scroll-burst-expiry",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: renderer.width,
-        height: renderer.height,
-      })
-      renderer.root.add(target)
-      await renderOnce()
-
-      const originalHitTest = renderer.hitTest.bind(renderer)
-      let hitTestCount = 0
-      renderer.hitTest = ((x: number, y: number) => {
-        hitTestCount += 1
-        return originalHitTest(x, y)
-      }) as typeof renderer.hitTest
-
-      renderer.stdin.emit("data", Buffer.from("\x1b[<64;10;5M"))
-      advanceClock(clock)
-      advanceClock(clock, 100)
-      renderer.stdin.emit("data", Buffer.from("\x1b[<64;10;5M"))
-      advanceClock(clock)
-
-      expect(hitTestCount).toBe(2)
-    } finally {
-      renderer.destroy()
-    }
-  })
-
   test("mouse state resets when mouse mode toggles", async () => {
     const { renderer, renderOnce, clock } = await createRoutingRenderer()
     try {
@@ -2083,7 +2415,6 @@ describe("stdin routing", () => {
 
       renderer.suspend()
       renderer.resume()
-      await new Promise((resolve) => setImmediate(resolve))
 
       renderer.stdin.emit("data", Buffer.from("x"))
       advanceClock(clock)

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Core exports without 3D dependencies
 export * from "./Renderable.js"
 export * from "./types.js"
@@ -9,7 +8,9 @@ export * from "./text-buffer-view.js"
 export * from "./edit-buffer.js"
 export * from "./editor-view.js"
 export * from "./syntax-style.js"
+export * from "./post/effects.js"
 export * from "./post/filters.js"
+export * from "./post/matrices.js"
 export * from "./animation/Timeline.js"
 export * from "./lib/index.js"
 export * from "./renderer.js"

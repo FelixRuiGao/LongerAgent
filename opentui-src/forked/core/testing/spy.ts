@@ -1,4 +1,3 @@
-// @ts-nocheck
 export function createSpy() {
   const calls: any[][] = []
   const spy = (...args: any[]) => {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 export * from "./border.js"
 export * from "./KeyHandler.js"
 export * from "./ascii.font.js"

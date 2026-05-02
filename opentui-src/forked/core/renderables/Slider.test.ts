@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { SliderRenderable, type SliderOptions } from "./Slider.js"
 import { createTestRenderer, type MockMouse, type TestRenderer } from "../testing/test-renderer.js"

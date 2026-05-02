@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { RenderableOptions, Renderable } from "../Renderable.js"
 import type { PositionTypeString, OverflowString } from "./yoga.options.js"
 

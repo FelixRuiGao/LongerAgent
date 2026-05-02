@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { type RenderContext } from "../types.js"
 import { StyledText } from "../lib/styled-text.js"
 import { SyntaxStyle } from "../syntax-style.js"
@@ -99,6 +98,7 @@ export class CodeRenderable extends TextBufferRenderable {
       this._highlightSnapshotId++
 
       if (this._streaming && !this._drawUnstyledText && this._filetype) {
+        this.requestRender()
         return
       }
 

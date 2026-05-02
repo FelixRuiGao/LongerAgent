@@ -1,10 +1,10 @@
-// @ts-nocheck
 import { EventEmitter } from "events"
 import { Console } from "node:console"
 import fs from "node:fs"
 import path from "node:path"
 import util from "node:util"
-import type { CliRenderer, ColorInput, MouseEvent } from "./index.js"
+import type { CliRenderer, MouseEvent } from "./renderer.js"
+import type { ColorInput } from "./lib/RGBA.js"
 import { OptimizedBuffer } from "./buffer.js"
 import { type Clock, SystemClock } from "./lib/clock.js"
 import { Capture, CapturedWritableStream } from "./lib/output.capture.js"
@@ -15,13 +15,14 @@ import type { KeyEvent } from "./lib/KeyHandler.js"
 import {
   type KeyBinding as BaseKeyBinding,
   mergeKeyBindings,
-  getKeyBindingKey,
   buildKeyBindingsMap,
-  type KeyAliasMap,
+  getKeyBindingAction,
   defaultKeyAliases,
   mergeKeyAliases,
   keyBindingToString,
-} from "./lib/keymapping.js"
+} from "./lib/keybinding.internal.js"
+
+type KeyAliasMap = Record<string, string>
 
 interface CallerInfo {
   functionName: string
@@ -167,8 +168,6 @@ class TerminalConsoleCache extends EventEmitter {
     if (this._originalConsole) {
       global.console = this._originalConsole
     }
-
-    this.setupConsoleCapture()
   }
 
   public addLogEntry(level: LogLevel, ...args: any[]) {
@@ -518,16 +517,7 @@ export class TerminalConsole extends EventEmitter {
       return
     }
 
-    const bindingKey = getKeyBindingKey({
-      name: event.name,
-      ctrl: event.ctrl,
-      shift: event.shift,
-      meta: event.meta,
-      super: event.super,
-      action: "scroll-up" as ConsoleAction,
-    })
-
-    const action = this._keyBindingsMap.get(bindingKey)
+    const action = getKeyBindingAction(this._keyBindingsMap, event)
 
     if (action) {
       const handler = this._actionHandlers.get(action)

@@ -29,7 +29,7 @@ const DEFAULT_TIMEOUT_MS = 50;
 let parserInit: Promise<Parser> | null = null;
 
 function resolveWebTreeSitterWasmPath(): string {
-  return join(dirname(require.resolve("web-tree-sitter")), "web-tree-sitter.wasm");
+  return require.resolve("web-tree-sitter/tree-sitter.wasm");
 }
 
 function resolveTreeSitterBashWasmPath(): string {

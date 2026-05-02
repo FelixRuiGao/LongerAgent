@@ -1,5 +1,4 @@
-// @ts-nocheck
-import { singleton } from "./singleton.ts"
+import { singleton } from "./singleton.js"
 
 /**
  * Environment variable registry

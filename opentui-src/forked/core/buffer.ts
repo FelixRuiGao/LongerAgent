@@ -1,19 +1,18 @@
-// @ts-nocheck
-import type { TextBuffer } from "./text-buffer.js"
 import { RGBA } from "./lib/index.js"
 import { resolveRenderLib, type RenderLib } from "./zig.js"
 import { type Pointer, toArrayBuffer, ptr } from "bun:ffi"
 import { type BorderStyle, type BorderSides, BorderCharArrays, BorderChars, parseBorderStyle, getBorderSides } from "./lib/index.js"
-import { type WidthMethod, type CapturedSpan, type CapturedLine } from "./types.js"
+import { TargetChannel, type WidthMethod, type CapturedSpan, type CapturedLine } from "./types.js"
 import type { TextBufferView } from "./text-buffer-view.js"
 import type { EditorView } from "./editor-view.js"
 
 // Pack drawing options into a single u32
-// bits 0-3: borderSides, bit 4: shouldFill, bits 5-6: titleAlignment
+// bits 0-3: borderSides, bit 4: shouldFill, bits 5-6: titleAlignment, bits 7-8: bottomTitleAlignment
 function packDrawOptions(
   border: boolean | BorderSides[],
   shouldFill: boolean,
   titleAlignment: "left" | "center" | "right",
+  bottomTitleAlignment: "left" | "center" | "right",
 ): number {
   let packed = 0
 
@@ -36,7 +35,10 @@ function packDrawOptions(
     right: 2,
   }
   const alignment = alignmentMap[titleAlignment]
+  const bottomAlignment = alignmentMap[bottomTitleAlignment]
+
   packed |= alignment << 5
+  packed |= bottomAlignment << 7
 
   return packed
 }
@@ -50,12 +52,10 @@ export class OptimizedBuffer {
   private _height: number
   private _widthMethod: WidthMethod
   public respectAlpha: boolean = false
-  /** JS-side scissor rect stack for cursor clipping queries. */
-  private _scissorStack: Array<{ x: number; y: number; w: number; h: number }> = []
   private _rawBuffers: {
     char: Uint32Array
-    fg: Float32Array
-    bg: Float32Array
+    fg: Uint16Array
+    bg: Uint16Array
     attributes: Uint32Array
   } | null = null
   private _destroyed: boolean = false
@@ -71,29 +71,34 @@ export class OptimizedBuffer {
     if (this._destroyed) throw new Error(`Buffer ${this.id} is destroyed`)
   }
 
+  private ensureRawBufferViews(): void {
+    if (this._rawBuffers !== null) {
+      return
+    }
+
+    const size = this._width * this._height
+    const charPtr = this.lib.bufferGetCharPtr(this.bufferPtr)
+    const fgPtr = this.lib.bufferGetFgPtr(this.bufferPtr)
+    const bgPtr = this.lib.bufferGetBgPtr(this.bufferPtr)
+    const attributesPtr = this.lib.bufferGetAttributesPtr(this.bufferPtr)
+
+    this._rawBuffers = {
+      char: new Uint32Array(toArrayBuffer(charPtr, 0, size * 4)),
+      fg: new Uint16Array(toArrayBuffer(fgPtr, 0, size * 4 * 2)),
+      bg: new Uint16Array(toArrayBuffer(bgPtr, 0, size * 4 * 2)),
+      attributes: new Uint32Array(toArrayBuffer(attributesPtr, 0, size * 4)),
+    }
+  }
+
   get buffers(): {
     char: Uint32Array
-    fg: Float32Array
-    bg: Float32Array
+    fg: Uint16Array
+    bg: Uint16Array
     attributes: Uint32Array
   } {
     this.guard()
-    if (this._rawBuffers === null) {
-      const size = this._width * this._height
-      const charPtr = this.lib.bufferGetCharPtr(this.bufferPtr)
-      const fgPtr = this.lib.bufferGetFgPtr(this.bufferPtr)
-      const bgPtr = this.lib.bufferGetBgPtr(this.bufferPtr)
-      const attributesPtr = this.lib.bufferGetAttributesPtr(this.bufferPtr)
-
-      this._rawBuffers = {
-        char: new Uint32Array(toArrayBuffer(charPtr, 0, size * 4)),
-        fg: new Float32Array(toArrayBuffer(fgPtr, 0, size * 4 * 4)),
-        bg: new Float32Array(toArrayBuffer(bgPtr, 0, size * 4 * 4)),
-        attributes: new Uint32Array(toArrayBuffer(attributesPtr, 0, size * 4)),
-      }
-    }
-
-    return this._rawBuffers
+    this.ensureRawBufferViews()
+    return this._rawBuffers!
   }
 
   constructor(
@@ -177,8 +182,8 @@ export class OptimizedBuffer {
       for (let x = 0; x < this._width; x++) {
         const i = y * this._width + x
         const cp = char[i]
-        const cellFg = RGBA.fromValues(fg[i * 4], fg[i * 4 + 1], fg[i * 4 + 2], fg[i * 4 + 3])
-        const cellBg = RGBA.fromValues(bg[i * 4], bg[i * 4 + 1], bg[i * 4 + 2], bg[i * 4 + 3])
+        const cellFg = RGBA.fromArray(fg.slice(i * 4, i * 4 + 4))
+        const cellBg = RGBA.fromArray(bg.slice(i * 4, i * 4 + 4))
         const cellAttrs = attributes[i] & 0xff
 
         // Continuation cells are placeholders for wide characters (emojis, CJK)
@@ -289,6 +294,30 @@ export class OptimizedBuffer {
 
   public fillRect(x: number, y: number, width: number, height: number, bg: RGBA): void {
     this.lib.bufferFillRect(this.bufferPtr, x, y, width, height, bg)
+  }
+
+  public colorMatrix(
+    matrix: Float32Array,
+    cellMask: Float32Array,
+    strength: number = 1.0,
+    target: TargetChannel = TargetChannel.Both,
+  ): void {
+    this.guard()
+    if (matrix.length !== 16) throw new RangeError(`colorMatrix matrix must have length 16, got ${matrix.length}`)
+    const cellMaskCount = Math.floor(cellMask.length / 3)
+    this.lib.bufferColorMatrix(this.bufferPtr, ptr(matrix), ptr(cellMask), cellMaskCount, strength, target)
+  }
+
+  public colorMatrixUniform(
+    matrix: Float32Array,
+    strength: number = 1.0,
+    target: TargetChannel = TargetChannel.Both,
+  ): void {
+    this.guard()
+    if (matrix.length !== 16)
+      throw new RangeError(`colorMatrixUniform matrix must have length 16, got ${matrix.length}`)
+    if (strength === 0.0) return
+    this.lib.bufferColorMatrixUniform(this.bufferPtr, ptr(matrix), strength, target)
   }
 
   public drawFrameBuffer(
@@ -418,8 +447,10 @@ export class OptimizedBuffer {
     backgroundColor: RGBA
     shouldFill?: boolean
     title?: string
-    titleAlignment?: "left" | "center" | "right"
     titleColor?: RGBA
+    titleAlignment?: "left" | "center" | "right"
+    bottomTitle?: string
+    bottomTitleAlignment?: "left" | "center" | "right"
     dividerRatio?: number
     dividerTitle?: string
     dividerTitleColor?: RGBA
@@ -428,20 +459,21 @@ export class OptimizedBuffer {
     const style = parseBorderStyle(options.borderStyle, "single")
     const borderChars: Uint32Array = options.customBorderChars ?? BorderCharArrays[style]
 
-    const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left")
+    const packedOptions = packDrawOptions(
+      options.border,
+      options.shouldFill ?? false,
+      options.titleAlignment || "left",
+      options.bottomTitleAlignment || "left",
+    )
 
     // Determine rendering strategy for the left title
     const hasDivider = options.dividerRatio != null && options.dividerRatio > 0 && options.dividerRatio < 1
-    // Only use JS for the left title when a custom titleColor is explicitly set.
-    // Otherwise let Zig handle it natively (it correctly skips ─ in the title area).
     const jsDrawsLeftTitle = !!options.titleColor
     let leftTitleText = options.title ?? null
 
     if (leftTitleText && hasDivider) {
-      // Truncate left title so it doesn't bleed past the divider.
-      // Reserve 2 extra chars for the spaces we wrap around the title.
       const dividerCol = Math.round(options.width * options.dividerRatio!)
-      const leftPadding = 2 // matches Zig's 2-cell padding before and after title
+      const leftPadding = 2
       const maxTitleLen = dividerCol - leftPadding * 2 - 2
       if (maxTitleLen < 1) {
         leftTitleText = null
@@ -449,9 +481,7 @@ export class OptimizedBuffer {
         leftTitleText = leftTitleText.slice(0, Math.max(1, maxTitleLen - 1)) + "…"
       }
     }
-
-    // Wrap with spaces for visual separation from ── border segments
-    if (leftTitleText) {
+    if (jsDrawsLeftTitle && leftTitleText) {
       leftTitleText = ` ${leftTitleText} `
     }
 
@@ -465,9 +495,8 @@ export class OptimizedBuffer {
       packedOptions,
       options.borderColor,
       options.backgroundColor,
-      // When JS draws the left title (custom color), tell Zig to skip title.
-      // Otherwise pass the (possibly truncated) title to Zig for native rendering.
       jsDrawsLeftTitle ? null : leftTitleText,
+      options.bottomTitle ?? null,
     )
 
     // Draw left title from JS only when a custom titleColor is set
@@ -477,12 +506,8 @@ export class OptimizedBuffer {
         const titlePadding = 2
         const titleStartX = options.x + titlePadding
         const titleFg = options.titleColor!
-        // Use setCell (not setCellWithAlphaBlending) to directly overwrite ─ border chars.
-        // blendCells preserves underlying chars when bg is transparent.
         for (let i = 0; i < leftTitleText.length; i++) {
-          this.setCell(
-            titleStartX + i, options.y, leftTitleText[i], titleFg, options.backgroundColor,
-          )
+          this.setCell(titleStartX + i, options.y, leftTitleText[i], titleFg, options.backgroundColor)
         }
       }
     }
@@ -495,80 +520,66 @@ export class OptimizedBuffer {
       const fg = options.borderColor
       const bg = options.backgroundColor
 
-      // Divider x position: offset from box left edge
       const dividerX = options.x + Math.round(options.width * ratio)
 
-      // Only draw if divider falls within the box (excluding the outer border columns)
       const leftEdge = options.x + (sides.left ? 1 : 0)
       const rightEdge = options.x + options.width - 1 - (sides.right ? 1 : 0)
       if (dividerX < leftEdge || dividerX > rightEdge) return
 
-      // Top junction: topT (┬) if there is a top border
       if (sides.top) {
         this.setCellWithAlphaBlending(dividerX, options.y, chars.topT, fg, bg)
       }
 
-      // Vertical line through the interior
       const innerTop = options.y + (sides.top ? 1 : 0)
       const innerBottom = options.y + options.height - 1 - (sides.bottom ? 1 : 0)
       for (let dy = innerTop; dy <= innerBottom; dy++) {
         this.setCellWithAlphaBlending(dividerX, dy, chars.vertical, fg, bg)
       }
 
-      // Bottom junction: bottomT (┴) if there is a bottom border
       if (sides.bottom) {
         this.setCellWithAlphaBlending(dividerX, options.y + options.height - 1, chars.bottomT, fg, bg)
       }
 
-      // Draw divider title on the top border, starting 2 cells after dividerX
       if (options.dividerTitle && sides.top && options.dividerTitle.length > 0) {
         const titlePadding = 2
         const titleStartX = dividerX + titlePadding
-        // Available space: from titleStartX to right border (exclusive), minus padding on the right.
-        // Reserve 2 extra chars for the spaces we wrap around the title.
         const rightBorderX = options.x + options.width - 1
         const availableWidth = rightBorderX - titleStartX - titlePadding - 2
         if (availableWidth >= 1) {
           let titleText = options.dividerTitle.length <= availableWidth
             ? options.dividerTitle
             : options.dividerTitle.slice(0, Math.max(1, availableWidth - 1)) + "…"
-          // Wrap with spaces for visual separation from ── border segments
           titleText = ` ${titleText} `
           const dividerTitleFg = options.dividerTitleColor ?? fg
-          // Use setCell (not setCellWithAlphaBlending) to directly overwrite ─ border chars.
-          // blendCells preserves underlying chars when bg is transparent.
           for (let i = 0; i < titleText.length; i++) {
-            this.setCell(
-              titleStartX + i, options.y, titleText[i], dividerTitleFg, bg,
-            )
+            this.setCell(titleStartX + i, options.y, titleText[i], dividerTitleFg, bg)
           }
         }
       }
     }
   }
 
+  /** JS-side scissor rect stack for cursor clipping queries. */
+  private _scissorStack: Array<{ x: number; y: number; w: number; h: number }> = []
+
   public pushScissorRect(x: number, y: number, width: number, height: number): void {
     this.guard()
-    this._scissorStack.push({ x, y, w: width, h: height })
     this.lib.bufferPushScissorRect(this.bufferPtr, x, y, width, height)
+    this._scissorStack.push({ x, y, w: width, h: height })
   }
 
   public popScissorRect(): void {
     this.guard()
-    this._scissorStack.pop()
     this.lib.bufferPopScissorRect(this.bufferPtr)
+    this._scissorStack.pop()
   }
 
   public clearScissorRects(): void {
     this.guard()
-    this._scissorStack.length = 0
     this.lib.bufferClearScissorRects(this.bufferPtr)
+    this._scissorStack.length = 0
   }
 
-  /**
-   * Check whether a 0-based coordinate is within ALL active scissor rects.
-   * Used by cursor rendering to hide the cursor when it's clipped by a scrollbox viewport.
-   */
   public isWithinScissorRect(x: number, y: number): boolean {
     for (const rect of this._scissorStack) {
       if (x < rect.x || x >= rect.x + rect.w || y < rect.y || y >= rect.y + rect.h) {

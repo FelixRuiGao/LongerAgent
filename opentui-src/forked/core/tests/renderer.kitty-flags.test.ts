@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect } from "bun:test"
 import { buildKittyKeyboardFlags } from "../renderer.js"
 

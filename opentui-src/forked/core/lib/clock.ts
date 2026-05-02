@@ -1,4 +1,3 @@
-// @ts-nocheck
 export type TimerHandle = ReturnType<typeof globalThis.setTimeout> | number
 
 export interface Clock {
@@ -11,7 +10,11 @@ export interface Clock {
 
 export class SystemClock implements Clock {
   public now(): number {
-    return Date.now()
+    if (!globalThis.performance || typeof globalThis.performance.now !== "function") {
+      throw new Error("SystemClock requires globalThis.performance.now()")
+    }
+
+    return globalThis.performance.now()
   }
 
   public setTimeout(fn: () => void, delayMs: number): TimerHandle {

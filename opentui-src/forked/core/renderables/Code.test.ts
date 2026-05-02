@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { CodeRenderable } from "./Code.js"
 import { SyntaxStyle } from "../syntax-style.js"
@@ -1961,7 +1960,7 @@ test("CodeRenderable - streaming with conceal and drawUnstyledText=false should 
   }
 
   // Use TestRecorder to capture frames
-  const { TestRecorder } = await import("../testing/test-recorder")
+  const { TestRecorder } = await import("../testing/test-recorder.js")
   const recorder = new TestRecorder(currentRenderer)
 
   // Start renderer and recorder

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { basename, join } from "node:path"
 
 export function isBunfsPath(path: string): boolean {

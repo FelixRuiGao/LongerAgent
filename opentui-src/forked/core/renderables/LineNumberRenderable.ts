@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Renderable, type RenderableOptions } from "../Renderable.js"
 import { OptimizedBuffer } from "../buffer.js"
 import type { RenderContext, LineInfoProvider } from "../types.js"
@@ -30,6 +29,9 @@ export interface LineNumberOptions extends RenderableOptions<LineNumberRenderabl
   lineNumbers?: Map<number, number>
   showLineNumbers?: boolean
 }
+
+const DEFAULT_GUTTER_FG = "#888888"
+const DEFAULT_GUTTER_BG = "transparent"
 
 class GutterRenderable extends Renderable {
   private target: Renderable & LineInfoProvider
@@ -186,6 +188,28 @@ class GutterRenderable extends Renderable {
     this._lineColorsGutter = lineColorsGutter
     this._lineColorsContent = lineColorsContent
     this.requestRender()
+  }
+
+  public get fg(): RGBA {
+    return this._fg
+  }
+
+  public setFg(fg: RGBA): void {
+    if (this._fg !== fg) {
+      this._fg = fg
+      this.requestRender()
+    }
+  }
+
+  public get bg(): RGBA {
+    return this._bg
+  }
+
+  public setBg(bg: RGBA): void {
+    if (this._bg !== bg) {
+      this._bg = bg
+      this.requestRender()
+    }
   }
 
   public getLineColors(): { gutter: Map<number, RGBA>; content: Map<number, RGBA> } {
@@ -372,8 +396,8 @@ export class LineNumberRenderable extends Renderable {
       height: "auto",
     })
 
-    this._fg = parseColor(options.fg ?? "#888888")
-    this._bg = parseColor(options.bg ?? "transparent")
+    this._fg = parseColor(options.fg ?? DEFAULT_GUTTER_FG)
+    this._bg = parseColor(options.bg ?? DEFAULT_GUTTER_BG)
     this._minWidth = options.minWidth ?? 3
     this._paddingRight = options.paddingRight ?? 1
     this._lineNumberOffset = options.lineNumberOffset ?? 0
@@ -537,6 +561,30 @@ export class LineNumberRenderable extends Renderable {
 
   public get showLineNumbers(): boolean {
     return this.gutter?.visible ?? false
+  }
+
+  public get fg(): RGBA {
+    return this._fg
+  }
+
+  public set fg(value: string | RGBA | undefined) {
+    const parsed = parseColor(value ?? DEFAULT_GUTTER_FG)
+    if (this._fg !== parsed) {
+      this._fg = parsed
+      this.gutter?.setFg(parsed)
+    }
+  }
+
+  public get bg(): RGBA {
+    return this._bg
+  }
+
+  public set bg(value: string | RGBA | undefined) {
+    const parsed = parseColor(value ?? DEFAULT_GUTTER_BG)
+    if (this._bg !== parsed) {
+      this._bg = parsed
+      this.gutter?.setBg(parsed)
+    }
   }
 
   public setLineColor(line: number, color: string | RGBA | LineColorConfig): void {

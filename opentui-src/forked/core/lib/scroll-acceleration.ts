@@ -1,4 +1,3 @@
-// @ts-nocheck
 export interface ScrollAcceleration {
   tick(now?: number): number
   reset(): void

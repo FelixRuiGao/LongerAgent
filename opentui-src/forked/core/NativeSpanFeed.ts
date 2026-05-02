@@ -1,10 +1,10 @@
-// @ts-nocheck
 import { toArrayBuffer, type Pointer } from "bun:ffi"
-import { resolveRenderLib } from "./zig"
-import { SpanInfoStruct } from "./zig-structs"
-import type { GrowthPolicy, NativeSpanFeedOptions, NativeSpanFeedStats } from "./zig-structs"
+import { toPointer as toPlatformPointer } from "./platform/ffi.js"
+import { resolveRenderLib } from "./zig.js"
+import { SpanInfoStruct } from "./zig-structs.js"
+import type { GrowthPolicy, NativeSpanFeedOptions, NativeSpanFeedStats } from "./zig-structs.js"
 
-export type { GrowthPolicy, NativeSpanFeedOptions, NativeSpanFeedStats } from "./zig-structs"
+export type { GrowthPolicy, NativeSpanFeedOptions, NativeSpanFeedStats } from "./zig-structs.js"
 
 const enum EventId {
   ChunkAdded = 2,
@@ -14,15 +14,8 @@ const enum EventId {
   StateBuffer = 8,
 }
 
-function toPointer(value: number | bigint): Pointer {
-  if (typeof value === "bigint") {
-    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new Error("Pointer exceeds safe integer range")
-    }
-    return Number(value) as Pointer
-  }
-  return value as Pointer
-}
+// TODO: Remove this temporary shim once current Bun FFI call sites use the platform backend.
+const toPointer = toPlatformPointer as unknown as (value: number | bigint) => Pointer
 
 function toNumber(value: number | bigint): number {
   return typeof value === "bigint" ? Number(value) : value

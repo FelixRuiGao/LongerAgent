@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { envRegistry, registerEnvVar, env, clearEnvCache } from "./env.ts"
 

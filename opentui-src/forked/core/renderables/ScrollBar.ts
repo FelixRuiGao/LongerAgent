@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { OptimizedBuffer } from "../buffer.js"
 import { parseColor, RGBA, type ColorInput } from "../lib/index.js"
 import type { KeyEvent } from "../lib/KeyHandler.js"
@@ -134,7 +133,7 @@ export class ScrollBarRenderable extends Renderable {
       },
       ...(orientation === "vertical"
         ? {
-            width: 1,
+            width: Math.max(1, Math.min(2, this.width)),
             height: "100%",
             marginLeft: "auto",
           }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
@@ -129,7 +128,7 @@ export function writeFermiOpenTuiDiag(event: string, payload: Record<string, unk
     ts: new Date().toISOString(),
     pid: process.pid,
     event,
-    ...sanitize(payload),
+    ...(sanitize(payload) as Record<string, unknown>),
   }
   const line = `${JSON.stringify(record)}\n`
 

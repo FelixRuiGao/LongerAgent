@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ColorInput } from "./RGBA.js"
 
 export interface BorderCharacters {
@@ -112,6 +111,8 @@ export interface BoxDrawOptions {
   shouldFill?: boolean
   title?: string
   titleAlignment?: "left" | "center" | "right"
+  bottomTitle?: string
+  bottomTitleAlignment?: "left" | "center" | "right"
   /** Custom color for the left title text (defaults to borderColor) */
   titleColor?: ColorInput
   /** Vertical divider position as a ratio (0–1) of box width */

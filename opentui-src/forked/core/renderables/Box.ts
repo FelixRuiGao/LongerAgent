@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Edge, Gutter } from "yoga-layout"
 import { type RenderableOptions, Renderable } from "../Renderable.js"
 import type { OptimizedBuffer } from "../buffer.js"
@@ -24,11 +23,8 @@ export interface BoxOptions<TRenderable extends Renderable = BoxRenderable> exte
   shouldFill?: boolean
   title?: string
   titleAlignment?: "left" | "center" | "right"
-  focusedBorderColor?: ColorInput
-  focusable?: boolean
-  gap?: number | `${number}%`
-  rowGap?: number | `${number}%`
-  columnGap?: number | `${number}%`
+  bottomTitle?: string
+  bottomTitleAlignment?: "left" | "center" | "right"
   /** Custom color for the left title text (defaults to borderColor) */
   titleColor?: ColorInput
   /** Vertical divider position as a ratio (0–1) of box width */
@@ -37,6 +33,11 @@ export interface BoxOptions<TRenderable extends Renderable = BoxRenderable> exte
   dividerTitle?: string
   /** Custom color for the divider title text (defaults to borderColor) */
   dividerTitleColor?: ColorInput
+  focusedBorderColor?: ColorInput
+  focusable?: boolean
+  gap?: number | `${number}%`
+  rowGap?: number | `${number}%`
+  columnGap?: number | `${number}%`
 }
 
 function isGapType(value: any): value is number | undefined {
@@ -61,6 +62,8 @@ export class BoxRenderable extends Renderable {
   public shouldFill: boolean
   protected _title?: string
   protected _titleAlignment: "left" | "center" | "right"
+  protected _bottomTitle?: string
+  protected _bottomTitleAlignment: "left" | "center" | "right"
   protected _titleColor?: RGBA
   protected _dividerRatio?: number
   protected _dividerTitle?: string
@@ -73,6 +76,7 @@ export class BoxRenderable extends Renderable {
     borderColor: "#FFFFFF",
     shouldFill: true,
     titleAlignment: "left",
+    bottomTitleAlignment: "left",
     focusedBorderColor: "#00AAFF",
   } satisfies Partial<BoxOptions>
 
@@ -100,6 +104,8 @@ export class BoxRenderable extends Renderable {
     this.shouldFill = options.shouldFill ?? this._defaultOptions.shouldFill
     this._title = options.title
     this._titleAlignment = options.titleAlignment || this._defaultOptions.titleAlignment
+    this._bottomTitle = options.bottomTitle
+    this._bottomTitleAlignment = options.bottomTitleAlignment || this._defaultOptions.bottomTitleAlignment
     this._titleColor = options.titleColor ? parseColor(options.titleColor) : undefined
     this._dividerRatio = options.dividerRatio
     this._dividerTitle = options.dividerTitle
@@ -225,6 +231,28 @@ export class BoxRenderable extends Renderable {
     }
   }
 
+  public get bottomTitle(): string | undefined {
+    return this._bottomTitle
+  }
+
+  public set bottomTitle(value: string | undefined) {
+    if (this._bottomTitle !== value) {
+      this._bottomTitle = value
+      this.requestRender()
+    }
+  }
+
+  public get bottomTitleAlignment(): "left" | "center" | "right" {
+    return this._bottomTitleAlignment
+  }
+
+  public set bottomTitleAlignment(value: "left" | "center" | "right") {
+    if (this._bottomTitleAlignment !== value) {
+      this._bottomTitleAlignment = value
+      this.requestRender()
+    }
+  }
+
   public get titleColor(): RGBA | undefined {
     return this._titleColor
   }
@@ -259,7 +287,7 @@ export class BoxRenderable extends Renderable {
     }
   }
 
-  public get dividerTitleColor(): RGBA | undefined {
+  public get dividerTitleColor(): RGBA | string | undefined {
     return this._dividerTitleColor
   }
 
@@ -272,11 +300,22 @@ export class BoxRenderable extends Renderable {
   }
 
   protected renderSelf(buffer: OptimizedBuffer): void {
-    const currentBorderColor = this._focused ? this._focusedBorderColor : this._borderColor
+    const hasBorder = this.borderSides.top || this.borderSides.right || this.borderSides.bottom || this.borderSides.left
+    const hasVisibleFill = this.shouldFill && this._backgroundColor.a > 0
+    // Many boxes are used only for layout. Skip drawBox entirely when a box
+    // would not draw pixels so wrapper nodes do not pay the FFI/native cost.
+    if (!hasBorder && !hasVisibleFill) {
+      return
+    }
+
+    const hasFocusWithin = this._focusable && (this._focused || this._hasFocusedDescendant)
+    const currentBorderColor = hasFocusWithin ? this._focusedBorderColor : this._borderColor
+    const screenX = this._screenX
+    const screenY = this._screenY
 
     buffer.drawBox({
-      x: this.x,
-      y: this.y,
+      x: screenX,
+      y: screenY,
       width: this.width,
       height: this.height,
       borderStyle: this._borderStyle,
@@ -287,6 +326,8 @@ export class BoxRenderable extends Renderable {
       shouldFill: this.shouldFill,
       title: this._title,
       titleAlignment: this._titleAlignment,
+      bottomTitle: this._bottomTitle,
+      bottomTitleAlignment: this._bottomTitleAlignment,
       titleColor: this._titleColor,
       dividerRatio: this._dividerRatio,
       dividerTitle: this._dividerTitle,

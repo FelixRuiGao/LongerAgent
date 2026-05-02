@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { EventEmitter } from "events"
 import { type KeyEventType, type ParsedKey } from "./parse.keypress.js"
 import type { PasteMetadata } from "./paste.js"
@@ -63,7 +62,7 @@ export class KeyEvent implements ParsedKey {
 }
 
 export class PasteEvent {
-  type: "paste" = "paste"
+  type = "paste" as const
   bytes: Uint8Array
   metadata?: PasteMetadata
   private _defaultPrevented: boolean = false

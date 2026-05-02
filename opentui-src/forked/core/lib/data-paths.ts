@@ -1,4 +1,3 @@
-// @ts-nocheck
 import os from "os"
 import path from "path"
 import { EventEmitter } from "events"

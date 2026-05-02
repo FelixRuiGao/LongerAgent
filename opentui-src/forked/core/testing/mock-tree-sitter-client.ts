@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { TreeSitterClient } from "../lib/tree-sitter/index.js"
 import type { SimpleHighlight } from "../lib/tree-sitter/types.js"
 

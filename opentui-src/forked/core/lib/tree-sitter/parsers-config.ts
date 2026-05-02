@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * This file contains the configuration for the defaulttree-sitter parsers.
  * It is used by ./assets/update.ts to generate the default-parsers.ts file.
@@ -8,6 +7,7 @@ export default {
   parsers: [
     {
       filetype: "javascript",
+      aliases: ["javascriptreact"],
       wasm: "https://github.com/tree-sitter/tree-sitter-javascript/releases/download/v0.25.0/tree-sitter-javascript.wasm",
       queries: {
         highlights: [
@@ -17,6 +17,7 @@ export default {
     },
     {
       filetype: "typescript",
+      aliases: ["typescriptreact"],
       wasm: "https://github.com/tree-sitter/tree-sitter-typescript/releases/download/v0.23.2/tree-sitter-typescript.wasm",
       queries: {
         highlights: [
@@ -45,8 +46,12 @@ export default {
         infoStringMap: {
           javascript: "javascript",
           js: "javascript",
+          jsx: "javascriptreact",
+          javascriptreact: "javascriptreact",
           typescript: "typescript",
           ts: "typescript",
+          tsx: "typescriptreact",
+          typescriptreact: "typescriptreact",
           markdown: "markdown",
           md: "markdown",
         },

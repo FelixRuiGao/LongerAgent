@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, test, expect } from "bun:test"
 import { createMockKeys, KeyCodes } from "./mock-keys.js"
 import { PassThrough } from "stream"
@@ -381,6 +380,28 @@ describe("mock-keys", () => {
     const mockKeys = createMockKeys(mockRenderer as any)
 
     mockKeys.pressTab({ shift: true })
+
+    expect(mockRenderer.getEmittedData()).toBe("\x1b[Z")
+  })
+
+  test("pressTab with shift modifier parses as shift+tab", async () => {
+    const { parseKeypress } = await import("../lib/parse.keypress")
+    const mockRenderer = new MockRenderer()
+    const mockKeys = createMockKeys(mockRenderer as any)
+
+    mockKeys.pressTab({ shift: true })
+
+    const result = parseKeypress(mockRenderer.getEmittedData())
+    expect(result).not.toBeNull()
+    expect(result?.name).toBe("tab")
+    expect(result?.shift).toBe(true)
+  })
+
+  test("pressTab without modifiers still sends raw tab", () => {
+    const mockRenderer = new MockRenderer()
+    const mockKeys = createMockKeys(mockRenderer as any)
+
+    mockKeys.pressTab()
 
     expect(mockRenderer.getEmittedData()).toBe("\t")
   })

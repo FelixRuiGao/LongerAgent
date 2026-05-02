@@ -1,4 +1,3 @@
-// @ts-nocheck
 const singletonCacheSymbol = Symbol.for("@opentui/core/singleton")
 
 /**

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect } from "bun:test"
 import { parseKeypress, type ParseKeypressOptions } from "./parse.keypress.js"
 

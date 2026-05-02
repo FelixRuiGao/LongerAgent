@@ -4,7 +4,7 @@
   "main": "index.ts",
   "types": "index.ts",
   "type": "module",
-  "version": "0.1.88",
+  "version": "0.2.1",
   "description": "Local Fermi fork of OpenTUI core",
   "license": "MIT",
   "exports": {
@@ -12,11 +12,6 @@
       "import": "./index.ts",
       "require": "./index.ts",
       "types": "./index.ts"
-    },
-    "./3d": {
-      "import": "./3d.ts",
-      "require": "./3d.ts",
-      "types": "./3d.ts"
     },
     "./testing": {
       "import": "./testing.ts",

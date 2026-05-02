@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { PasteEvent } from "../lib/KeyHandler.js"
 import { decodePasteBytes, stripAnsiSequences } from "../lib/paste.js"
 import type { RenderContext } from "../types.js"
@@ -12,8 +11,10 @@ import {
 export type InputAction = TextareaAction
 export type InputKeyBinding = TextareaKeyBinding
 
-export interface InputRenderableOptions
-  extends Omit<TextareaOptions, "height" | "minHeight" | "maxHeight" | "initialValue"> {
+export interface InputRenderableOptions extends Omit<
+  TextareaOptions,
+  "height" | "minHeight" | "maxHeight" | "initialValue"
+> {
   /** Initial text value (newlines are stripped) */
   value?: string
   /** Maximum number of characters allowed */
@@ -80,7 +81,7 @@ export class InputRenderable extends TextareaRenderable {
 
     // Set cursor to end of initial value
     if (initialValue) {
-      this.cursorOffset = Bun.stringWidth(initialValue)
+      this.cursorOffset = initialValue.length
     }
   }
 
@@ -126,7 +127,7 @@ export class InputRenderable extends TextareaRenderable {
     const currentValue = this.plainText
     if (currentValue !== newValue) {
       this.setText(newValue)
-      this.cursorOffset = Bun.stringWidth(newValue)
+      this.cursorOffset = newValue.length
       this.emit(InputRenderableEvents.INPUT, newValue)
     }
   }

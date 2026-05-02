@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect } from "bun:test"
 import { parseKeypress, nonAlphanumericKeys, type ParsedKey, type KeyEventType } from "./parse.keypress.js"
 import { Buffer } from "node:buffer"
@@ -176,6 +175,114 @@ test("parseKeypress - ctrl+letter combinations", () => {
     number: false,
     sequence: "\x1a",
     raw: "\x1a",
+    source: "raw",
+  })
+})
+
+test("parseKeypress - raw ctrl+\\ and related control bytes", () => {
+  expect(parseKeypress("\x1c")).toEqual({
+    eventType: "press",
+    name: "\\",
+    ctrl: true,
+    meta: false,
+    shift: false,
+    option: false,
+    number: false,
+    sequence: "\x1c",
+    raw: "\x1c",
+    source: "raw",
+  })
+
+  expect(parseKeypress("\x1d")).toEqual({
+    eventType: "press",
+    name: "]",
+    ctrl: true,
+    meta: false,
+    shift: false,
+    option: false,
+    number: false,
+    sequence: "\x1d",
+    raw: "\x1d",
+    source: "raw",
+  })
+
+  expect(parseKeypress("\x1e")).toEqual({
+    eventType: "press",
+    name: "^",
+    ctrl: true,
+    meta: false,
+    shift: false,
+    option: false,
+    number: false,
+    sequence: "\x1e",
+    raw: "\x1e",
+    source: "raw",
+  })
+
+  expect(parseKeypress("\x1f")).toEqual({
+    eventType: "press",
+    name: "_",
+    ctrl: true,
+    meta: false,
+    shift: false,
+    option: false,
+    number: false,
+    sequence: "\x1f",
+    raw: "\x1f",
+    source: "raw",
+  })
+})
+
+test("parseKeypress - meta+raw ctrl+\\ and related control bytes", () => {
+  expect(parseKeypress("\x1b\x1c")).toEqual({
+    eventType: "press",
+    name: "\\",
+    ctrl: true,
+    meta: true,
+    shift: false,
+    option: false,
+    number: false,
+    sequence: "\x1b\x1c",
+    raw: "\x1b\x1c",
+    source: "raw",
+  })
+
+  expect(parseKeypress("\x1b\x1d")).toEqual({
+    eventType: "press",
+    name: "]",
+    ctrl: true,
+    meta: true,
+    shift: false,
+    option: false,
+    number: false,
+    sequence: "\x1b\x1d",
+    raw: "\x1b\x1d",
+    source: "raw",
+  })
+
+  expect(parseKeypress("\x1b\x1e")).toEqual({
+    eventType: "press",
+    name: "^",
+    ctrl: true,
+    meta: true,
+    shift: false,
+    option: false,
+    number: false,
+    sequence: "\x1b\x1e",
+    raw: "\x1b\x1e",
+    source: "raw",
+  })
+
+  expect(parseKeypress("\x1b\x1f")).toEqual({
+    eventType: "press",
+    name: "_",
+    ctrl: true,
+    meta: true,
+    shift: false,
+    option: false,
+    number: false,
+    sequence: "\x1b\x1f",
+    raw: "\x1b\x1f",
     source: "raw",
   })
 })

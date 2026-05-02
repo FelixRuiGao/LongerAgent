@@ -1,6 +1,4 @@
-// @ts-nocheck
 import { test, expect, beforeEach, afterEach, describe } from "bun:test"
-import { Buffer } from "node:buffer"
 import { createTestRenderer, type TestRenderer, type MockMouse, MockTreeSitterClient } from "../testing.js"
 import { ScrollBoxRenderable } from "../renderables/ScrollBox.js"
 import { BoxRenderable } from "../renderables/Box.js"
@@ -251,29 +249,6 @@ describe("ScrollBoxRenderable - Mouse interaction", () => {
 
     await mockMouse.scroll(25, 10, "down")
     await renderOnce()
-    expect(scrollBox.scrollTop).toBeGreaterThan(0)
-  })
-
-  test("coalesces rapid wheel bursts until the next render", async () => {
-    const scrollBox = new ScrollBoxRenderable(testRenderer, {
-      width: 50,
-      height: 10,
-      scrollAcceleration: new LinearScrollAccel(),
-    })
-    for (let i = 0; i < 100; i++) {
-      scrollBox.add(new TextRenderable(testRenderer, { content: `Line ${i}` }))
-    }
-    testRenderer.root.add(scrollBox)
-    await renderOnce()
-
-    for (let i = 0; i < 50; i++) {
-      testRenderer.stdin.emit("data", Buffer.from("\x1b[<65;25;10M"))
-    }
-
-    expect(scrollBox.scrollTop).toBe(0)
-
-    await renderOnce()
-
     expect(scrollBox.scrollTop).toBeGreaterThan(0)
   })
 
@@ -1082,7 +1057,7 @@ console.log(processor.reduce((acc, val) => acc + val, 0))`
       code += `Line ${i}\n`
     }
 
-    const { LineNumberRenderable } = await import("../renderables/LineNumberRenderable")
+    const { LineNumberRenderable } = await import("../renderables/LineNumberRenderable.js")
     const codeRenderable = new CodeRenderable(testRenderer, {
       content: code,
       filetype: "javascript",

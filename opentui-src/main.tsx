@@ -73,7 +73,7 @@ export async function launchTui(): Promise<void> {
     useKittyKeyboard: {},
     autoFocus: false,
     openConsoleOnError: false,
-    useConsole: false,
+    consoleMode: "disabled",
     backgroundColor: "transparent",
     useThread,
   });

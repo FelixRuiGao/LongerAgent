@@ -1,4 +1,3 @@
-// @ts-nocheck
 export * from "./ASCIIFont.js"
 export * from "./Box.js"
 export * from "./Code.js"
@@ -6,6 +5,7 @@ export * from "./composition/constructs.js"
 export * from "./composition/VRenderable.js"
 export * from "./composition/vnode.js"
 export * from "./Diff.js"
+export * from "./EditBufferRenderable.js"
 export * from "./FrameBuffer.js"
 export * from "./Input.js"
 export * from "./LineNumberRenderable.js"

@@ -1,6 +1,5 @@
-// @ts-nocheck
 import { test, expect } from "bun:test"
-import { resolveRenderLib } from "../zig"
+import { resolveRenderLib } from "../zig.js"
 
 const lib = resolveRenderLib()
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { dlopen, toArrayBuffer, JSCallback, ptr, type Pointer } from "bun:ffi"
 import { existsSync, realpathSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
@@ -7,6 +6,7 @@ import { EventEmitter } from "events"
 import {
   type CursorStyle,
   type CursorStyleOptions,
+  type TargetChannel,
   type DebugOverlayCorner,
   type WidthMethod,
   type Highlight,
@@ -45,6 +45,7 @@ import type {
   AllocatorStats,
 } from "./zig-structs.js"
 import { isBunfsPath } from "./lib/bunfs.js"
+import { toPointer as toPlatformPointer } from "./platform/ffi.js"
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
 const realCurrentDir = realpathSync(currentDir)
@@ -63,20 +64,21 @@ const localNativeCandidates = [
   join(repoRoot, "opentui-src", "forked", "core", "zig", "lib", `${zigArch}-${zigOs}`, "libopentui.dylib"),
 ]
 
-let targetLibPath = localNativeCandidates.find((candidate) => existsSync(candidate))
+let targetLibPath: string | undefined = localNativeCandidates.find((candidate) => existsSync(candidate))
 
 if (!targetLibPath) {
   const module = await import(`@opentui/core-${process.platform}-${process.arch}/index.ts`)
-  targetLibPath = module.default
+  targetLibPath = module.default as string
+
+  if (isBunfsPath(targetLibPath)) {
+    targetLibPath = targetLibPath.replace("../", "")
+  }
 }
 
-if (isBunfsPath(targetLibPath)) {
-  targetLibPath = targetLibPath.replace("../", "")
-}
-
-if (!existsSync(targetLibPath)) {
+if (!targetLibPath || !existsSync(targetLibPath)) {
   throw new Error(`opentui is not supported on the current platform: ${process.platform}-${process.arch}`)
 }
+const resolvedTargetLibPath: string = targetLibPath
 
 registerEnvVar({
   name: "OTUI_DEBUG_FFI",
@@ -127,23 +129,23 @@ const MOUSE_STYLE_TO_ID = { default: 0, pointer: 1, text: 2, crosshair: 3, move:
 let globalTraceSymbols: Record<string, number[]> | null = null
 let globalFFILogPath: string | null = null
 let exitHandlerRegistered = false
-
-function toPointer(value: number | bigint): Pointer {
-  if (typeof value === "bigint") {
-    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new Error("Pointer exceeds safe integer range")
-    }
-    return Number(value) as Pointer
-  }
-  return value as Pointer
-}
+// TODO: Remove this temporary shim once current Bun FFI call sites use the platform backend.
+const toPointer = toPlatformPointer as unknown as (value: number | bigint) => Pointer
 
 function toNumber(value: number | bigint): number {
   return typeof value === "bigint" ? Number(value) : value
 }
 
+function rgbaPtr(value: RGBA): Pointer {
+  return ptr(value.buffer)
+}
+
+function optionalRgbaPtr(value: RGBA | null | undefined): Pointer | null {
+  return value ? rgbaPtr(value) : null
+}
+
 function getOpenTUILib(libPath?: string) {
-  const resolvedLibPath = libPath || targetLibPath
+  const resolvedLibPath = libPath || resolvedTargetLibPath
 
   const rawSymbols = dlopen(resolvedLibPath, {
     // Logging
@@ -173,12 +175,32 @@ function getOpenTUILib(libPath?: string) {
       args: ["ptr", "bool"],
       returns: "void",
     },
+    setClearOnShutdown: {
+      args: ["ptr", "bool"],
+      returns: "void",
+    },
     setBackgroundColor: {
       args: ["ptr", "ptr"],
       returns: "void",
     },
     setRenderOffset: {
       args: ["ptr", "u32"],
+      returns: "void",
+    },
+    resetSplitScrollback: {
+      args: ["ptr", "u32", "u32"],
+      returns: "u32",
+    },
+    syncSplitScrollback: {
+      args: ["ptr", "u32"],
+      returns: "u32",
+    },
+    setPendingSplitFooterTransition: {
+      args: ["ptr", "u8", "u32", "u32", "u32", "u32"],
+      returns: "void",
+    },
+    clearPendingSplitFooterTransition: {
+      args: ["ptr"],
       returns: "void",
     },
     updateStats: {
@@ -193,6 +215,17 @@ function getOpenTUILib(libPath?: string) {
       args: ["ptr", "bool"],
       returns: "void",
     },
+    repaintSplitFooter: {
+      args: ["ptr", "u32", "bool"],
+      returns: "u32",
+    },
+    // Single FFI entrypoint for split commit append. beginFrame/finalizeFrame let
+    // native code decide whether this call is a standalone commit or part of a
+    // larger batched frame envelope.
+    commitSplitFooterSnapshot: {
+      args: ["ptr", "ptr", "u32", "bool", "bool", "u32", "bool", "bool", "bool"],
+      returns: "u32",
+    },
     getNextBuffer: {
       args: ["ptr"],
       returns: "ptr",
@@ -201,8 +234,16 @@ function getOpenTUILib(libPath?: string) {
       args: ["ptr"],
       returns: "ptr",
     },
+    rendererSetPaletteState: {
+      args: ["ptr", "ptr", "usize", "ptr", "ptr", "u32"],
+      returns: "void",
+    },
 
     queryPixelResolution: {
+      args: ["ptr"],
+      returns: "void",
+    },
+    queryThemeColors: {
       args: ["ptr"],
       returns: "void",
     },
@@ -283,6 +324,14 @@ function getOpenTUILib(libPath?: string) {
     },
     bufferFillRect: {
       args: ["ptr", "u32", "u32", "u32", "u32", "ptr"],
+      returns: "void",
+    },
+    bufferColorMatrix: {
+      args: ["ptr", "ptr", "ptr", "usize", "f32", "u8"],
+      returns: "void",
+    },
+    bufferColorMatrixUniform: {
+      args: ["ptr", "ptr", "f32", "u8"],
       returns: "void",
     },
     bufferResize: {
@@ -378,7 +427,7 @@ function getOpenTUILib(libPath?: string) {
       returns: "void",
     },
     bufferDrawBox: {
-      args: ["ptr", "i32", "i32", "u32", "u32", "ptr", "u32", "ptr", "ptr", "ptr", "u32"],
+      args: ["ptr", "i32", "i32", "u32", "u32", "ptr", "u32", "ptr", "ptr", "ptr", "u32", "ptr", "u32"],
       returns: "void",
     },
     bufferPushScissorRect: {
@@ -677,6 +726,10 @@ function getOpenTUILib(libPath?: string) {
     },
     textBufferViewSetWrapMode: {
       args: ["ptr", "u8"],
+      returns: "void",
+    },
+    textBufferViewSetFirstLineOffset: {
+      args: ["ptr", "u32"],
       returns: "void",
     },
     textBufferViewSetViewportSize: {
@@ -1064,7 +1117,7 @@ function getOpenTUILib(libPath?: string) {
       returns: "void",
     },
     syntaxStyleRegister: {
-      args: ["ptr", "ptr", "usize", "ptr", "ptr", "u8"],
+      args: ["ptr", "ptr", "usize", "ptr", "ptr", "u32"],
       returns: "u32",
     },
     syntaxStyleResolveByName: {
@@ -1398,13 +1451,46 @@ export interface RenderLib {
   setTerminalEnvVar: (renderer: Pointer, key: string, value: string) => boolean
   destroyRenderer: (renderer: Pointer) => void
   setUseThread: (renderer: Pointer, useThread: boolean) => void
+  setClearOnShutdown: (renderer: Pointer, clear: boolean) => void
   setBackgroundColor: (renderer: Pointer, color: RGBA) => void
   setRenderOffset: (renderer: Pointer, offset: number) => void
+  resetSplitScrollback: (renderer: Pointer, seedRows: number, pinnedRenderOffset: number) => number
+  syncSplitScrollback: (renderer: Pointer, pinnedRenderOffset: number) => number
+  setPendingSplitFooterTransition: (
+    renderer: Pointer,
+    mode: number,
+    sourceTopLine: number,
+    sourceHeight: number,
+    targetTopLine: number,
+    targetHeight: number,
+  ) => void
+  clearPendingSplitFooterTransition: (renderer: Pointer) => void
   updateStats: (renderer: Pointer, time: number, fps: number, frameCallbackTime: number) => void
   updateMemoryStats: (renderer: Pointer, heapUsed: number, heapTotal: number, arrayBuffers: number) => void
   render: (renderer: Pointer, force: boolean) => void
+  repaintSplitFooter: (renderer: Pointer, pinnedRenderOffset: number, force: boolean) => number
+  commitSplitFooterSnapshot: (
+    renderer: Pointer,
+    snapshot: OptimizedBuffer,
+    rowColumns: number,
+    startOnNewLine: boolean,
+    trailingNewline: boolean,
+    pinnedRenderOffset: number,
+    force: boolean,
+    // beginFrame/finalizeFrame mark commit boundaries when one JS flush contains
+    // multiple stdout snapshots. Defaults preserve old one-call behavior.
+    beginFrame?: boolean,
+    finalizeFrame?: boolean,
+  ) => number
   getNextBuffer: (renderer: Pointer) => OptimizedBuffer
   getCurrentBuffer: (renderer: Pointer) => OptimizedBuffer
+  rendererSetPaletteState: (
+    renderer: Pointer,
+    palette: readonly RGBA[],
+    defaultForeground: RGBA,
+    defaultBackground: RGBA,
+    paletteEpoch: number,
+  ) => void
   createOptimizedBuffer: (
     width: number,
     height: number,
@@ -1463,6 +1549,15 @@ export interface RenderLib {
     attributes?: number,
   ) => void
   bufferFillRect: (buffer: Pointer, x: number, y: number, width: number, height: number, color: RGBA) => void
+  bufferColorMatrix: (
+    buffer: Pointer,
+    matrixPtr: Pointer,
+    cellMaskPtr: Pointer,
+    cellMaskCount: number,
+    strength: number,
+    target: TargetChannel,
+  ) => void
+  bufferColorMatrixUniform: (buffer: Pointer, matrixPtr: Pointer, strength: number, target: TargetChannel) => void
   bufferDrawSuperSampleBuffer: (
     buffer: Pointer,
     x: number,
@@ -1523,6 +1618,7 @@ export interface RenderLib {
     borderColor: RGBA,
     backgroundColor: RGBA,
     title: string | null,
+    bottomTitle: string | null,
   ) => void
   bufferResize: (buffer: Pointer, width: number, height: number) => void
   resizeRenderer: (renderer: Pointer, width: number, height: number) => void
@@ -1564,6 +1660,7 @@ export interface RenderLib {
   suspendRenderer: (renderer: Pointer) => void
   resumeRenderer: (renderer: Pointer) => void
   queryPixelResolution: (renderer: Pointer) => void
+  queryThemeColors: (renderer: Pointer) => void
   writeOut: (renderer: Pointer, data: string | Uint8Array) => void
 
   // TextBuffer methods
@@ -1642,6 +1739,7 @@ export interface RenderLib {
   textBufferViewResetLocalSelection: (view: Pointer) => void
   textBufferViewSetWrapWidth: (view: Pointer, width: number) => void
   textBufferViewSetWrapMode: (view: Pointer, mode: "none" | "char" | "word") => void
+  textBufferViewSetFirstLineOffset: (view: Pointer, offset: number) => void
   textBufferViewSetViewportSize: (view: Pointer, width: number, height: number) => void
   textBufferViewSetViewport: (view: Pointer, x: number, y: number, width: number, height: number) => void
   textBufferViewGetLineInfo: (view: Pointer) => LineInfo
@@ -2025,12 +2123,46 @@ class FFIRenderLib implements RenderLib {
     this.opentui.symbols.setUseThread(renderer, useThread)
   }
 
+  public setClearOnShutdown(renderer: Pointer, clear: boolean) {
+    this.opentui.symbols.setClearOnShutdown(renderer, clear)
+  }
+
   public setBackgroundColor(renderer: Pointer, color: RGBA) {
-    this.opentui.symbols.setBackgroundColor(renderer, color.buffer)
+    this.opentui.symbols.setBackgroundColor(renderer, rgbaPtr(color))
   }
 
   public setRenderOffset(renderer: Pointer, offset: number) {
     this.opentui.symbols.setRenderOffset(renderer, offset)
+  }
+
+  public resetSplitScrollback(renderer: Pointer, seedRows: number, pinnedRenderOffset: number): number {
+    return this.opentui.symbols.resetSplitScrollback(renderer, seedRows, pinnedRenderOffset)
+  }
+
+  public syncSplitScrollback(renderer: Pointer, pinnedRenderOffset: number): number {
+    return this.opentui.symbols.syncSplitScrollback(renderer, pinnedRenderOffset)
+  }
+
+  public setPendingSplitFooterTransition(
+    renderer: Pointer,
+    mode: number,
+    sourceTopLine: number,
+    sourceHeight: number,
+    targetTopLine: number,
+    targetHeight: number,
+  ): void {
+    this.opentui.symbols.setPendingSplitFooterTransition(
+      renderer,
+      mode,
+      sourceTopLine,
+      sourceHeight,
+      targetTopLine,
+      targetHeight,
+    )
+  }
+
+  public clearPendingSplitFooterTransition(renderer: Pointer): void {
+    this.opentui.symbols.clearPendingSplitFooterTransition(renderer)
   }
 
   public updateStats(renderer: Pointer, time: number, fps: number, frameCallbackTime: number) {
@@ -2063,6 +2195,29 @@ class FFIRenderLib implements RenderLib {
     const height = this.opentui.symbols.getBufferHeight(bufferPtr)
 
     return new OptimizedBuffer(this, bufferPtr, width, height, { id: "current buffer", widthMethod: "unicode" })
+  }
+
+  public rendererSetPaletteState(
+    renderer: Pointer,
+    palette: readonly RGBA[],
+    defaultForeground: RGBA,
+    defaultBackground: RGBA,
+    paletteEpoch: number,
+  ): void {
+    const paletteBuffer = new Uint16Array(palette.length * 4)
+
+    for (let index = 0; index < palette.length; index++) {
+      paletteBuffer.set(palette[index].buffer, index * 4)
+    }
+
+    this.opentui.symbols.rendererSetPaletteState(
+      renderer,
+      ptr(paletteBuffer),
+      palette.length,
+      rgbaPtr(defaultForeground),
+      rgbaPtr(defaultBackground),
+      paletteEpoch >>> 0,
+    )
   }
 
   public bufferGetCharPtr(buffer: Pointer): Pointer {
@@ -2136,7 +2291,7 @@ class FFIRenderLib implements RenderLib {
   }
 
   public bufferClear(buffer: Pointer, color: RGBA) {
-    this.opentui.symbols.bufferClear(buffer, color.buffer)
+    this.opentui.symbols.bufferClear(buffer, rgbaPtr(color))
   }
 
   public bufferDrawText(
@@ -2150,8 +2305,8 @@ class FFIRenderLib implements RenderLib {
   ) {
     const textBytes = this.encoder.encode(text)
     const textLength = textBytes.byteLength
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = color.buffer
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = rgbaPtr(color)
 
     this.opentui.symbols.bufferDrawText(buffer, textBytes, textLength, x, y, fg, bg, attributes ?? 0)
   }
@@ -2166,8 +2321,8 @@ class FFIRenderLib implements RenderLib {
     attributes?: number,
   ) {
     const charPtr = char.codePointAt(0) ?? " ".codePointAt(0)!
-    const bg = bgColor.buffer
-    const fg = color.buffer
+    const bg = rgbaPtr(bgColor)
+    const fg = rgbaPtr(color)
 
     this.opentui.symbols.bufferSetCellWithAlphaBlending(buffer, x, y, charPtr, fg, bg, attributes ?? 0)
   }
@@ -2182,15 +2337,30 @@ class FFIRenderLib implements RenderLib {
     attributes?: number,
   ) {
     const charPtr = char.codePointAt(0) ?? " ".codePointAt(0)!
-    const bg = bgColor.buffer
-    const fg = color.buffer
+    const bg = rgbaPtr(bgColor)
+    const fg = rgbaPtr(color)
 
     this.opentui.symbols.bufferSetCell(buffer, x, y, charPtr, fg, bg, attributes ?? 0)
   }
 
   public bufferFillRect(buffer: Pointer, x: number, y: number, width: number, height: number, color: RGBA) {
-    const bg = color.buffer
+    const bg = rgbaPtr(color)
     this.opentui.symbols.bufferFillRect(buffer, x, y, width, height, bg)
+  }
+
+  public bufferColorMatrix(
+    buffer: Pointer,
+    matrixPtr: Pointer,
+    cellMaskPtr: Pointer,
+    cellMaskCount: number,
+    strength: number,
+    target: TargetChannel,
+  ): void {
+    this.opentui.symbols.bufferColorMatrix(buffer, matrixPtr, cellMaskPtr, cellMaskCount, strength, target)
+  }
+
+  public bufferColorMatrixUniform(buffer: Pointer, matrixPtr: Pointer, strength: number, target: TargetChannel): void {
+    this.opentui.symbols.bufferColorMatrixUniform(buffer, matrixPtr, strength, target)
   }
 
   public bufferDrawSuperSampleBuffer(
@@ -2251,8 +2421,8 @@ class FFIRenderLib implements RenderLib {
       intensitiesPtr,
       srcWidth,
       srcHeight,
-      fg?.buffer ?? null,
-      bg?.buffer ?? null,
+      optionalRgbaPtr(fg),
+      optionalRgbaPtr(bg),
     )
   }
 
@@ -2273,8 +2443,8 @@ class FFIRenderLib implements RenderLib {
       intensitiesPtr,
       srcWidth,
       srcHeight,
-      fg?.buffer ?? null,
-      bg?.buffer ?? null,
+      optionalRgbaPtr(fg),
+      optionalRgbaPtr(bg),
     )
   }
 
@@ -2297,8 +2467,8 @@ class FFIRenderLib implements RenderLib {
     this.opentui.symbols.bufferDrawGrid(
       buffer,
       borderChars,
-      borderFg.buffer,
-      borderBg.buffer,
+      rgbaPtr(borderFg),
+      rgbaPtr(borderBg),
       columnOffsets,
       columnCount,
       rowOffsets,
@@ -2318,10 +2488,15 @@ class FFIRenderLib implements RenderLib {
     borderColor: RGBA,
     backgroundColor: RGBA,
     title: string | null,
+    bottomTitle: string | null,
   ): void {
     const titleBytes = title ? this.encoder.encode(title) : null
     const titleLen = title ? titleBytes!.length : 0
     const titlePtr = title ? titleBytes : null
+
+    const bottomTitleBytes = bottomTitle ? this.encoder.encode(bottomTitle) : null
+    const bottomTitleLen = bottomTitle ? bottomTitleBytes!.length : 0
+    const bottomTitlePtr = bottomTitle ? bottomTitleBytes : null
 
     this.opentui.symbols.bufferDrawBox(
       buffer,
@@ -2331,10 +2506,12 @@ class FFIRenderLib implements RenderLib {
       height,
       borderChars,
       packedOptions,
-      borderColor.buffer,
-      backgroundColor.buffer,
+      rgbaPtr(borderColor),
+      rgbaPtr(backgroundColor),
       titlePtr,
       titleLen,
+      bottomTitlePtr,
+      bottomTitleLen,
     )
   }
 
@@ -2371,7 +2548,7 @@ class FFIRenderLib implements RenderLib {
   }
 
   public setCursorColor(renderer: Pointer, color: RGBA) {
-    this.opentui.symbols.setCursorColor(renderer, color.buffer)
+    this.opentui.symbols.setCursorColor(renderer, rgbaPtr(color))
   }
 
   public getCursorState(renderer: Pointer): CursorState {
@@ -2400,6 +2577,34 @@ class FFIRenderLib implements RenderLib {
 
   public render(renderer: Pointer, force: boolean) {
     this.opentui.symbols.render(renderer, force)
+  }
+
+  public repaintSplitFooter(renderer: Pointer, pinnedRenderOffset: number, force: boolean): number {
+    return this.opentui.symbols.repaintSplitFooter(renderer, pinnedRenderOffset, force)
+  }
+
+  public commitSplitFooterSnapshot(
+    renderer: Pointer,
+    snapshot: OptimizedBuffer,
+    rowColumns: number,
+    startOnNewLine: boolean,
+    trailingNewline: boolean,
+    pinnedRenderOffset: number,
+    force: boolean,
+    beginFrame: boolean = true,
+    finalizeFrame: boolean = true,
+  ): number {
+    return this.opentui.symbols.commitSplitFooterSnapshot(
+      renderer,
+      snapshot.ptr,
+      rowColumns,
+      startOnNewLine,
+      trailingNewline,
+      pinnedRenderOffset,
+      force,
+      beginFrame,
+      finalizeFrame,
+    )
   }
 
   public createOptimizedBuffer(
@@ -2570,6 +2775,10 @@ class FFIRenderLib implements RenderLib {
     this.opentui.symbols.queryPixelResolution(renderer)
   }
 
+  public queryThemeColors(renderer: Pointer): void {
+    this.opentui.symbols.queryThemeColors(renderer)
+  }
+
   /**
    * Write data to stdout, synchronizing with the render thread if necessary.
    * This should be used for ALL stdout writes to avoid race conditions when
@@ -2613,12 +2822,12 @@ class FFIRenderLib implements RenderLib {
   }
 
   public textBufferSetDefaultFg(buffer: Pointer, fg: RGBA | null): void {
-    const fgPtr = fg ? fg.buffer : null
+    const fgPtr = optionalRgbaPtr(fg)
     this.opentui.symbols.textBufferSetDefaultFg(buffer, fgPtr)
   }
 
   public textBufferSetDefaultBg(buffer: Pointer, bg: RGBA | null): void {
-    const bgPtr = bg ? bg.buffer : null
+    const bgPtr = optionalRgbaPtr(bg)
     this.opentui.symbols.textBufferSetDefaultBg(buffer, bgPtr)
   }
 
@@ -2785,8 +2994,8 @@ class FFIRenderLib implements RenderLib {
     bgColor: RGBA | null,
     fgColor: RGBA | null,
   ): void {
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = fgColor ? fgColor.buffer : null
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = optionalRgbaPtr(fgColor)
     this.opentui.symbols.textBufferViewSetSelection(view, start, end, bg, fg)
   }
 
@@ -2821,14 +3030,14 @@ class FFIRenderLib implements RenderLib {
     bgColor: RGBA | null,
     fgColor: RGBA | null,
   ): boolean {
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = fgColor ? fgColor.buffer : null
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = optionalRgbaPtr(fgColor)
     return this.opentui.symbols.textBufferViewSetLocalSelection(view, anchorX, anchorY, focusX, focusY, bg, fg)
   }
 
   public textBufferViewUpdateSelection(view: Pointer, end: number, bgColor: RGBA | null, fgColor: RGBA | null): void {
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = fgColor ? fgColor.buffer : null
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = optionalRgbaPtr(fgColor)
     this.opentui.symbols.textBufferViewUpdateSelection(view, end, bg, fg)
   }
 
@@ -2841,8 +3050,8 @@ class FFIRenderLib implements RenderLib {
     bgColor: RGBA | null,
     fgColor: RGBA | null,
   ): boolean {
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = fgColor ? fgColor.buffer : null
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = optionalRgbaPtr(fgColor)
     return this.opentui.symbols.textBufferViewUpdateLocalSelection(view, anchorX, anchorY, focusX, focusY, bg, fg)
   }
 
@@ -2857,6 +3066,10 @@ class FFIRenderLib implements RenderLib {
   public textBufferViewSetWrapMode(view: Pointer, mode: "none" | "char" | "word"): void {
     const modeValue = mode === "none" ? 0 : mode === "char" ? 1 : 2
     this.opentui.symbols.textBufferViewSetWrapMode(view, modeValue)
+  }
+
+  public textBufferViewSetFirstLineOffset(view: Pointer, offset: number): void {
+    this.opentui.symbols.textBufferViewSetFirstLineOffset(view, offset)
   }
 
   public textBufferViewSetViewportSize(view: Pointer, width: number, height: number): void {
@@ -2954,7 +3167,7 @@ class FFIRenderLib implements RenderLib {
   }
 
   public textBufferViewSetTabIndicatorColor(view: Pointer, color: RGBA): void {
-    this.opentui.symbols.textBufferViewSetTabIndicatorColor(view, color.buffer)
+    this.opentui.symbols.textBufferViewSetTabIndicatorColor(view, rgbaPtr(color))
   }
 
   public textBufferViewSetTruncate(view: Pointer, truncate: boolean): void {
@@ -3408,8 +3621,8 @@ class FFIRenderLib implements RenderLib {
     bgColor: RGBA | null,
     fgColor: RGBA | null,
   ): void {
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = fgColor ? fgColor.buffer : null
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = optionalRgbaPtr(fgColor)
     this.opentui.symbols.editorViewSetSelection(view, start, end, bg, fg)
   }
 
@@ -3438,8 +3651,8 @@ class FFIRenderLib implements RenderLib {
     updateCursor: boolean,
     followCursor: boolean,
   ): boolean {
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = fgColor ? fgColor.buffer : null
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = optionalRgbaPtr(fgColor)
     return this.opentui.symbols.editorViewSetLocalSelection(
       view,
       anchorX,
@@ -3454,8 +3667,8 @@ class FFIRenderLib implements RenderLib {
   }
 
   public editorViewUpdateSelection(view: Pointer, end: number, bgColor: RGBA | null, fgColor: RGBA | null): void {
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = fgColor ? fgColor.buffer : null
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = optionalRgbaPtr(fgColor)
     this.opentui.symbols.editorViewUpdateSelection(view, end, bg, fg)
   }
 
@@ -3470,8 +3683,8 @@ class FFIRenderLib implements RenderLib {
     updateCursor: boolean,
     followCursor: boolean,
   ): boolean {
-    const bg = bgColor ? bgColor.buffer : null
-    const fg = fgColor ? fgColor.buffer : null
+    const bg = optionalRgbaPtr(bgColor)
+    const fg = optionalRgbaPtr(fgColor)
     return this.opentui.symbols.editorViewUpdateLocalSelection(
       view,
       anchorX,
@@ -3602,6 +3815,7 @@ class FFIRenderLib implements RenderLib {
       kitty_keyboard: caps.kitty_keyboard,
       kitty_graphics: caps.kitty_graphics,
       rgb: caps.rgb,
+      ansi256: caps.ansi256,
       unicode: caps.unicode,
       sgr_pixels: caps.sgr_pixels,
       color_scheme_updates: caps.color_scheme_updates,
@@ -3680,7 +3894,7 @@ class FFIRenderLib implements RenderLib {
     bg: RGBA,
     attributes: number = 0,
   ): void {
-    this.opentui.symbols.bufferDrawChar(buffer, char, x, y, fg.buffer, bg.buffer, attributes)
+    this.opentui.symbols.bufferDrawChar(buffer, char, x, y, rgbaPtr(fg), rgbaPtr(bg), attributes)
   }
 
   public registerNativeSpanFeedStream(stream: Pointer, handler: NativeSpanFeedEventHandler): void {
@@ -3783,8 +3997,8 @@ class FFIRenderLib implements RenderLib {
     attributes: number,
   ): number {
     const nameBytes = this.encoder.encode(name)
-    const fgPtr = fg ? fg.buffer : null
-    const bgPtr = bg ? bg.buffer : null
+    const fgPtr = optionalRgbaPtr(fg)
+    const bgPtr = optionalRgbaPtr(bg)
     return this.opentui.symbols.syntaxStyleRegister(style, nameBytes, nameBytes.length, fgPtr, bgPtr, attributes)
   }
 
@@ -3818,7 +4032,7 @@ class FFIRenderLib implements RenderLib {
   }
 
   public editorViewSetTabIndicatorColor(view: Pointer, color: RGBA): void {
-    this.opentui.symbols.editorViewSetTabIndicatorColor(view, color.buffer)
+    this.opentui.symbols.editorViewSetTabIndicatorColor(view, rgbaPtr(color))
   }
 
   public onNativeEvent(name: string, handler: (data: ArrayBuffer) => void): void {

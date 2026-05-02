@@ -165,7 +165,7 @@ const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 export function adjustBrightness(color: RGBA | undefined, factor: number): RGBA | undefined {
   if (!color || factor === 1) return color;
-  if (color.isAnsi256()) return color;
+  if (color.intent === "indexed") return color;
   if (factor >= 1) {
     // Gamma lift + saturation boost: brighten while preserving color distinction
     const gamma = 0.65;

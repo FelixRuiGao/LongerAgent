@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { TextChunk } from "../text-buffer.js"
 import { StyledText } from "./styled-text.js"
 import { SyntaxStyle, type StyleDefinition } from "../syntax-style.js"

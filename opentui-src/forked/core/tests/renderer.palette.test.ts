@@ -1,12 +1,11 @@
-// @ts-nocheck
-import { test, expect, describe } from "bun:test"
+import { test, expect, describe, spyOn } from "bun:test"
 import { createTestRenderer, type TestRendererOptions } from "../testing/test-renderer.js"
 import { EventEmitter } from "events"
 import { Buffer } from "node:buffer"
 import { Readable } from "node:stream"
 import tty from "tty"
-import { ManualClock } from "../testing/manual-clock"
-import type { GetPaletteOptions, TerminalColors } from "../lib/terminal-palette"
+import { ManualClock } from "../testing/manual-clock.js"
+import type { GetPaletteOptions, TerminalColors } from "../lib/terminal-palette.js"
 
 const OSC_SUPPORT_TIMEOUT_MS = 300
 
@@ -169,6 +168,28 @@ describe("Palette caching behavior", () => {
 
     const oscSupportChecks = writes.filter((w) => w.includes("\x1b]4;0;?"))
     expect(oscSupportChecks.length).toBeLessThanOrEqual(2)
+
+    renderer.destroy()
+  })
+
+  test("concurrent requests with different sizes redetect for the later caller", async () => {
+    const { renderer, clock } = await createPaletteRenderer()
+
+    const palette16Promise = renderer.getPalette({ size: 16, timeout: 300 })
+    const palette256Promise = renderer.getPalette({ size: 256, timeout: 300 })
+
+    await advancePaletteClock(clock, 300)
+    await flushAsync()
+
+    expect(renderer.paletteDetectionStatus).toBe("detecting")
+
+    await advancePaletteClock(clock, 300)
+
+    const [palette16, palette256] = await Promise.all([palette16Promise, palette256Promise])
+
+    expect(palette16.palette).toHaveLength(16)
+    expect(palette256.palette).toHaveLength(256)
+    expect(palette16).not.toBe(palette256)
 
     renderer.destroy()
   })
@@ -442,6 +463,43 @@ describe("Palette cache invalidation", () => {
   })
 })
 
+describe("Capability repaint handling", () => {
+  test("capability responses request a forced repaint", async () => {
+    const clock = new ManualClock()
+    const { renderer } = await createTestRenderer({ clock })
+    const lib = (renderer as unknown as { lib: any }).lib
+
+    const renderSpy = spyOn(lib, "render")
+    const originalProcessCapabilityResponse = lib.processCapabilityResponse
+    const originalGetTerminalCapabilities = lib.getTerminalCapabilities
+
+    lib.processCapabilityResponse = () => {}
+    lib.getTerminalCapabilities = () => ({ rgb: true, ansi256: true, unicode: "unicode" })
+
+    // @ts-expect-error - testing private renderer state
+    expect(renderer.forceFullRepaintRequested).toBe(false)
+
+    // @ts-expect-error - testing private renderer method
+    renderer.capabilityHandler("\x1bP>|wezterm\x1b\\")
+
+    // @ts-expect-error - testing private renderer state
+    expect(renderer.forceFullRepaintRequested).toBe(true)
+    // @ts-expect-error - testing private renderer state
+    expect(renderer.updateScheduled).toBe(true)
+
+    // @ts-expect-error - testing private renderer method
+    await renderer.activateFrame()
+
+    const lastCall = renderSpy.mock.calls[renderSpy.mock.calls.length - 1]
+    expect(lastCall?.[1]).toBe(true)
+
+    renderSpy.mockRestore()
+    lib.processCapabilityResponse = originalProcessCapabilityResponse
+    lib.getTerminalCapabilities = originalGetTerminalCapabilities
+    renderer.destroy()
+  })
+})
+
 describe("Palette detection with suspended renderer", () => {
   test("getPalette throws error when renderer is suspended", async () => {
     const { renderer, clock, mockStdin, mockStdout } = await createPaletteRenderer()
@@ -482,6 +540,71 @@ describe("Palette detector cleanup", () => {
     expect(renderer._paletteDetectionPromise).toBeNull()
     // @ts-expect-error - accessing private property for testing
     expect(renderer._cachedPalette).toBeNull()
+  })
+
+  test("destroy ignores pending native palette publish", async () => {
+    const { renderer, clock } = await createPaletteRenderer()
+
+    await detectPaletteAndAdvanceClock(renderer, clock, { size: 256, timeout: 300 })
+
+    // @ts-expect-error - accessing private property for testing
+    renderer._terminalIsSetup = true
+    // @ts-expect-error - spying on private method for testing
+    const sync = spyOn(renderer, "syncNativePaletteState")
+    const requestRender = spyOn(renderer, "requestRender")
+
+    // @ts-expect-error - accessing private method for testing
+    renderer.ensureNativePaletteState()
+    renderer.destroy()
+    await flushAsync()
+
+    expect(sync).not.toHaveBeenCalled()
+    expect(requestRender).not.toHaveBeenCalled()
+
+    sync.mockRestore()
+    requestRender.mockRestore()
+  })
+
+  test("destroy during render ignores pending palette detection publish", async () => {
+    const { renderer, clock } = await createPaletteRenderer()
+
+    // @ts-expect-error - spying on private method for testing
+    const sync = spyOn(renderer, "syncNativePaletteState")
+    const palettePromise = renderer.getPalette({ size: 256, timeout: 300 })
+
+    // @ts-expect-error - simulating destroy while a frame is unwinding
+    renderer.rendering = true
+    renderer.destroy()
+    await advancePaletteClock(clock, 300)
+    await palettePromise
+
+    expect(sync).not.toHaveBeenCalled()
+
+    sync.mockRestore()
+
+    // @ts-expect-error - finish deferred destroy cleanup for the test renderer
+    renderer.rendering = false
+    // @ts-expect-error - finish deferred destroy cleanup for the test renderer
+    renderer.finalizeDestroy()
+  })
+
+  test("destroy stops pending palette detector writes", async () => {
+    const { renderer, clock } = await createPaletteRenderer({ useThread: false })
+
+    // @ts-expect-error - spying on private method for testing
+    const writeOut = spyOn(renderer, "writeOut")
+    const palettePromise = renderer.getPalette({ size: 16, timeout: 300 })
+
+    await flushAsync()
+    clock.advance(0)
+    renderer.destroy()
+    await flushAsync()
+    clock.advance(300)
+    await palettePromise
+
+    expect(writeOut).toHaveBeenCalledTimes(1)
+
+    writeOut.mockRestore()
   })
 
   test("multiple destroy calls don't cause errors", async () => {

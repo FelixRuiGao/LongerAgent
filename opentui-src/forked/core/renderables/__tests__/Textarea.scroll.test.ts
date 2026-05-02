@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, expect, it, beforeEach, afterEach } from "bun:test"
 import { createTestRenderer, type TestRenderer, type MockMouse } from "../../testing/test-renderer.js"
 import { createTextareaRenderable, simulateFrames as _simulateFrames } from "./renderable-test-utils.js"
@@ -347,32 +346,6 @@ describe("Textarea - Scroll Tests", () => {
       expect(cursorAfter.row).toBeGreaterThan(cursorBefore.row)
       expect(cursorAfter.row).toBeGreaterThanOrEqual(viewportAfter.offsetY)
       expect(cursorAfter.row).toBeLessThan(viewportAfter.offsetY + viewportAfter.height)
-
-      editor.destroy()
-    })
-
-    it("should coalesce rapid wheel bursts until the next render", async () => {
-      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
-        initialValue: Array.from({ length: 50 }, (_, i) => `Line ${i}`).join("\n"),
-        width: 40,
-        height: 10,
-        selectable: true,
-      })
-
-      editor.editBuffer.gotoLine(0)
-      await renderOnce()
-
-      for (let i = 0; i < 5; i++) {
-        await currentMouse.scroll(editor.x + 5, editor.y + 5, "down")
-      }
-
-      const viewportBefore = editor.editorView.getViewport()
-      expect(viewportBefore.offsetY).toBe(0)
-
-      await renderOnce()
-
-      const viewportAfter = editor.editorView.getViewport()
-      expect(viewportAfter.offsetY).toBe(5)
 
       editor.destroy()
     })
@@ -736,7 +709,7 @@ describe("Textarea - Scroll Tests", () => {
         for (let y = editor.y; y < editor.y + editor.height; y++) {
           for (let x = editor.x; x < editor.x + editor.width; x++) {
             const bufferIdx = y * bufferWidth + x
-            const bgG = frame.buffers.bg[bufferIdx * 4 + 1]
+            const bgG = (frame.buffers.bg[bufferIdx * 4 + 1] & 0xff) / 255
             if (Math.abs(bgG - 1.0) < 0.01) {
               selectedCells++
             }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 export function isValidDirectoryName(name: string): boolean {
   if (!name || typeof name !== "string") {
     return false
@@ -39,7 +38,7 @@ export function isValidDirectoryName(name: string): boolean {
   // Check for invalid characters
   // Windows: < > : " | ? * \ and control characters (0-31)
   // Unix: null character and forward slash
-  const invalidChars = /[<>:"|?*\/\\\x00-\x1f]/
+  const invalidChars = /[<>:"|?*/\\\x00-\x1f]/
   if (invalidChars.test(name)) {
     return false
   }

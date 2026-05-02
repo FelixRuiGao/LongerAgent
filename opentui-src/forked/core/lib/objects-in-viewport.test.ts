@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect, describe } from "bun:test"
 import { getObjectsInViewport } from "./objects-in-viewport.js"
 import type { ViewportBounds } from "../types.js"
@@ -6,6 +5,8 @@ import type { ViewportBounds } from "../types.js"
 interface TestObject {
   x: number
   y: number
+  screenX: number
+  screenY: number
   width: number
   height: number
   zIndex: number
@@ -13,7 +14,7 @@ interface TestObject {
 }
 
 function createObject(id: string, x: number, y: number, width: number, height: number, zIndex: number = 0): TestObject {
-  return { id, x, y, width, height, zIndex }
+  return { id, x, y, screenX: x, screenY: y, width, height, zIndex }
 }
 
 describe("getObjectsInViewport", () => {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, expect, it, afterAll, beforeAll } from "bun:test"
 import { InputRenderable, type InputRenderableOptions, InputRenderableEvents } from "./Input.js"
 import { decodePasteBytes } from "../lib/paste.js"
@@ -535,7 +534,7 @@ describe("InputRenderable", () => {
       expect(input.value).toBe("programmatic")
 
       // Cursor position should move to end when value is set programmatically
-      expect(input.cursorOffset).toBe(Bun.stringWidth("programmatic"))
+      expect(input.cursorOffset).toBe("programmatic".length)
     })
 
     it("should handle value changes with cursor moving to end", () => {
@@ -548,15 +547,7 @@ describe("InputRenderable", () => {
 
       input.value = "world"
       expect(input.value).toBe("world")
-      expect(input.cursorOffset).toBe(Bun.stringWidth("world")) // Cursor should move to end
-    })
-
-    it("should use display width when setting CJK value programmatically", () => {
-      const { input } = createInputRenderable({ width: 20, height: 1 })
-
-      input.value = "终止"
-      expect(input.value).toBe("终止")
-      expect(input.cursorOffset).toBe(Bun.stringWidth("终止"))
+      expect(input.cursorOffset).toBe("world".length) // Cursor should move to end
     })
 
     it("should handle empty value setting", () => {

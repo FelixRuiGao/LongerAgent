@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { TextAttributes } from "./types.js"
 import { Renderable } from "./Renderable.js"
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect } from "bun:test"
 import { DataPathsManager } from "./data-paths.js"
 

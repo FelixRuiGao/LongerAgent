@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, expect, it, afterEach } from "bun:test"
 import { TextareaRenderable } from "../renderables/Textarea.js"
 import { createTestRenderer, type TestRenderer, type MockInput } from "../testing/test-renderer.js"

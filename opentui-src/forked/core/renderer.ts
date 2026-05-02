@@ -1,6 +1,8 @@
-// @ts-nocheck
 import { ANSI } from "./ansi.js"
 import { Renderable, RootRenderable } from "./Renderable.js"
+import { BoxRenderable } from "./renderables/Box.js"
+import { CodeRenderable } from "./renderables/Code.js"
+import { TextRenderable } from "./renderables/Text.js"
 import {
   DebugOverlayCorner,
   type CursorStyleOptions,
@@ -22,52 +24,59 @@ import { EventEmitter } from "events"
 import { destroySingleton, hasSingleton, singleton } from "./lib/singleton.js"
 import { getObjectsInViewport } from "./lib/objects-in-viewport.js"
 import { KeyHandler, InternalKeyHandler } from "./lib/KeyHandler.js"
+import { isEditBufferRenderable, type EditBufferRenderable } from "./renderables/EditBufferRenderable.js"
 import { env, registerEnvVar } from "./lib/env.js"
-import {
-  isFermiOpenTuiDiagEnabled,
-  previewLatin1Hex,
-  previewLatin1Sequence,
-  writeFermiOpenTuiDiag,
-} from "./lib/diagnostic.js"
 import { getTreeSitterClient } from "./lib/tree-sitter/index.js"
 import {
+  buildTerminalPaletteSignature,
   createTerminalPalette,
+  normalizeTerminalPalette,
   type TerminalPaletteDetector,
   type TerminalColors,
   type GetPaletteOptions,
 } from "./lib/terminal-palette.js"
+import { calculateRenderGeometry } from "./lib/render-geometry.js"
 import {
   isCapabilityResponse,
   isPixelResolutionResponse,
   parsePixelResolution,
 } from "./lib/terminal-capability-detection.js"
 import { type Clock, type TimerHandle, SystemClock } from "./lib/clock.js"
-import { StdinParser, type StdinEvent } from "./lib/stdin-parser.js"
+import { StdinParser, type StdinEvent, type StdinParserProtocolContext } from "./lib/stdin-parser.js"
+import { matchesKeyBinding } from "./lib/keybinding.internal.js"
+import { RendererThemeMode } from "./renderer-theme-mode.js"
+import {
+  isFermiOpenTuiDiagEnabled,
+  previewLatin1Hex,
+  previewLatin1Sequence,
+  writeFermiOpenTuiDiag,
+} from "./lib/diagnostic.js"
 
 registerEnvVar({
   name: "OTUI_DUMP_CAPTURES",
-  description: "Dump captured output when the renderer exits.",
+  description: "Dump captured stdout and console caches when the renderer exit handler runs.",
   type: "boolean",
   default: false,
 })
 
 registerEnvVar({
   name: "OTUI_NO_NATIVE_RENDER",
-  description: "Disable native rendering. This will not actually output ansi and is useful for debugging.",
+  description:
+    "Skip the Zig/native frame renderer. Useful for debugging the render loop; split-footer stdout flushing may still write ANSI.",
   type: "boolean",
   default: false,
 })
 
 registerEnvVar({
   name: "OTUI_USE_ALTERNATE_SCREEN",
-  description: "Use the terminal alternate screen buffer.",
+  description: "When explicitly set, force screen mode selection: true=alternate-screen, false=main-screen.",
   type: "boolean",
   default: true,
 })
 
 registerEnvVar({
   name: "OTUI_OVERRIDE_STDOUT",
-  description: "Override the stdout stream. This is useful for debugging.",
+  description: "When explicitly set, force stdout routing: false=passthrough, true=capture in split-footer mode.",
   type: "boolean",
   default: true,
 })
@@ -87,40 +96,350 @@ registerEnvVar({
 })
 
 export interface CliRendererConfig {
+  // Read input from this stream. Defaults to process.stdin.
   stdin?: NodeJS.ReadStream
+
+  // Use a custom stdout stream for size detection and stdout interception.
+  // Native frame output still goes to the real TTY.
   stdout?: NodeJS.WriteStream
+
+  // Tell the native renderer it is driving a remote terminal.
   remote?: boolean
+
+  // Skip terminal setup. Useful in tests.
   testing?: boolean
+
+  // Call renderer.destroy() when Ctrl+C is pressed. Defaults to true.
   exitOnCtrlC?: boolean
+
+  // Clean up on these signals. Defaults to the common termination signals.
   exitSignals?: NodeJS.Signals[]
+
+  // Clear owned screen regions on suspend/destroy. Defaults to true.
+  clearOnShutdown?: boolean
+
+  // Forward these env var names to native terminal detection.
   forwardEnvKeys?: string[]
+
+  // Wait this long before handling resize events. Defaults to 100 ms.
   debounceDelay?: number
+
+  // Aim for this many frames per second in continuous mode. Defaults to 30.
   targetFps?: number
+
+  // Cap immediate re-renders at this frame rate. Defaults to 60.
   maxFps?: number
+
+  // Emit memory snapshots on this interval in ms. Set 0 to disable.
   memorySnapshotInterval?: number
+
+  // Render from a separate thread when the platform supports it.
   useThread?: boolean
+
+  // Collect frame timing stats for the debug overlay.
   gatherStats?: boolean
+
+  // Keep this many timing samples. Defaults to 300.
   maxStatSamples?: number
+
+  // Pass options to the built-in console overlay.
   consoleOptions?: Omit<ConsoleOptions, "clock">
+
+  // Run these hooks after each render pass.
   postProcessFns?: ((buffer: OptimizedBuffer, deltaTime: number) => void)[]
+
+  // Track mouse move events. Defaults to true.
   enableMouseMovement?: boolean
+
+  // Enable mouse input. Defaults to true.
   useMouse?: boolean
+
+  // Focus the nearest focusable renderable on left click. Defaults to true.
   autoFocus?: boolean
-  useAlternateScreen?: boolean
-  useConsole?: boolean
-  experimental_splitHeight?: number
+
+  // Choose where the renderer owns terminal space. Defaults to "alternate-screen".
+  screenMode?: ScreenMode
+
+  // Set the requested footer height for "split-footer". Defaults to 12.
+  footerHeight?: number
+
+  // Choose what happens to writes that go through `stdout.write`.
+  externalOutputMode?: ExternalOutputMode
+
+  // Choose what the built-in console overlay does.
+  consoleMode?: ConsoleMode
+
+  // Set Kitty keyboard protocol flags, or null to disable them.
   useKittyKeyboard?: KittyKeyboardOptions | null
+
+  // Fill the render buffer with this background color. Default transparent.
   backgroundColor?: ColorInput
+
+  // Open the console overlay on uncaught errors. Defaults to true in development.
   openConsoleOnError?: boolean
+
+  // Run these input handlers before the built-in handlers.
   prependInputHandlers?: ((sequence: string) => boolean)[]
+
+  // Cap the stdin parser buffer size in bytes. Defaults to 64 MB.
   stdinParserMaxBufferBytes?: number
+
+  // Use a custom clock for timers and tests.
   clock?: Clock
+
+  // Run after destroy() finishes cleanup.
   onDestroy?: () => void
 }
+
+// Controls how the renderer uses terminal space:
+//
+// - "alternate-screen": Use the terminal's alternate screen buffer.
+//
+// - "main-screen": Render on the main screen.
+//
+// - "split-footer": Keep the renderer in a reserved footer on the main screen.
+export type ScreenMode = "alternate-screen" | "main-screen" | "split-footer"
+
+// Controls writes that go through the configured `stdout.write`.
+//
+// - "capture-stdout": Queue stdout and replay it above the split footer.
+//   Only valid with "split-footer".
+//
+// - "passthrough": Leave stdout alone.
+export type ExternalOutputMode = "capture-stdout" | "passthrough"
+
+// Controls the built-in console overlay:
+//
+// - "console-overlay": Capture `console.*` output and show the overlay.
+//
+// - "disabled": Hide the overlay. `OTUI_USE_CONSOLE` controls global console
+//   capture.
+export type ConsoleMode = "console-overlay" | "disabled"
 
 export type PixelResolution = {
   width: number
   height: number
+}
+
+export interface ScrollbackRenderContext {
+  width: number
+  widthMethod: WidthMethod
+  tailColumn: number
+  renderContext: RenderContext
+}
+
+export interface ScrollbackSnapshot {
+  root: Renderable
+  width?: number
+  height?: number
+  rowColumns?: number
+  startOnNewLine?: boolean
+  trailingNewline?: boolean
+  teardown?: () => void
+}
+
+export type ScrollbackWriter = (ctx: ScrollbackRenderContext) => ScrollbackSnapshot
+
+export interface ScrollbackSurfaceOptions {
+  startOnNewLine?: boolean
+}
+
+export interface ScrollbackSurfaceCommitOptions {
+  rowColumns?: number
+  trailingNewline?: boolean
+}
+
+export interface ScrollbackSurface {
+  readonly renderContext: RenderContext
+  readonly root: Renderable
+  readonly width: number
+  readonly height: number
+  readonly isDestroyed: boolean
+
+  render(): void
+  settle(timeoutMs?: number): Promise<void>
+  commitRows(startRow: number, endRowExclusive: number, options?: ScrollbackSurfaceCommitOptions): void
+  destroy(): void
+}
+
+const DEFAULT_FOOTER_HEIGHT = 12
+const MAX_SCROLLBACK_SURFACE_HEIGHT_PASSES = 4
+const TRANSPARENT_RGBA = RGBA.fromValues(0, 0, 0, 0)
+
+let scrollbackSurfaceCounter = 0
+
+function normalizeFooterHeight(footerHeight: number | undefined): number {
+  if (footerHeight === undefined) {
+    return DEFAULT_FOOTER_HEIGHT
+  }
+
+  if (!Number.isFinite(footerHeight)) {
+    throw new Error("footerHeight must be a finite number")
+  }
+
+  const normalizedFooterHeight = Math.trunc(footerHeight)
+  if (normalizedFooterHeight <= 0) {
+    throw new Error("footerHeight must be greater than 0")
+  }
+
+  return normalizedFooterHeight
+}
+
+function resolveModes(config: CliRendererConfig): {
+  screenMode: ScreenMode
+  footerHeight: number
+  externalOutputMode: ExternalOutputMode
+} {
+  let screenMode = config.screenMode ?? "alternate-screen"
+  if (process.env.OTUI_USE_ALTERNATE_SCREEN !== undefined) {
+    screenMode = env.OTUI_USE_ALTERNATE_SCREEN ? "alternate-screen" : "main-screen"
+  }
+
+  const footerHeight =
+    screenMode === "split-footer" ? normalizeFooterHeight(config.footerHeight) : DEFAULT_FOOTER_HEIGHT
+
+  let externalOutputMode =
+    config.externalOutputMode ?? (screenMode === "split-footer" ? "capture-stdout" : "passthrough")
+  if (process.env.OTUI_OVERRIDE_STDOUT !== undefined) {
+    externalOutputMode = env.OTUI_OVERRIDE_STDOUT && screenMode === "split-footer" ? "capture-stdout" : "passthrough"
+  }
+
+  if (externalOutputMode === "capture-stdout" && screenMode !== "split-footer") {
+    throw new Error('externalOutputMode "capture-stdout" requires screenMode "split-footer"')
+  }
+
+  return {
+    screenMode,
+    footerHeight,
+    externalOutputMode,
+  }
+}
+
+type ExternalOutputCommit = {
+  snapshot: OptimizedBuffer
+  rowColumns: number
+  startOnNewLine: boolean
+  trailingNewline: boolean
+}
+
+type PendingSplitFooterTransition = {
+  mode: "viewport-scroll" | "clear-stale-rows"
+  sourceTopLine: number
+  sourceHeight: number
+  targetTopLine: number
+  targetHeight: number
+}
+
+class ExternalOutputQueue {
+  private commits: ExternalOutputCommit[] = []
+
+  get size(): number {
+    return this.commits.length
+  }
+
+  writeSnapshot(commit: ExternalOutputCommit): void {
+    this.commits.push(commit)
+  }
+
+  claim(limit: number = Number.POSITIVE_INFINITY): ExternalOutputCommit[] {
+    if (this.commits.length === 0) {
+      return []
+    }
+
+    // Split-footer capture can enqueue many tiny commits in a burst (for example,
+    // simulated Ctrl+R hold). Taking everything at once creates very large native
+    // frames that increase visible churn. We keep claim() bounded so one render tick
+    // produces one modest frame and schedules another tick if work remains.
+    const clampedLimit = Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : this.commits.length
+    if (clampedLimit >= this.commits.length) {
+      const output = this.commits
+      this.commits = []
+      return output
+    }
+
+    const output = this.commits.slice(0, clampedLimit)
+    this.commits = this.commits.slice(clampedLimit)
+    return output
+  }
+
+  clear(): void {
+    for (const commit of this.commits) {
+      commit.snapshot.destroy()
+    }
+    this.commits = []
+  }
+}
+
+const CHAR_FLAG_CONTINUATION = 0xc0000000 >>> 0
+const CHAR_FLAG_MASK = 0xc0000000 >>> 0
+
+class ScrollbackSnapshotRenderContext extends EventEmitter implements RenderContext {
+  public width: number
+  public height: number
+  public frameId = 0
+  public widthMethod: WidthMethod
+  public capabilities: any | null = null
+  public hasSelection: boolean = false
+  public currentFocusedRenderable: Renderable | null = null
+  public keyInput: KeyHandler
+  public _internalKeyInput: InternalKeyHandler
+
+  private lifecyclePasses: Set<Renderable> = new Set()
+
+  constructor(width: number, height: number, widthMethod: WidthMethod) {
+    super()
+    this.width = width
+    this.height = height
+    this.widthMethod = widthMethod
+    this.keyInput = new KeyHandler()
+    this._internalKeyInput = new InternalKeyHandler()
+  }
+
+  public addToHitGrid(_x: number, _y: number, _width: number, _height: number, _id: number): void {}
+  public pushHitGridScissorRect(_x: number, _y: number, _width: number, _height: number): void {}
+  public popHitGridScissorRect(): void {}
+  public clearHitGridScissorRects(): void {}
+  public requestRender(): void {}
+  public setCursorPosition(_x: number, _y: number, _visible: boolean): void {}
+  public setCursorStyle(_options: CursorStyleOptions): void {}
+  public setCursorColor(_color: RGBA): void {}
+  public setMousePointer(_shape: MousePointerStyle): void {}
+  public requestLive(): void {}
+  public dropLive(): void {}
+  public getSelection(): Selection | null {
+    return null
+  }
+  public get currentFocusedEditor(): EditBufferRenderable | null {
+    if (!this.currentFocusedRenderable) return null
+    if (!isEditBufferRenderable(this.currentFocusedRenderable)) return null
+    return this.currentFocusedRenderable
+  }
+  public requestSelectionUpdate(): void {}
+  public focusRenderable(renderable: Renderable): void {
+    this.currentFocusedRenderable = renderable
+  }
+  public blurRenderable(renderable: Renderable): void {
+    if (this.currentFocusedRenderable === renderable) {
+      this.currentFocusedRenderable = null
+    }
+  }
+  public registerLifecyclePass(renderable: Renderable): void {
+    this.lifecyclePasses.add(renderable)
+  }
+  public unregisterLifecyclePass(renderable: Renderable): void {
+    this.lifecyclePasses.delete(renderable)
+  }
+  public getLifecyclePasses(): Set<Renderable> {
+    return this.lifecyclePasses
+  }
+  public clearSelection(): void {}
+  public startSelection(_renderable: Renderable, _x: number, _y: number): void {}
+  public updateSelection(
+    _currentRenderable: Renderable | undefined,
+    _x: number,
+    _y: number,
+    _options?: { finishDragging?: boolean },
+  ): void {}
 }
 
 const DEFAULT_FORWARDED_ENV_KEYS = [
@@ -140,6 +459,8 @@ const DEFAULT_FORWARDED_ENV_KEYS = [
   "OPENTUI_FORCE_EXPLICIT_WIDTH",
   "WT_SESSION",
   "STY",
+  "WSL_DISTRO_NAME",
+  "WSL_INTEROP",
 ] as const
 
 // Kitty keyboard protocol flags
@@ -151,6 +472,7 @@ const KITTY_FLAG_ALL_KEYS_AS_ESCAPES = 0b1000 // Report all keys as escape codes
 const KITTY_FLAG_REPORT_TEXT = 0b10000 // Report text associated with key events
 
 const DEFAULT_STDIN_PARSER_MAX_BUFFER_BYTES = 64 * 1024 * 1024
+const NATIVE_PALETTE_QUERY_SIZE = 16
 
 /**
  * Kitty Keyboard Protocol configuration options
@@ -292,14 +614,14 @@ export async function createCliRenderer(config: CliRendererConfig = {}): Promise
   }
   const stdin = config.stdin || process.stdin
   const stdout = config.stdout || process.stdout
+  const { screenMode, footerHeight } = resolveModes(config)
 
   const width = stdout.columns || 80
   const height = stdout.rows || 24
-  const renderHeight =
-    config.experimental_splitHeight && config.experimental_splitHeight > 0 ? config.experimental_splitHeight : height
+  const geometry = calculateRenderGeometry(screenMode, width, height, footerHeight)
 
   const ziglib = resolveRenderLib()
-  const rendererPtr = ziglib.createRenderer(width, renderHeight, {
+  const rendererPtr = ziglib.createRenderer(geometry.renderWidth, geometry.renderHeight, {
     remote: config.remote ?? false,
     testing: config.testing ?? false,
   })
@@ -330,8 +652,17 @@ export async function createCliRenderer(config: CliRendererConfig = {}): Promise
 }
 
 export enum CliRenderEvents {
+  RESIZE = "resize",
+  FOCUS = "focus",
+  BLUR = "blur",
+  FOCUSED_RENDERABLE = "focused_renderable",
+  FOCUSED_EDITOR = "focused_editor",
+  THEME_MODE = "theme_mode",
+  CAPABILITIES = "capabilities",
+  SELECTION = "selection",
   DEBUG_OVERLAY_TOGGLE = "debugOverlay:toggle",
   DESTROY = "destroy",
+  MEMORY_SNAPSHOT = "memory:snapshot",
 }
 
 export enum RendererControlState {
@@ -355,15 +686,20 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private _isDestroyed: boolean = false
   private _destroyPending: boolean = false
   private _destroyFinalized: boolean = false
+  private _destroyCleanupPrepared: boolean = false
   public nextRenderBuffer: OptimizedBuffer
   public currentRenderBuffer: OptimizedBuffer
   private _isRunning: boolean = false
-  private targetFps: number = 30
-  private maxFps: number = 60
+  private _targetFps: number = 30
+  private _maxFps: number = 60
   private automaticMemorySnapshot: boolean = false
   private memorySnapshotInterval: number
   private memorySnapshotTimer: TimerHandle | null = null
-  private lastMemorySnapshot: { heapUsed: number; heapTotal: number; arrayBuffers: number } = {
+  private lastMemorySnapshot: {
+    heapUsed: number
+    heapTotal: number
+    arrayBuffers: number
+  } = {
     heapUsed: 0,
     heapTotal: 0,
     arrayBuffers: 0,
@@ -385,10 +721,12 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private renderTimeout: TimerHandle | null = null
   private lastTime: number = 0
   private frameCount: number = 0
+  // Bumped once per loop() iteration; see RenderContext.frameId.
+  private _frameId: number = 0
   private lastFpsTime: number = 0
   private currentFps: number = 0
-  private targetFrameTime: number = 1000 / this.targetFps
-  private minTargetFrameTime: number = 1000 / this.maxFps
+  private targetFrameTime: number = 1000 / this._targetFps
+  private minTargetFrameTime: number = 1000 / this._maxFps
   private immediateRerenderRequested: boolean = false
   private updateScheduled: boolean = false
 
@@ -423,12 +761,17 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
   private resizeTimeoutId: TimerHandle | null = null
   private capabilityTimeoutId: TimerHandle | null = null
+  private splitStartupSeedTimeoutId: TimerHandle | null = null
+  private pendingSplitStartupCursorSeed: boolean = false
   private resizeDebounceDelay: number = 100
 
   private enableMouseMovement: boolean = false
   private _useMouse: boolean = true
   private autoFocus: boolean = true
-  private _useAlternateScreen: boolean = env.OTUI_USE_ALTERNATE_SCREEN
+  private _screenMode: ScreenMode = "alternate-screen"
+  private _footerHeight: number = DEFAULT_FOOTER_HEIGHT
+  private _externalOutputMode: ExternalOutputMode = "passthrough"
+  private clearOnShutdown: boolean = true
   private _suspendedMouseEnabled: boolean = false
   private _previousControlState: RendererControlState = RendererControlState.IDLE
   private capturedRenderable?: Renderable
@@ -450,17 +793,22 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
   private _splitHeight: number = 0
   private renderOffset: number = 0
+  private splitTailColumn: number = 0
+  private pendingSplitFooterTransition: PendingSplitFooterTransition | null = null
+  // One-shot latch used to request a full split repaint after transitions
+  // (resize/mode/output-path changes). Cleared on first renderNative tick.
+  private forceFullRepaintRequested: boolean = false
+  // Upper bound for captured stdout commits consumed per native frame.
+  // This is a visual smoothness control: smaller batches reduce frame envelope
+  // churn and keep render latency predictable under heavy scrollback append load.
+  private readonly maxSplitCommitsPerFrame: number = 8
 
   private _terminalWidth: number = 0
   private _terminalHeight: number = 0
   private _terminalIsSetup: boolean = false
 
+  private externalOutputQueue = new ExternalOutputQueue()
   private realStdoutWrite: (chunk: any, encoding?: any, callback?: any) => boolean
-  private captureCallback: () => void = () => {
-    if (this._splitHeight > 0) {
-      this.requestRender()
-    }
-  }
 
   private _useConsole: boolean = true
   private sigwinchHandler: () => void = (() => {
@@ -471,21 +819,32 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private _capabilities: any | null = null
   private _latestPointer: { x: number; y: number } = { x: 0, y: 0 }
   private _hasPointer: boolean = false
-  private _lastPointerModifiers: RawMouseEvent["modifiers"] = { shift: false, alt: false, ctrl: false }
+  private _lastPointerModifiers: RawMouseEvent["modifiers"] = {
+    shift: false,
+    alt: false,
+    ctrl: false,
+  }
   private _currentMousePointerStyle: MousePointerStyle | undefined = undefined
 
   private _currentFocusedRenderable: Renderable | null = null
   private lifecyclePasses: Set<Renderable> = new Set()
   private _openConsoleOnError: boolean = true
   private _paletteDetector: TerminalPaletteDetector | null = null
+  private _paletteCache = new Map<number, TerminalColors>()
   private _cachedPalette: TerminalColors | null = null
   private _paletteDetectionPromise: Promise<TerminalColors> | null = null
+  private _paletteDetectionSize = 0
+  private _paletteEpoch = 0
+  private _publishedPaletteSignature: string | null = null
+  private _palettePublishGeneration = 0
   private _onDestroy?: () => void
-  private _themeMode: ThemeMode | null = null
+  private themeModeState: RendererThemeMode
+  private _terminalFocusState: boolean | null = null
 
   private sequenceHandlers: ((sequence: string) => boolean)[] = []
   private prependedInputHandlers: ((sequence: string) => boolean)[] = []
   private shouldRestoreModesOnNextFocus: boolean = false
+  private themeModeHandler!: (sequence: string) => boolean
 
   private idleResolvers: (() => void)[] = []
 
@@ -505,9 +864,16 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
   private dumpOutputCache(optionalMessage: string = ""): void {
     const cachedLogs = this.console.getCachedLogs()
-    const capturedOutput = capture.claimOutput()
+    const capturedConsoleOutput = capture.claimOutput()
+    const capturedExternalOutputCommits = this.externalOutputQueue.claim()
 
-    if (capturedOutput.length > 0 || cachedLogs.length > 0) {
+    let capturedExternalOutput = ""
+    for (const commit of capturedExternalOutputCommits) {
+      capturedExternalOutput += `[snapshot ${commit.snapshot.width}x${commit.snapshot.height}]\n`
+      commit.snapshot.destroy()
+    }
+
+    if (capturedConsoleOutput.length > 0 || capturedExternalOutput.length > 0 || cachedLogs.length > 0) {
       this.realStdoutWrite.call(this.stdout, optionalMessage)
     }
 
@@ -516,9 +882,14 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.realStdoutWrite.call(this.stdout, cachedLogs)
     }
 
-    if (capturedOutput.length > 0) {
-      this.realStdoutWrite.call(this.stdout, "\nCaptured output:\n")
-      this.realStdoutWrite.call(this.stdout, capturedOutput + "\n")
+    if (capturedConsoleOutput.length > 0) {
+      this.realStdoutWrite.call(this.stdout, "\nCaptured console output:\n")
+      this.realStdoutWrite.call(this.stdout, capturedConsoleOutput + "\n")
+    }
+
+    if (capturedExternalOutput.length > 0) {
+      this.realStdoutWrite.call(this.stdout, "\nCaptured external output:\n")
+      this.realStdoutWrite.call(this.stdout, capturedExternalOutput + "\n")
     }
 
     this.realStdoutWrite.call(this.stdout, ANSI.reset)
@@ -534,9 +905,6 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }).bind(this)
 
   private warningHandler: (warning: any) => void = ((warning: any) => {
-    writeFermiOpenTuiDiag("renderer.warning", {
-      warning: warning instanceof Error ? { name: warning.name, message: warning.message, stack: warning.stack } : String(warning),
-    })
     console.warn(JSON.stringify(warning.message, null, 2))
   }).bind(this)
 
@@ -563,21 +931,24 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     this.lib = lib
     this._terminalWidth = stdout.columns ?? width
     this._terminalHeight = stdout.rows ?? height
-    this.width = width
-    this.height = height
     this._useThread = config.useThread === undefined ? false : config.useThread
-    this._splitHeight = config.experimental_splitHeight || 0
+    const { screenMode, footerHeight, externalOutputMode } = resolveModes(config)
+    this._externalOutputMode = externalOutputMode
 
-    if (this._splitHeight > 0) {
-      capture.on("write", this.captureCallback)
-      this.renderOffset = height - this._splitHeight
-      this.height = this._splitHeight
-      lib.setRenderOffset(rendererPtr, this.renderOffset)
-    }
+    const initialGeometry = calculateRenderGeometry(screenMode, this._terminalWidth, this._terminalHeight, footerHeight)
+
+    this.width = initialGeometry.renderWidth
+    this.height = initialGeometry.renderHeight
+    this._splitHeight = initialGeometry.effectiveFooterHeight
+    this.renderOffset = screenMode === "split-footer" ? 0 : initialGeometry.renderOffset
+
+    this._footerHeight = footerHeight
 
     this.rendererPtr = rendererPtr
+    this.clearOnShutdown = config.clearOnShutdown ?? true
+    this.lib.setClearOnShutdown(this.rendererPtr, this.clearOnShutdown)
 
-    const forwardEnvKeys = config.forwardEnvKeys ?? [...DEFAULT_FORWARDED_ENV_KEYS]
+    const forwardEnvKeys = config.forwardEnvKeys ?? (config.remote ? [] : [...DEFAULT_FORWARDED_ENV_KEYS])
     for (const key of forwardEnvKeys) {
       const value = process.env[key]
       if (value === undefined) continue
@@ -594,22 +965,34 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       "SIGBREAK", // Ctrl+Break on Windows
       "SIGPIPE", // Broken pipe
       "SIGBUS", // Bus error
-      "SIGFPE", // Floating point exception
     ]
 
     this.clipboard = new Clipboard(this.lib, this.rendererPtr)
     this.resizeDebounceDelay = config.debounceDelay || 100
     this.targetFps = config.targetFps || 30
     this.maxFps = config.maxFps || 60
-    this.targetFrameTime = 1000 / this.targetFps
-    this.minTargetFrameTime = 1000 / this.maxFps
+    this.clock = config.clock ?? new SystemClock()
+    this.themeModeState = new RendererThemeMode(
+      {
+        queryThemeColors: () => {
+          this.lib.queryThemeColors(this.rendererPtr)
+        },
+      },
+      this.clock,
+    )
+    this.themeModeHandler = (sequence: string) => {
+      const result = this.themeModeState.handleSequence(sequence)
+      if (result.changedMode) {
+        this.emit(CliRenderEvents.THEME_MODE, result.changedMode)
+      }
+      return result.handled
+    }
     this.memorySnapshotInterval = config.memorySnapshotInterval ?? 0
     this.gatherStats = config.gatherStats || false
     this.maxStatSamples = config.maxStatSamples || 300
     this.enableMouseMovement = config.enableMouseMovement ?? true
     this._useMouse = config.useMouse ?? true
     this.autoFocus = config.autoFocus ?? true
-    this._useAlternateScreen = config.useAlternateScreen ?? env.OTUI_USE_ALTERNATE_SCREEN
     this.nextRenderBuffer = this.lib.getNextBuffer(this.rendererPtr)
     this.currentRenderBuffer = this.lib.getCurrentBuffer(this.rendererPtr)
     this.postProcessFns = config.postProcessFns || []
@@ -619,10 +1002,6 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
     if (this.memorySnapshotInterval > 0) {
       this.startMemorySnapshotTimer()
-    }
-
-    if (env.OTUI_OVERRIDE_STDOUT) {
-      this.stdout.write = this.interceptStdoutWrite.bind(this)
     }
 
     // Handle terminal resize
@@ -638,7 +1017,9 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     const useKittyForParsing = kittyConfig !== null
     this._keyHandler = new InternalKeyHandler()
     this._keyHandler.on("keypress", (event) => {
-      if (this.exitOnCtrlC && event.name === "c" && event.ctrl) {
+      // Use the shared matcher here too. Kitty can report a non-Latin
+      // character plus a base-layout `c`, and Ctrl+C should still exit.
+      if (this.exitOnCtrlC && matchesKeyBinding(event, { name: "c", ctrl: true })) {
         process.nextTick(() => {
           this.destroy()
         })
@@ -648,17 +1029,22 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
     this.addExitListeners()
 
-    this.clock = config.clock ?? new SystemClock()
-
     const stdinParserMaxBufferBytes = config.stdinParserMaxBufferBytes ?? DEFAULT_STDIN_PARSER_MAX_BUFFER_BYTES
     this.stdinParser = new StdinParser({
-      timeoutMs: 10,
+      timeoutMs: 20,
       maxPendingBytes: stdinParserMaxBufferBytes,
       armTimeouts: true,
       onTimeoutFlush: () => {
         this.drainStdinParser()
       },
       useKittyKeyboard: useKittyForParsing,
+      protocolContext: {
+        kittyKeyboardEnabled: useKittyForParsing,
+        privateCapabilityRepliesActive: false,
+        pixelResolutionQueryActive: false,
+        explicitWidthCprActive: false,
+        startupCursorCprActive: false,
+      },
       clock: this.clock,
     })
 
@@ -666,7 +1052,9 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       ...(config.consoleOptions ?? {}),
       clock: this.clock,
     })
-    this.useConsole = config.useConsole ?? true
+    this.consoleMode = config.consoleMode ?? "console-overlay"
+    this.applyScreenMode(screenMode, false, false)
+    this.stdout.write = externalOutputMode === "capture-stdout" ? this.interceptStdoutWrite : this.realStdoutWrite
     this._openConsoleOnError = config.openConsoleOnError ?? process.env.NODE_ENV !== "production"
     this._onDestroy = config.onDestroy
 
@@ -738,14 +1126,60 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     return this._currentFocusedRenderable
   }
 
-  public focusRenderable(renderable: Renderable) {
-    if (this._currentFocusedRenderable === renderable) return
+  public get currentFocusedEditor(): EditBufferRenderable | null {
+    if (!this._currentFocusedRenderable) return null
+    if (!isEditBufferRenderable(this._currentFocusedRenderable)) return null
+    return this._currentFocusedRenderable
+  }
 
-    if (this._currentFocusedRenderable) {
-      this._currentFocusedRenderable.blur()
+  private normalizeClockTime(now: number, fallback: number): number {
+    if (Number.isFinite(now)) {
+      return now
     }
 
+    return Number.isFinite(fallback) ? fallback : 0
+  }
+
+  private getElapsedMs(now: number, then: number): number {
+    if (!Number.isFinite(now) || !Number.isFinite(then)) {
+      return 0
+    }
+
+    return Math.max(now - then, 0)
+  }
+
+  public focusRenderable(renderable: Renderable) {
+    if (this._currentFocusedRenderable === renderable) {
+      return
+    }
+
+    const previousRenderable = this._currentFocusedRenderable
+    const previousEditor = this.currentFocusedEditor
+
     this._currentFocusedRenderable = renderable
+    previousRenderable?.blur()
+
+    const currentEditor = this.currentFocusedEditor
+    if (previousEditor !== currentEditor) {
+      this.emit(CliRenderEvents.FOCUSED_EDITOR, currentEditor, previousEditor)
+    }
+
+    this.emit(CliRenderEvents.FOCUSED_RENDERABLE, renderable, previousRenderable)
+  }
+
+  public blurRenderable(renderable: Renderable): void {
+    if (this._currentFocusedRenderable !== renderable) {
+      return
+    }
+
+    const previousEditor = this.currentFocusedEditor
+    this._currentFocusedRenderable = null
+
+    if (previousEditor !== null) {
+      this.emit(CliRenderEvents.FOCUSED_EDITOR, null, previousEditor)
+    }
+
+    this.emit(CliRenderEvents.FOCUSED_RENDERABLE, null, renderable)
   }
 
   private setCapturedRenderable(renderable: Renderable | undefined): void {
@@ -776,6 +1210,10 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   public get widthMethod(): WidthMethod {
     const caps = this.capabilities
     return caps?.unicode === "wcwidth" ? "wcwidth" : "unicode"
+  }
+
+  public get frameId(): number {
+    return this._frameId
   }
 
   private writeOut(chunk: any, encoding?: any, callback?: any): boolean {
@@ -809,8 +1247,8 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
     if (!this.updateScheduled && !this.renderTimeout) {
       this.updateScheduled = true
-      const now = this.clock.now()
-      const elapsed = now - this.lastTime
+      const now = this.normalizeClockTime(this.clock.now(), this.lastTime)
+      const elapsed = this.getElapsedMs(now, this.lastTime)
       const delay = Math.max(this.minTargetFrameTime - elapsed, 0)
 
       if (delay === 0) {
@@ -823,18 +1261,26 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }
 
   private async activateFrame() {
-    await this.loop()
-    this.updateScheduled = false
-    this.resolveIdleIfNeeded()
+    if (!this.updateScheduled) {
+      this.resolveIdleIfNeeded()
+      return
+    }
+
+    try {
+      await this.loop()
+    } finally {
+      this.updateScheduled = false
+      this.resolveIdleIfNeeded()
+    }
   }
 
-  public get useConsole(): boolean {
-    return this._useConsole
+  public get consoleMode(): ConsoleMode {
+    return this._useConsole ? "console-overlay" : "disabled"
   }
 
-  public set useConsole(value: boolean) {
-    this._useConsole = value
-    if (value) {
+  public set consoleMode(mode: ConsoleMode) {
+    this._useConsole = mode === "console-overlay"
+    if (this._useConsole) {
       this.console.activate()
     } else {
       this.console.deactivate()
@@ -899,6 +1345,24 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     return this._useThread
   }
 
+  public get targetFps(): number {
+    return this._targetFps
+  }
+
+  public set targetFps(targetFps: number) {
+    this._targetFps = targetFps
+    this.targetFrameTime = 1000 / this._targetFps
+  }
+
+  public get maxFps(): number {
+    return this._maxFps
+  }
+
+  public set maxFps(maxFps: number) {
+    this._maxFps = maxFps
+    this.minTargetFrameTime = 1000 / this._maxFps
+  }
+
   public get useMouse(): boolean {
     return this._useMouse
   }
@@ -915,8 +1379,72 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     }
   }
 
-  public get experimental_splitHeight(): number {
-    return this._splitHeight
+  public get screenMode(): ScreenMode {
+    return this._screenMode
+  }
+
+  public set screenMode(mode: ScreenMode) {
+    if (this.externalOutputMode === "capture-stdout" && mode !== "split-footer") {
+      throw new Error('externalOutputMode "capture-stdout" requires screenMode "split-footer"')
+    }
+
+    this.applyScreenMode(mode)
+  }
+
+  public get footerHeight(): number {
+    return this._footerHeight
+  }
+
+  public set footerHeight(footerHeight: number) {
+    const normalizedFooterHeight = normalizeFooterHeight(footerHeight)
+    if (normalizedFooterHeight === this._footerHeight) {
+      return
+    }
+
+    this._footerHeight = normalizedFooterHeight
+    if (this.screenMode === "split-footer") {
+      this.applyScreenMode("split-footer")
+    }
+  }
+
+  public get externalOutputMode(): ExternalOutputMode {
+    return this._externalOutputMode
+  }
+
+  public set externalOutputMode(mode: ExternalOutputMode) {
+    if (mode === "capture-stdout" && this.screenMode !== "split-footer") {
+      throw new Error('externalOutputMode "capture-stdout" requires screenMode "split-footer"')
+    }
+
+    const previousMode = this._externalOutputMode
+    if (previousMode === mode) {
+      return
+    }
+
+    if (previousMode === "capture-stdout" && mode === "passthrough" && this._splitHeight > 0) {
+      this.flushPendingSplitOutputBeforeTransition()
+    }
+
+    this._externalOutputMode = mode
+    this.stdout.write = mode === "capture-stdout" ? this.interceptStdoutWrite : this.realStdoutWrite
+
+    if (this._screenMode === "split-footer" && this._splitHeight > 0 && mode === "capture-stdout") {
+      this.clearPendingSplitFooterTransition()
+      this.resetSplitScrollback(this.getSplitCursorSeedRows())
+      return
+    }
+
+    if (
+      this._screenMode === "split-footer" &&
+      this._splitHeight > 0 &&
+      previousMode === "capture-stdout" &&
+      mode === "passthrough"
+    ) {
+      this.clearPendingSplitFooterTransition()
+      return
+    }
+
+    this.syncSplitFooterState()
   }
 
   public get liveRequestCount(): number {
@@ -932,7 +1460,15 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }
 
   public get themeMode(): ThemeMode | null {
-    return this._themeMode
+    return this.themeModeState.themeMode
+  }
+
+  public waitForThemeMode(timeoutMs: number = 1000): Promise<ThemeMode | null> {
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+      throw new Error("timeoutMs must be a non-negative finite number")
+    }
+
+    return this.themeModeState.waitForThemeMode(timeoutMs, this._isDestroyed)
   }
 
   public getDebugInputs(): Array<{ timestamp: string; sequence: string }> {
@@ -948,84 +1484,988 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     this.lib.setKittyKeyboardFlags(this.rendererPtr, flags)
   }
 
-  public set experimental_splitHeight(splitHeight: number) {
-    if (splitHeight < 0) splitHeight = 0
-
-    const prevSplitHeight = this._splitHeight
-
-    if (splitHeight > 0) {
-      this._splitHeight = splitHeight
-      this.renderOffset = this._terminalHeight - this._splitHeight
-      this.height = this._splitHeight
-
-      if (prevSplitHeight === 0) {
-        this.useConsole = false
-        capture.on("write", this.captureCallback)
-        const freedLines = this._terminalHeight - this._splitHeight
-        const scrollDown = ANSI.scrollDown(freedLines)
-        this.writeOut(scrollDown)
-      } else if (prevSplitHeight > this._splitHeight) {
-        const freedLines = prevSplitHeight - this._splitHeight
-        const scrollDown = ANSI.scrollDown(freedLines)
-        this.writeOut(scrollDown)
-      } else if (prevSplitHeight < this._splitHeight) {
-        const additionalLines = this._splitHeight - prevSplitHeight
-        const scrollUp = ANSI.scrollUp(additionalLines)
-        this.writeOut(scrollUp)
-      }
-    } else {
-      if (prevSplitHeight > 0) {
-        this.flushStdoutCache(this._terminalHeight, true)
-
-        capture.off("write", this.captureCallback)
-        this.useConsole = true
-      }
-
-      this._splitHeight = 0
-      this.renderOffset = 0
-      this.height = this._terminalHeight
+  public createScrollbackSurface(options: ScrollbackSurfaceOptions = {}): ScrollbackSurface {
+    if (this._screenMode !== "split-footer" || this._externalOutputMode !== "capture-stdout") {
+      throw new Error(
+        'createScrollbackSurface requires screenMode "split-footer" and externalOutputMode "capture-stdout"',
+      )
     }
 
-    this.width = this._terminalWidth
-    this.lib.setRenderOffset(this.rendererPtr, this.renderOffset)
-    this.lib.resizeRenderer(this.rendererPtr, this.width, this.height)
-    this.nextRenderBuffer = this.lib.getNextBuffer(this.rendererPtr)
+    const renderer = this
+    const surfaceId = scrollbackSurfaceCounter++
+    const startOnNewLine = options.startOnNewLine ?? true
+    const firstLineOffset =
+      !startOnNewLine && renderer.splitTailColumn > 0 && renderer.splitTailColumn < renderer.width
+        ? renderer.splitTailColumn
+        : 0
 
-    this._console.resize(this.width, this.height)
-    this.root.resize(this.width, this.height)
-    this.emit("resize", this.width, this.height)
+    const snapshotContext = new ScrollbackSnapshotRenderContext(renderer.width, 1, renderer.widthMethod)
+    let firstLineOffsetOwner: Renderable | null = null
+    const renderContext = Object.create(snapshotContext) as RenderContext
+    Object.defineProperty(renderContext, "claimFirstLineOffset", {
+      value: (renderable?: Renderable): number => {
+        if (firstLineOffsetOwner?.isDestroyed) {
+          firstLineOffsetOwner = null
+        }
+
+        if (firstLineOffsetOwner) {
+          return 0
+        }
+
+        firstLineOffsetOwner = renderable ?? null
+        return firstLineOffset
+      },
+      enumerable: true,
+      configurable: true,
+    })
+
+    const internalRoot = new RootRenderable(renderContext)
+    const publicRoot = new BoxRenderable(renderContext, {
+      id: `scrollback-surface-root-${surfaceId}`,
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: renderer.width,
+      height: "auto",
+      border: false,
+      backgroundColor: "transparent",
+      shouldFill: false,
+      flexDirection: "column",
+    })
+    internalRoot.add(publicRoot)
+
+    let surfaceWidth = renderer.width
+    let surfaceHeight = 1
+    let surfaceWidthMethod = renderer.widthMethod
+    let surfaceDestroyed = false
+    let hasRendered = false
+    let nextCommitStartOnNewLine = startOnNewLine
+    let backingBuffer = OptimizedBuffer.create(surfaceWidth, surfaceHeight, surfaceWidthMethod, {
+      id: `scrollback-surface-buffer-${surfaceId}`,
+    })
+
+    const destroyListener = (): void => {
+      destroySurface()
+    }
+
+    const assertNotDestroyed = (): void => {
+      if (surfaceDestroyed) {
+        throw new Error("ScrollbackSurface is destroyed")
+      }
+    }
+
+    const assertRendered = (): void => {
+      if (!hasRendered) {
+        throw new Error("ScrollbackSurface.commitRows requires render() before commitRows()")
+      }
+    }
+
+    const assertGeometryStillCurrent = (): void => {
+      if (renderer.width !== surfaceWidth || renderer.widthMethod !== surfaceWidthMethod) {
+        throw new Error("ScrollbackSurface.commitRows requires render() after renderer geometry changes")
+      }
+    }
+
+    const assertRowRange = (startRow: number, endRowExclusive: number): void => {
+      if (!Number.isInteger(startRow) || !Number.isInteger(endRowExclusive)) {
+        throw new Error("ScrollbackSurface.commitRows requires finite integer row bounds")
+      }
+
+      if (startRow < 0) {
+        throw new Error("ScrollbackSurface.commitRows requires startRow >= 0")
+      }
+
+      if (endRowExclusive < startRow) {
+        throw new Error("ScrollbackSurface.commitRows requires endRowExclusive >= startRow")
+      }
+
+      if (endRowExclusive > surfaceHeight) {
+        throw new Error("ScrollbackSurface.commitRows row range exceeds rendered surface height")
+      }
+    }
+
+    const collectPendingCodeRenderables = (node: Renderable): CodeRenderable[] => {
+      const pending: CodeRenderable[] = []
+
+      if (node instanceof CodeRenderable && node.isHighlighting) {
+        pending.push(node)
+      }
+
+      for (const child of node.getChildren()) {
+        pending.push(...collectPendingCodeRenderables(child))
+      }
+
+      return pending
+    }
+
+    const waitForPendingHighlights = async (pending: CodeRenderable[], timeoutMs: number): Promise<void> => {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const timeoutHandle = renderer.clock.setTimeout(() => {
+          if (settled) {
+            return
+          }
+
+          settled = true
+          reject(new Error("ScrollbackSurface.settle timed out waiting for CodeRenderable highlighting"))
+        }, timeoutMs)
+
+        Promise.all(pending.map((renderable) => renderable.highlightingDone)).then(
+          () => {
+            if (settled) {
+              return
+            }
+
+            settled = true
+            renderer.clock.clearTimeout(timeoutHandle)
+            resolve()
+          },
+          (error) => {
+            if (settled) {
+              return
+            }
+
+            settled = true
+            renderer.clock.clearTimeout(timeoutHandle)
+            reject(error)
+          },
+        )
+      })
+    }
+
+    const renderSurface = (): void => {
+      assertNotDestroyed()
+
+      const width = renderer.width
+      const widthMethod = renderer.widthMethod
+
+      snapshotContext.width = width
+      snapshotContext.widthMethod = widthMethod
+      publicRoot.width = width
+
+      const renderPass = (height: number): void => {
+        snapshotContext.height = height
+        internalRoot.resize(width, height)
+        backingBuffer.resize(width, height)
+        backingBuffer.clear(TRANSPARENT_RGBA)
+        snapshotContext.frameId += 1
+        internalRoot.render(backingBuffer, 0)
+      }
+
+      let targetHeight = Math.max(1, surfaceHeight)
+
+      if (surfaceWidthMethod !== widthMethod) {
+        backingBuffer.destroy()
+        backingBuffer = OptimizedBuffer.create(width, targetHeight, widthMethod, {
+          id: `scrollback-surface-buffer-${surfaceId}`,
+        })
+      } else {
+        backingBuffer.resize(width, targetHeight)
+      }
+
+      for (let pass = 0; pass < MAX_SCROLLBACK_SURFACE_HEIGHT_PASSES; pass += 1) {
+        renderPass(targetHeight)
+
+        const measuredHeight = Math.max(1, publicRoot.height)
+        if (measuredHeight === targetHeight) {
+          surfaceWidth = width
+          surfaceHeight = measuredHeight
+          surfaceWidthMethod = widthMethod
+          hasRendered = true
+          return
+        }
+
+        targetHeight = measuredHeight
+      }
+
+      renderPass(targetHeight)
+
+      surfaceWidth = width
+      surfaceHeight = targetHeight
+      surfaceWidthMethod = widthMethod
+      hasRendered = true
+    }
+
+    const settleSurface = async (timeoutMs: number = 2000): Promise<void> => {
+      assertNotDestroyed()
+
+      const startedAt = renderer.clock.now()
+      renderSurface()
+
+      while (true) {
+        assertNotDestroyed()
+
+        const pending = collectPendingCodeRenderables(publicRoot)
+        if (pending.length === 0) {
+          return
+        }
+
+        const remainingMs = timeoutMs - (renderer.clock.now() - startedAt)
+        if (remainingMs <= 0) {
+          throw new Error("ScrollbackSurface.settle timed out waiting for CodeRenderable highlighting")
+        }
+
+        await waitForPendingHighlights(pending, remainingMs)
+        assertNotDestroyed()
+        renderSurface()
+      }
+    }
+
+    const commitRows = (
+      startRow: number,
+      endRowExclusive: number,
+      commitOptions: ScrollbackSurfaceCommitOptions = {},
+    ): void => {
+      assertNotDestroyed()
+      assertRendered()
+      assertGeometryStillCurrent()
+      assertRowRange(startRow, endRowExclusive)
+
+      if (startRow === endRowExclusive) {
+        return
+      }
+
+      const rowCount = endRowExclusive - startRow
+      const commitBuffer = OptimizedBuffer.create(surfaceWidth, rowCount, surfaceWidthMethod, {
+        id: `scrollback-surface-commit-${surfaceId}`,
+      })
+
+      try {
+        commitBuffer.drawFrameBuffer(0, 0, backingBuffer, 0, startRow, surfaceWidth, rowCount)
+
+        renderer.enqueueRenderedScrollbackCommit({
+          snapshot: commitBuffer,
+          rowColumns: commitOptions.rowColumns,
+          startOnNewLine: nextCommitStartOnNewLine,
+          trailingNewline: commitOptions.trailingNewline ?? false,
+        })
+
+        nextCommitStartOnNewLine = false
+      } catch (error) {
+        commitBuffer.destroy()
+        throw error
+      }
+    }
+
+    const destroySurface = (): void => {
+      if (surfaceDestroyed) {
+        return
+      }
+
+      surfaceDestroyed = true
+      renderer.off(CliRenderEvents.DESTROY, destroyListener)
+
+      let destroyError: unknown = null
+
+      try {
+        internalRoot.destroyRecursively()
+      } catch (error) {
+        destroyError = error
+      }
+
+      try {
+        backingBuffer.destroy()
+      } catch (error) {
+        if (destroyError === null) {
+          destroyError = error
+        }
+      }
+
+      renderContext.removeAllListeners()
+      snapshotContext.removeAllListeners()
+
+      if (destroyError !== null) {
+        throw destroyError
+      }
+    }
+
+    renderer.on(CliRenderEvents.DESTROY, destroyListener)
+
+    return {
+      get renderContext(): RenderContext {
+        return renderContext
+      },
+      get root(): Renderable {
+        return publicRoot
+      },
+      get width(): number {
+        return surfaceWidth
+      },
+      get height(): number {
+        return surfaceHeight
+      },
+      get isDestroyed(): boolean {
+        return surfaceDestroyed
+      },
+      render: renderSurface,
+      settle: settleSurface,
+      commitRows,
+      destroy: destroySurface,
+    }
+  }
+
+  // writeToScrollback is a "render to scrollback commit" API, not a direct stdout
+  // write. The callback returns a renderable tree, we render that tree into an
+  // off-screen OptimizedBuffer, then enqueue the result as one ExternalOutputCommit.
+  //
+  // Why this shape exists:
+  // - It keeps app-authored scrollback output in the same FIFO queue as captured
+  //   stdout, so ordering is deterministic even when both sources interleave.
+  // - It lets the render loop batch multiple queued commits into one native frame,
+  //   which is the key mechanism that avoids repeated sync/cursor toggles (flicker).
+  // - It reuses the normal renderable pipeline (layout, styling, grapheme shaping),
+  //   so scrollback payloads match what users see in the live UI.
+  //
+  // startOnNewLine and trailingNewline preserve newline intent when one logical
+  // write spans multiple commits. startOnNewLine adds a newline before this commit
+  // if the previous commit ended mid-row. trailingNewline adds a newline after this
+  // commit's final row.
+  //
+  // Native split append uses these flags to avoid glued rows (missing newline), and
+  // double-advance gaps (extra newline), while still appending payload and repainting
+  // footer in the same frame.
+  //
+  // Side effects: throws if split-footer capture mode is not active, transfers
+  // snapshot buffer ownership to the queue on success, triggers async render,
+  // and invokes snapshot teardown when cleanup runs.
+  public writeToScrollback(write: ScrollbackWriter): void {
+    if (this._screenMode !== "split-footer" || this._externalOutputMode !== "capture-stdout") {
+      throw new Error('writeToScrollback requires screenMode "split-footer" and externalOutputMode "capture-stdout"')
+    }
+
+    const snapshotContext = new ScrollbackSnapshotRenderContext(this.width, this.height, this.widthMethod)
+    const snapshot = write({
+      width: this.width,
+      widthMethod: this.widthMethod,
+      tailColumn: this.splitTailColumn,
+      renderContext: snapshotContext,
+    })
+
+    if (!snapshot || !snapshot.root) {
+      throw new Error("writeToScrollback must return a snapshot root renderable")
+    }
+
+    let renderFailed = false
+    let snapshotRoot: RootRenderable | null = null
+    let snapshotBuffer: OptimizedBuffer | null = null
+
+    try {
+      const rootRenderable = snapshot.root
+      const snapshotWidth = this.getSnapshotWidth(snapshot.width, rootRenderable.width)
+      const snapshotHeight = this.getSnapshotHeight(snapshot.height, rootRenderable.height)
+
+      snapshotContext.width = snapshotWidth
+      snapshotContext.height = snapshotHeight
+      snapshotContext.widthMethod = this.widthMethod
+
+      snapshotRoot = new RootRenderable(snapshotContext)
+      snapshotBuffer = OptimizedBuffer.create(snapshotWidth, snapshotHeight, this.widthMethod, {
+        id: "scrollback-snapshot-commit",
+      })
+
+      // Render through normal renderables so split scrollback output uses the same
+      // text shaping/styling pipeline as the rest of the renderer.
+      snapshotRoot.add(rootRenderable)
+      snapshotRoot.render(snapshotBuffer, 0)
+      this.enqueueRenderedScrollbackCommit({
+        snapshot: snapshotBuffer,
+        rowColumns: snapshot.rowColumns,
+        startOnNewLine: snapshot.startOnNewLine,
+        trailingNewline: snapshot.trailingNewline,
+      })
+    } catch (error) {
+      renderFailed = true
+      snapshotBuffer?.destroy()
+      throw error
+    } finally {
+      let cleanupError: unknown | null = null
+
+      try {
+        if (snapshotRoot) {
+          snapshotRoot.destroyRecursively()
+        } else {
+          snapshot.root.destroyRecursively()
+        }
+      } catch (error) {
+        cleanupError = error
+      }
+
+      try {
+        snapshot.teardown?.()
+      } catch (error) {
+        if (cleanupError === null) {
+          cleanupError = error
+        }
+      }
+
+      if (!renderFailed && cleanupError) {
+        throw cleanupError
+      }
+    }
+  }
+
+  private getSnapshotWidth(value: number | undefined, fallback: number): number {
+    const rawValue = value ?? fallback
+
+    if (!Number.isFinite(rawValue)) {
+      throw new Error("writeToScrollback produced a non-finite width")
+    }
+
+    return Math.min(Math.max(Math.trunc(rawValue), 1), Math.max(this.width, 1))
+  }
+
+  private getSnapshotHeight(value: number | undefined, fallback: number): number {
+    const rawValue = value ?? fallback
+
+    if (!Number.isFinite(rawValue)) {
+      throw new Error("writeToScrollback produced a non-finite height")
+    }
+
+    return Math.max(Math.trunc(rawValue), 1)
+  }
+
+  private getSnapshotRowWidths(snapshot: OptimizedBuffer, rowColumns: number): number[] {
+    const widths: number[] = []
+    const limit = Math.min(Math.max(Math.trunc(rowColumns), 0), snapshot.width)
+    const chars = snapshot.buffers.char
+
+    for (let y = 0; y < snapshot.height; y += 1) {
+      let x = limit
+
+      while (x > 0) {
+        const cp = chars[y * snapshot.width + x - 1]
+        if (cp === 0 || (cp & CHAR_FLAG_MASK) === CHAR_FLAG_CONTINUATION) {
+          x -= 1
+          continue
+        }
+
+        break
+      }
+
+      widths.push(x)
+    }
+
+    return widths
+  }
+
+  private publishSplitTailColumns(columns: number): void {
+    if (columns <= 0) {
+      return
+    }
+
+    const width = Math.max(this.width, 1)
+    let tail = this.splitTailColumn
+    let remaining = columns
+
+    while (remaining > 0) {
+      if (tail >= width) {
+        tail = 0
+      }
+
+      const step = Math.min(remaining, width - tail)
+      tail += step
+      remaining -= step
+
+      if (remaining > 0 && tail >= width) {
+        tail = 0
+      }
+    }
+
+    this.splitTailColumn = tail
+  }
+
+  private recordSplitCommit(commit: ExternalOutputCommit): void {
+    if (commit.startOnNewLine && this.splitTailColumn > 0) {
+      this.splitTailColumn = 0
+    }
+
+    const rowWidths = this.getSnapshotRowWidths(commit.snapshot, commit.rowColumns)
+    for (const [index, rowWidth] of rowWidths.entries()) {
+      this.publishSplitTailColumns(rowWidth)
+      if (index < rowWidths.length - 1 || commit.trailingNewline) {
+        this.splitTailColumn = 0
+      }
+    }
+  }
+
+  private enqueueRenderedScrollbackCommit(options: {
+    snapshot: OptimizedBuffer
+    rowColumns?: number
+    startOnNewLine?: boolean
+    trailingNewline?: boolean
+  }): void {
+    if (this._screenMode !== "split-footer" || this._externalOutputMode !== "capture-stdout") {
+      throw new Error('scrollback commit requires screenMode "split-footer" and externalOutputMode "capture-stdout"')
+    }
+
+    const rowColumns = Math.min(
+      Math.max(Math.trunc(options.rowColumns ?? options.snapshot.width), 0),
+      options.snapshot.width,
+    )
+
+    this.enqueueSplitCommit({
+      snapshot: options.snapshot,
+      rowColumns,
+      startOnNewLine: options.startOnNewLine ?? true,
+      trailingNewline: options.trailingNewline ?? true,
+    })
+
     this.requestRender()
   }
 
-  private interceptStdoutWrite = (chunk: any, encoding?: any, callback?: any): boolean => {
-    const text = chunk.toString()
+  private enqueueSplitCommit(commit: ExternalOutputCommit): void {
+    this.recordSplitCommit(commit)
+    this.externalOutputQueue.writeSnapshot(commit)
+  }
 
-    capture.write("stdout", text)
-    if (this._splitHeight > 0) {
-      this.requestRender()
+  private createStdoutSnapshotCommit(line: string, trailingNewline: boolean): ExternalOutputCommit {
+    // Convert captured stdout into the same commit shape used by writeToScrollback.
+    // One commit format keeps split append behavior consistent across both sources.
+    const snapshotContext = new ScrollbackSnapshotRenderContext(this.width, 1, this.widthMethod)
+    const maxWidth = Math.max(1, this.width)
+    const lineCells = [...line]
+    const rowColumns = Math.min(lineCells.length, maxWidth)
+    const renderedLine = lineCells.slice(0, maxWidth).join("")
+    const snapshotRoot = new RootRenderable(snapshotContext)
+    const snapshotRenderable = new TextRenderable(snapshotContext, {
+      id: "captured-stdout-snapshot",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: Math.max(1, rowColumns),
+      height: 1,
+      content: renderedLine,
+    })
+    const snapshotBuffer = OptimizedBuffer.create(Math.max(1, rowColumns), 1, this.widthMethod, {
+      id: "captured-stdout-snapshot",
+    })
+
+    try {
+      snapshotRoot.add(snapshotRenderable)
+      snapshotRoot.render(snapshotBuffer, 0)
+      return {
+        snapshot: snapshotBuffer,
+        rowColumns,
+        startOnNewLine: false,
+        trailingNewline,
+      }
+    } catch (error) {
+      snapshotBuffer.destroy()
+      throw error
+    } finally {
+      snapshotRoot.destroyRecursively()
+    }
+  }
+
+  private splitStdoutRows(text: string): Array<{ line: string; trailingNewline: boolean }> {
+    // Captured stdout arrives as an arbitrary byte stream, but split append commits
+    // are row-based (line text + whether that row ended with '\n'). We normalize
+    // here because native split append expects already-decoded row intent, not raw
+    // control characters.
+    //
+    // '\r' must restart the in-progress row so in-place status updates (progress
+    // bars/spinners) do not accumulate stale prefixes in scrollback. '\n' commits
+    // the row and marks newline intent for the final chunk of that logical row.
+    const rows: Array<{ line: string; trailingNewline: boolean }> = []
+    let current = ""
+
+    for (const char of text) {
+      if (char === "\r") {
+        current = ""
+        continue
+      }
+
+      if (char === "\n") {
+        rows.push({ line: current, trailingNewline: true })
+        current = ""
+        continue
+      }
+
+      current += char
     }
 
-    if (typeof callback === "function") {
-      process.nextTick(callback)
+    if (current.length > 0) {
+      rows.push({ line: current, trailingNewline: false })
+    }
+
+    return rows
+  }
+
+  private createStdoutSnapshotCommits(text: string): ExternalOutputCommit[] {
+    if (text.length === 0) {
+      return []
+    }
+
+    // Chunk captured stdout into width-bounded row commits so each commit is a
+    // small, deterministic append step. This keeps bursty output smooth while
+    // preserving newline ownership on the final chunk of each logical row.
+    const commits: ExternalOutputCommit[] = []
+    // Split commits are row-oriented snapshots. We chunk by renderer width so each
+    // commit maps to a single logical terminal row append operation.
+    const chunkWidth = Math.max(1, this.width)
+    for (const row of this.splitStdoutRows(text)) {
+      const rowCells = [...row.line]
+      if (rowCells.length === 0) {
+        // Preserve empty-line writes: newline-only chunks still need a commit so
+        // split scrollback state advances correctly in native code.
+        commits.push(this.createStdoutSnapshotCommit("", row.trailingNewline))
+        continue
+      }
+
+      let offset = 0
+      while (offset < rowCells.length) {
+        const chunk = rowCells.slice(offset, offset + chunkWidth).join("")
+        offset += chunkWidth
+        const isLastChunk = offset >= rowCells.length
+        // Only the final wrapped chunk carries newline intent.
+        commits.push(this.createStdoutSnapshotCommit(chunk, isLastChunk ? row.trailingNewline : false))
+      }
+    }
+
+    return commits
+  }
+
+  private flushPendingSplitCommits(forceFooterRepaint: boolean = false): void {
+    // Drain only a bounded prefix so one JS render pass maps to one native frame.
+    // Remaining commits are intentionally left queued and rendered on subsequent
+    // ticks to avoid giant multi-thousand-cell frames that can flicker.
+    const commits = this.externalOutputQueue.claim(this.maxSplitCommitsPerFrame)
+    let hasCommittedOutput = false
+    const lastCommitIndex = commits.length - 1
+
+    for (const [index, commit] of commits.entries()) {
+      // Force repaint only on the last commit in a frame. Repainting after every
+      // chunk negates batching and reintroduces duplicate clear/move traffic.
+      const forceCommit = forceFooterRepaint && index === lastCommitIndex
+      // beginFrame/finalizeFrame tell native code whether this commit opens or
+      // closes the shared frame envelope. Intermediate commits append payload only.
+      const beginFrame = index === 0
+      const finalizeFrame = index === lastCommitIndex
+
+      try {
+        // Keep split append policy in native code so every producer (captured stdout
+        // and writeToScrollback) shares the same cursor/scrollback invariants.
+        this.renderOffset = this.lib.commitSplitFooterSnapshot(
+          this.rendererPtr,
+          commit.snapshot,
+          commit.rowColumns,
+          commit.startOnNewLine,
+          commit.trailingNewline,
+          this.getSplitPinnedRenderOffset(),
+          forceCommit,
+          beginFrame,
+          finalizeFrame,
+        )
+        hasCommittedOutput = true
+      } finally {
+        commit.snapshot.destroy()
+      }
+    }
+
+    if (!hasCommittedOutput) {
+      this.renderOffset = this.lib.repaintSplitFooter(
+        this.rendererPtr,
+        this.getSplitPinnedRenderOffset(),
+        forceFooterRepaint,
+      )
+    }
+
+    this.pendingSplitFooterTransition = null
+
+    if (this.externalOutputQueue.size > 0) {
+      // Preserve FIFO ordering without doing unbounded work in one tick.
+      // This keeps sustained stdout bursts smooth instead of blocking on one frame.
+      this.requestRender()
+    }
+  }
+
+  private interceptStdoutWrite = (chunk: any, encoding?: any, callback?: any): boolean => {
+    const resolvedCallback = typeof encoding === "function" ? encoding : callback
+    const resolvedEncoding = typeof encoding === "string" ? encoding : undefined
+    const text = typeof chunk === "string" ? chunk : (chunk?.toString(resolvedEncoding) ?? "")
+
+    if (this._externalOutputMode === "capture-stdout" && this._screenMode === "split-footer" && this._splitHeight > 0) {
+      // Capture mode intentionally diverts stdout into split commit snapshots
+      // instead of writing directly to process stdout. Native flushing will append
+      // and repaint in one controlled frame, which is what avoids footer flicker.
+      const commits = this.createStdoutSnapshotCommits(text)
+      for (const commit of commits) {
+        this.enqueueSplitCommit(commit)
+      }
+
+      if (commits.length > 0) {
+        // Defer actual terminal writes to the render loop so commits can be batched.
+        this.requestRender()
+      }
+    }
+
+    if (typeof resolvedCallback === "function") {
+      process.nextTick(resolvedCallback)
     }
 
     return true
   }
 
-  public disableStdoutInterception(): void {
-    this.stdout.write = this.realStdoutWrite
+  private getSplitPinnedRenderOffset(): number {
+    return this._screenMode === "split-footer" ? Math.max(this._terminalHeight - this._splitHeight, 0) : 0
+  }
+
+  private getSplitCursorSeedRows(): number {
+    const cursorState = this.lib.getCursorState(this.rendererPtr)
+    const cursorRow = Number.isFinite(cursorState.y) ? Math.max(Math.trunc(cursorState.y), 1) : 1
+    return Math.min(cursorRow, Math.max(this._terminalHeight, 1))
+  }
+
+  private flushPendingSplitOutputBeforeTransition(forceFooterRepaint: boolean = false): void {
+    if (
+      this._screenMode !== "split-footer" ||
+      this._splitHeight <= 0 ||
+      this._externalOutputMode !== "capture-stdout"
+    ) {
+      return
+    }
+
+    if (this.externalOutputQueue.size === 0 && !forceFooterRepaint) {
+      return
+    }
+
+    this.flushPendingSplitCommits(forceFooterRepaint)
+  }
+
+  private resetSplitScrollback(seedRows: number = 0): void {
+    this.splitTailColumn = 0
+    this.renderOffset = this.lib.resetSplitScrollback(this.rendererPtr, seedRows, this.getSplitPinnedRenderOffset())
+  }
+
+  private syncSplitScrollback(): void {
+    this.renderOffset = this.lib.syncSplitScrollback(this.rendererPtr, this.getSplitPinnedRenderOffset())
+  }
+
+  private clearPendingSplitFooterTransition(): void {
+    if (this.pendingSplitFooterTransition === null) {
+      return
+    }
+
+    this.pendingSplitFooterTransition = null
+    this.lib.clearPendingSplitFooterTransition(this.rendererPtr)
+  }
+
+  private setPendingSplitFooterTransition(transition: PendingSplitFooterTransition): void {
+    this.pendingSplitFooterTransition = transition
+    this.lib.setPendingSplitFooterTransition(
+      this.rendererPtr,
+      transition.mode === "viewport-scroll" ? 1 : 2,
+      transition.sourceTopLine,
+      transition.sourceHeight,
+      transition.targetTopLine,
+      transition.targetHeight,
+    )
+  }
+
+  private syncSplitFooterState(): void {
+    const splitActive = this._screenMode === "split-footer" && this._splitHeight > 0
+
+    if (!splitActive) {
+      this.clearPendingSplitFooterTransition()
+      this.splitTailColumn = 0
+      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0)
+      this.renderOffset = 0
+      this.lib.setRenderOffset(this.rendererPtr, this.renderOffset)
+      return
+    }
+
+    if (this._externalOutputMode === "capture-stdout") {
+      this.syncSplitScrollback()
+    } else {
+      this.clearPendingSplitFooterTransition()
+      this.splitTailColumn = 0
+      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0)
+      this.renderOffset = this.getSplitPinnedRenderOffset()
+      this.lib.setRenderOffset(this.rendererPtr, this.renderOffset)
+    }
+  }
+
+  private clearStaleSplitSurfaceRows(
+    previousTopLine: number,
+    previousHeight: number,
+    nextTopLine: number,
+    nextHeight: number,
+  ): void {
+    if (!this._terminalIsSetup || previousHeight <= 0 || this._terminalHeight <= 0) {
+      return
+    }
+
+    const terminalBottom = this._terminalHeight
+    const previousStart = Math.max(1, previousTopLine)
+    const previousEnd = Math.min(terminalBottom, previousTopLine + previousHeight - 1)
+
+    if (previousEnd < previousStart) {
+      return
+    }
+
+    const nextStart = Math.max(1, nextTopLine)
+    const nextEnd = Math.min(terminalBottom, nextTopLine + Math.max(nextHeight, 0) - 1)
+
+    let clear = ""
+    for (let line = previousStart; line <= previousEnd; line += 1) {
+      if (line >= nextStart && line <= nextEnd) {
+        continue
+      }
+
+      clear += `${ANSI.moveCursor(line, 1)}\x1b[2K`
+    }
+
+    if (clear.length > 0) {
+      this.writeOut(clear)
+    }
+  }
+
+  private applyScreenMode(screenMode: ScreenMode, emitResize: boolean = true, requestRender: boolean = true): void {
+    const prevScreenMode = this._screenMode
+    const prevSplitHeight = this._splitHeight
+    const nextGeometry = calculateRenderGeometry(
+      screenMode,
+      this._terminalWidth,
+      this._terminalHeight,
+      this._footerHeight,
+    )
+    const nextSplitHeight = nextGeometry.effectiveFooterHeight
+
+    if (prevScreenMode === screenMode && prevSplitHeight === nextSplitHeight) {
+      return
+    }
+
+    const prevUseAlternateScreen = prevScreenMode === "alternate-screen"
+    const nextUseAlternateScreen = screenMode === "alternate-screen"
+    const terminalScreenModeChanged = this._terminalIsSetup && prevUseAlternateScreen !== nextUseAlternateScreen
+    const leavingSplitFooter = prevSplitHeight > 0 && nextSplitHeight === 0
+
+    if (this._terminalIsSetup && prevSplitHeight > 0) {
+      this.flushPendingSplitOutputBeforeTransition()
+    }
+
+    const previousSurfaceTopLine = this.renderOffset + 1
+    const previousPinnedRenderOffset = Math.max(this._terminalHeight - prevSplitHeight, 0)
+    const splitWasSettled = prevSplitHeight === 0 || this.renderOffset >= previousPinnedRenderOffset
+    const shouldUseViewportScrollTransitions = this._externalOutputMode !== "capture-stdout" || splitWasSettled
+    const shouldDeferSplitFooterResizeTransition =
+      this._terminalIsSetup &&
+      prevScreenMode === "split-footer" &&
+      screenMode === "split-footer" &&
+      this._externalOutputMode === "capture-stdout" &&
+      prevSplitHeight > 0 &&
+      nextSplitHeight > 0 &&
+      !terminalScreenModeChanged
+    const splitStartupSeedBlocksFirstNativeFrame =
+      this.pendingSplitStartupCursorSeed && this.splitStartupSeedTimeoutId !== null
+    const splitTransitionSourceTopLine = this.pendingSplitFooterTransition?.sourceTopLine ?? previousSurfaceTopLine
+    const splitTransitionSourceHeight = this.pendingSplitFooterTransition?.sourceHeight ?? prevSplitHeight
+    const splitTransitionMode =
+      this.pendingSplitFooterTransition?.mode ?? (splitWasSettled ? "viewport-scroll" : "clear-stale-rows")
+
+    if (this._terminalIsSetup && leavingSplitFooter) {
+      this.clearPendingSplitFooterTransition()
+      this.renderOffset = 0
+      this.lib.setRenderOffset(this.rendererPtr, 0)
+    }
+
+    if (
+      this._terminalIsSetup &&
+      !terminalScreenModeChanged &&
+      shouldUseViewportScrollTransitions &&
+      !shouldDeferSplitFooterResizeTransition
+    ) {
+      if (prevSplitHeight === 0 && nextSplitHeight > 0) {
+        const freedLines = this._terminalHeight - nextSplitHeight
+        const scrollDown = ANSI.scrollDown(freedLines)
+        this.writeOut(scrollDown)
+      } else if (prevSplitHeight > nextSplitHeight && nextSplitHeight > 0) {
+        const freedLines = prevSplitHeight - nextSplitHeight
+        const scrollDown = ANSI.scrollDown(freedLines)
+        this.writeOut(scrollDown)
+      } else if (prevSplitHeight < nextSplitHeight && prevSplitHeight > 0) {
+        const additionalLines = nextSplitHeight - prevSplitHeight
+        const scrollUp = ANSI.scrollUp(additionalLines)
+        this.writeOut(scrollUp)
+      }
+    }
+
+    this._screenMode = screenMode
+    this._splitHeight = nextSplitHeight
+    this.width = nextGeometry.renderWidth
+    this.height = nextGeometry.renderHeight
+
+    this.lib.resizeRenderer(this.rendererPtr, this.width, this.height)
+
+    if (this._screenMode === "split-footer" && this._externalOutputMode === "capture-stdout") {
+      if (prevScreenMode !== "split-footer") {
+        this.resetSplitScrollback(this.getSplitCursorSeedRows())
+      } else {
+        this.syncSplitScrollback()
+      }
+
+      if (shouldDeferSplitFooterResizeTransition) {
+        if (splitStartupSeedBlocksFirstNativeFrame) {
+          this.clearPendingSplitFooterTransition()
+        } else {
+          this.setPendingSplitFooterTransition({
+            mode: splitTransitionMode,
+            sourceTopLine: splitTransitionSourceTopLine,
+            sourceHeight: splitTransitionSourceHeight,
+            targetTopLine: this.renderOffset + 1,
+            targetHeight: nextSplitHeight,
+          })
+        }
+        this.forceFullRepaintRequested = true
+      } else if (!shouldUseViewportScrollTransitions && prevSplitHeight > 0 && nextSplitHeight > 0) {
+        this.clearPendingSplitFooterTransition()
+        this.clearStaleSplitSurfaceRows(previousSurfaceTopLine, prevSplitHeight, this.renderOffset + 1, nextSplitHeight)
+      } else {
+        this.clearPendingSplitFooterTransition()
+      }
+    } else {
+      this.syncSplitFooterState()
+    }
+
+    this.nextRenderBuffer = this.lib.getNextBuffer(this.rendererPtr)
+    this.currentRenderBuffer = this.lib.getCurrentBuffer(this.rendererPtr)
+
+    this._console.resize(this.width, this.height)
+    this.root.resize(this.width, this.height)
+
+    if (terminalScreenModeChanged) {
+      this.lib.suspendRenderer(this.rendererPtr)
+      this.lib.setupTerminal(this.rendererPtr, nextUseAlternateScreen)
+
+      if (this._useMouse) {
+        this.enableMouse()
+      }
+    }
+
+    if (emitResize) {
+      this.emit(CliRenderEvents.RESIZE, this.width, this.height)
+    }
+
+    if (requestRender) {
+      this.requestRender()
+    }
   }
 
   // TODO: Move this to native
   private flushStdoutCache(space: number, force: boolean = false): boolean {
-    if (capture.size === 0 && !force) return false
+    if (this.externalOutputQueue.size === 0 && !force) return false
 
-    const output = capture.claimOutput()
+    const outputCommits = this.externalOutputQueue.claim()
+    let output = ""
+    for (const commit of outputCommits) {
+      output += `[snapshot ${commit.snapshot.width}x${commit.snapshot.height}]\n`
+      commit.snapshot.destroy()
+    }
 
-    const rendererStartLine = this._terminalHeight - this._splitHeight
+    const rendererStartLine = this.renderOffset + 1
     const flush = ANSI.moveCursorAndClear(rendererStartLine, 1)
 
-    const outputLine = this._terminalHeight - this._splitHeight
+    const outputLine = this.renderOffset + 1
     const move = ANSI.moveCursor(outputLine, 1)
 
     let clear = ""
@@ -1062,10 +2502,12 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
   public enableKittyKeyboard(flags: number = 0b00011): void {
     this.lib.enableKittyKeyboard(this.rendererPtr, flags)
+    this.updateStdinParserProtocolContext({ kittyKeyboardEnabled: true })
   }
 
   public disableKittyKeyboard(): void {
     this.lib.disableKittyKeyboard(this.rendererPtr)
+    this.updateStdinParserProtocolContext({ kittyKeyboardEnabled: false }, true)
   }
 
   public set useThread(useThread: boolean) {
@@ -1079,7 +2521,13 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     if (this._terminalIsSetup) return
     this._terminalIsSetup = true
 
-    this.lib.setupTerminal(this.rendererPtr, this._useAlternateScreen)
+    const startupCursorCprActive = this._screenMode === "split-footer" && this._externalOutputMode === "capture-stdout"
+    this.updateStdinParserProtocolContext({
+      privateCapabilityRepliesActive: true,
+      explicitWidthCprActive: true,
+      startupCursorCprActive,
+    })
+    this.lib.setupTerminal(this.rendererPtr, this._screenMode === "alternate-screen")
     this._capabilities = this.lib.getTerminalCapabilities(this.rendererPtr)
 
     if (this.debugOverlay.enabled) {
@@ -1093,14 +2541,56 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
     this.capabilityTimeoutId = this.clock.setTimeout(() => {
       this.capabilityTimeoutId = null
+      this.pendingSplitStartupCursorSeed = false
+
+      if (this.splitStartupSeedTimeoutId !== null) {
+        this.clock.clearTimeout(this.splitStartupSeedTimeoutId)
+        this.splitStartupSeedTimeoutId = null
+      }
+
+      if (this._screenMode === "split-footer" && this._externalOutputMode === "capture-stdout") {
+        this.requestRender()
+      }
+
       this.removeInputHandler(this.capabilityHandler)
+      this.updateStdinParserProtocolContext(
+        {
+          privateCapabilityRepliesActive: false,
+          explicitWidthCprActive: false,
+          startupCursorCprActive: false,
+        },
+        true,
+      )
     }, 5000)
 
     if (this._useMouse) {
       this.enableMouse()
     }
 
+    if (this._screenMode === "split-footer" && this._externalOutputMode === "capture-stdout") {
+      this.pendingSplitStartupCursorSeed = true
+
+      if (this.splitStartupSeedTimeoutId !== null) {
+        this.clock.clearTimeout(this.splitStartupSeedTimeoutId)
+      }
+
+      this.splitStartupSeedTimeoutId = this.clock.setTimeout(() => {
+        this.splitStartupSeedTimeoutId = null
+
+        if (!this.pendingSplitStartupCursorSeed) {
+          return
+        }
+
+        this.updateStdinParserProtocolContext({ startupCursorCprActive: false })
+
+        if (this._screenMode === "split-footer" && this._externalOutputMode === "capture-stdout") {
+          this.requestRender()
+        }
+      }, 120)
+    }
+
     this.queryPixelResolution()
+    this.ensureNativePaletteState()
   }
 
   private stdinListener: (chunk: Buffer | string) => void = ((chunk: Buffer | string) => {
@@ -1111,11 +2601,6 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.stdinParser.push(data)
       this.drainStdinParser()
     } catch (error) {
-      writeFermiOpenTuiDiag("stdin.parser.throw", {
-        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
-        chunkLength: data.length,
-        chunkHex: data.subarray(0, 64).toString("hex"),
-      })
       this.handleStdinParserFailure(error)
     }
   }).bind(this)
@@ -1132,6 +2617,12 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     this.sequenceHandlers = this.sequenceHandlers.filter((candidate) => candidate !== handler)
   }
 
+  private updateStdinParserProtocolContext(patch: Partial<StdinParserProtocolContext>, drain = false): void {
+    if (!this.stdinParser) return
+    this.stdinParser.updateProtocolContext(patch)
+    if (drain) this.drainStdinParser()
+  }
+
   public subscribeOsc(handler: (sequence: string) => void): () => void {
     this.oscSubscribers.add(handler)
     return () => {
@@ -1139,14 +2630,52 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     }
   }
 
-  private capabilityHandler: (sequence: string) => boolean = ((sequence: string) => {
-    if (isCapabilityResponse(sequence)) {
-      this.lib.processCapabilityResponse(this.rendererPtr, sequence)
-      this._capabilities = this.lib.getTerminalCapabilities(this.rendererPtr)
-      this.emit("capabilities", this._capabilities)
-      return true
+  private processCapabilitySequence(sequence: string, hasCursorReport: boolean): boolean {
+    const hasStandardCapabilitySignature = isCapabilityResponse(sequence)
+    const shouldProcessAsCapability =
+      hasStandardCapabilitySignature || (hasCursorReport && this.capabilityTimeoutId !== null)
+
+    if (!shouldProcessAsCapability) {
+      return false
     }
-    return false
+
+    this.lib.processCapabilityResponse(this.rendererPtr, sequence)
+    this._capabilities = this.lib.getTerminalCapabilities(this.rendererPtr)
+    if (hasStandardCapabilitySignature) {
+      this.forceFullRepaintRequested = true
+      this.requestRender()
+    }
+    this.emit(CliRenderEvents.CAPABILITIES, this._capabilities)
+
+    const hadPendingSplitStartupCursorSeed = this.pendingSplitStartupCursorSeed
+
+    if (
+      hadPendingSplitStartupCursorSeed &&
+      hasCursorReport &&
+      this._screenMode === "split-footer" &&
+      this._externalOutputMode === "capture-stdout"
+    ) {
+      this.resetSplitScrollback(this.getSplitCursorSeedRows())
+      this.clearPendingSplitFooterTransition()
+      this.pendingSplitStartupCursorSeed = false
+      this.updateStdinParserProtocolContext({ startupCursorCprActive: false })
+
+      if (this.splitStartupSeedTimeoutId !== null) {
+        this.clock.clearTimeout(this.splitStartupSeedTimeoutId)
+        this.splitStartupSeedTimeoutId = null
+      }
+
+      this.requestRender()
+    }
+
+    const consumeStartupCursorReport =
+      hadPendingSplitStartupCursorSeed && hasCursorReport && this.splitStartupSeedTimeoutId !== null
+
+    return hasStandardCapabilitySignature || consumeStartupCursorReport
+  }
+
+  private capabilityHandler: (sequence: string) => boolean = ((sequence: string) => {
+    return this.processCapabilitySequence(sequence, false)
   }).bind(this)
 
   private focusHandler: (sequence: string) => boolean = ((sequence: string) => {
@@ -1159,29 +2688,17 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         this.lib.restoreTerminalModes(this.rendererPtr)
         this.shouldRestoreModesOnNextFocus = false
       }
-      this.emit("focus")
+      if (this._terminalFocusState !== true) {
+        this._terminalFocusState = true
+        this.emit(CliRenderEvents.FOCUS)
+      }
       return true
     }
     if (sequence === "\x1b[O") {
       this.shouldRestoreModesOnNextFocus = true
-      this.emit("blur")
-      return true
-    }
-    return false
-  }).bind(this)
-
-  private themeModeHandler: (sequence: string) => boolean = ((sequence: string) => {
-    if (sequence === "\x1b[?997;1n") {
-      if (this._themeMode !== "dark") {
-        this._themeMode = "dark"
-        this.emit("theme_mode", "dark")
-      }
-      return true
-    }
-    if (sequence === "\x1b[?997;2n") {
-      if (this._themeMode !== "light") {
-        this._themeMode = "light"
-        this.emit("theme_mode", "light")
+      if (this._terminalFocusState !== false) {
+        this._terminalFocusState = false
+        this.emit(CliRenderEvents.BLUR)
       }
       return true
     }
@@ -1223,19 +2740,6 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         this._keyHandler.processParsedKey(event.key)
         return
       case "mouse":
-        writeFermiOpenTuiDiag("stdin.mouse", {
-          rawPreview: previewLatin1Sequence(event.raw),
-          rawHex: previewLatin1Hex(event.raw),
-          encoding: event.encoding,
-          mouse: {
-            type: event.event.type,
-            button: event.event.button,
-            x: event.event.x,
-            y: event.event.y,
-            modifiers: event.event.modifiers,
-            scroll: event.event.scroll,
-          },
-        })
         if (this._useMouse && this.processSingleMouseEvent(event.event)) {
           return
         }
@@ -1250,6 +2754,10 @@ export class CliRenderer extends EventEmitter implements RenderContext {
           for (const subscriber of this.oscSubscribers) {
             subscriber(event.sequence)
           }
+        }
+
+        if (event.protocol === "cpr" && this.processCapabilitySequence(event.sequence, true)) {
+          return
         }
 
         this.dispatchSequenceHandlers(event.sequence)
@@ -1285,8 +2793,9 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         const resolution = parsePixelResolution(sequence)
         if (resolution) {
           this._resolution = resolution
-          this.waitingForPixelResolution = false
         }
+        this.waitingForPixelResolution = false
+        this.updateStdinParserProtocolContext({ pixelResolutionQueryActive: false }, true)
         return true
       }
       return false
@@ -1299,8 +2808,8 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.stdin.setRawMode(true)
     }
 
-    this.stdin.resume()
     this.stdin.on("data", this.stdinListener)
+    this.stdin.resume()
   }
 
   private dispatchMouseEvent(
@@ -1331,7 +2840,6 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
   private describeRenderable(renderable: Renderable | null | undefined): Record<string, unknown> | null {
     if (!renderable) return null
-
     const node = renderable as Renderable & { id?: string; width?: number; height?: number }
     return {
       num: node.num,
@@ -1460,16 +2968,6 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     const sameElement = maybeRenderableId === this.lastOverRenderableNum
     this.lastOverRenderableNum = maybeRenderableId
     const maybeRenderable = Renderable.renderablesByNumber.get(maybeRenderableId)
-    if (mouseEvent.type !== "move" || !sameElement) {
-      writeFermiOpenTuiDiag("renderer.mouse.pointer", {
-        type: mouseEvent.type,
-        pointer: { x: mouseEvent.x, y: mouseEvent.y },
-        hitId: maybeRenderableId,
-        sameElement,
-        hitRenderable: this.describeRenderable(maybeRenderable),
-        capturedRenderable: this.describeRenderable(this.capturedRenderable),
-      })
-    }
 
     if (
       mouseEvent.type === "down" &&
@@ -1479,9 +2977,9 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     ) {
       const canStartSelection = Boolean(
         maybeRenderable &&
-          maybeRenderable.selectable &&
-          !maybeRenderable.isDestroyed &&
-          maybeRenderable.shouldStartSelection(mouseEvent.x, mouseEvent.y),
+        maybeRenderable.selectable &&
+        !maybeRenderable.isDestroyed &&
+        maybeRenderable.shouldStartSelection(mouseEvent.x, mouseEvent.y),
       )
 
       if (canStartSelection && maybeRenderable) {
@@ -1497,7 +2995,10 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.updateSelection(maybeRenderable, mouseEvent.x, mouseEvent.y)
 
       if (maybeRenderable) {
-        const event = new MouseEvent(maybeRenderable, { ...mouseEvent, isDragging: true })
+        const event = new MouseEvent(maybeRenderable, {
+          ...mouseEvent,
+          isDragging: true,
+        })
         maybeRenderable.processMouseEvent(event)
       }
 
@@ -1506,7 +3007,10 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
     if (mouseEvent.type === "up" && this.currentSelection?.isDragging) {
       if (maybeRenderable) {
-        const event = new MouseEvent(maybeRenderable, { ...mouseEvent, isDragging: true })
+        const event = new MouseEvent(maybeRenderable, {
+          ...mouseEvent,
+          isDragging: true,
+        })
         maybeRenderable.processMouseEvent(event)
       }
 
@@ -1528,7 +3032,10 @@ export class CliRenderer extends EventEmitter implements RenderContext {
         this.lastOverRenderable !== this.capturedRenderable &&
         !this.lastOverRenderable.isDestroyed
       ) {
-        const event = new MouseEvent(this.lastOverRenderable, { ...mouseEvent, type: "out" })
+        const event = new MouseEvent(this.lastOverRenderable, {
+          ...mouseEvent,
+          type: "out",
+        })
         this.lastOverRenderable.processMouseEvent(event)
       }
       this.lastOverRenderable = maybeRenderable
@@ -1549,7 +3056,10 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     }
 
     if (this.capturedRenderable && mouseEvent.type === "up") {
-      const event = new MouseEvent(this.capturedRenderable, { ...mouseEvent, type: "drag-end" })
+      const event = new MouseEvent(this.capturedRenderable, {
+        ...mouseEvent,
+        type: "drag-end",
+      })
       this.capturedRenderable.processMouseEvent(event)
       this.capturedRenderable.processMouseEvent(new MouseEvent(this.capturedRenderable, mouseEvent))
       if (maybeRenderable) {
@@ -1606,12 +3116,6 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.lastOverRenderableNum = hitId
       return
     }
-    writeFermiOpenTuiDiag("renderer.hover.recheck", {
-      pointer: { x: this._latestPointer.x, y: this._latestPointer.y },
-      previous: this.describeRenderable(lastOver),
-      next: this.describeRenderable(hitRenderable),
-      hitId,
-    })
 
     const baseEvent: RawMouseEvent = {
       type: "move",
@@ -1665,7 +3169,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.lastMemorySnapshot.arrayBuffers,
     )
 
-    this.emit("memory:snapshot", this.lastMemorySnapshot)
+    this.emit(CliRenderEvents.MEMORY_SNAPSHOT, this.lastMemorySnapshot)
   }
 
   private startMemorySnapshotTimer(): void {
@@ -1714,13 +3218,28 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
   private queryPixelResolution() {
     this.waitingForPixelResolution = true
+    this.updateStdinParserProtocolContext({ pixelResolutionQueryActive: true })
     this.lib.queryPixelResolution(this.rendererPtr)
   }
 
   private processResize(width: number, height: number): void {
     if (width === this._terminalWidth && height === this._terminalHeight) return
 
+    if (this._terminalIsSetup && this._controlState !== RendererControlState.EXPLICIT_SUSPENDED) {
+      this.flushPendingSplitOutputBeforeTransition()
+    }
+
+    const pendingSplitFooterTransition = this.pendingSplitFooterTransition
+    const previousGeometry = calculateRenderGeometry(
+      this._screenMode,
+      this._terminalWidth,
+      this._terminalHeight,
+      this._footerHeight,
+    )
     const prevWidth = this._terminalWidth
+    const previousTerminalHeight = this._terminalHeight
+    const visiblePreviousSplitHeight =
+      pendingSplitFooterTransition?.sourceHeight ?? previousGeometry.effectiveFooterHeight
 
     this._terminalWidth = width
     this._terminalHeight = height
@@ -1729,29 +3248,57 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     this.setCapturedRenderable(undefined)
     this.stdinParser?.resetMouseState()
 
-    if (this._splitHeight > 0) {
-      // TODO: Handle resizing split mode properly
-      if (width < prevWidth) {
-        const start = this._terminalHeight - this._splitHeight * 2
-        const flush = ANSI.moveCursorAndClear(start, 1)
+    const nextGeometry = calculateRenderGeometry(
+      this._screenMode,
+      this._terminalWidth,
+      this._terminalHeight,
+      this._footerHeight,
+    )
+    const splitFooterActive = this._screenMode === "split-footer"
+
+    if (splitFooterActive) {
+      // Width shrink historically needs a broader scrub band, but if resize interrupts
+      // a deferred footer transition we also need to clear from that visible source surface.
+      let clearStart: number | null = null
+
+      if (width < prevWidth && visiblePreviousSplitHeight > 0) {
+        clearStart = Math.max(previousTerminalHeight - visiblePreviousSplitHeight * 2, 1)
+      }
+
+      if (pendingSplitFooterTransition !== null) {
+        clearStart =
+          clearStart === null
+            ? pendingSplitFooterTransition.sourceTopLine
+            : Math.min(clearStart, pendingSplitFooterTransition.sourceTopLine)
+      }
+
+      if (clearStart !== null) {
+        const flush = ANSI.moveCursorAndClear(clearStart, 1)
         this.writeOut(flush)
       }
-      this.renderOffset = height - this._splitHeight
-      this.width = width
-      this.height = this._splitHeight
+
       this.currentRenderBuffer.clear(this.backgroundColor)
-      this.lib.setRenderOffset(this.rendererPtr, this.renderOffset)
-    } else {
-      this.width = width
-      this.height = height
     }
 
+    this.clearPendingSplitFooterTransition()
+
+    this._splitHeight = nextGeometry.effectiveFooterHeight
+    this.width = nextGeometry.renderWidth
+    this.height = nextGeometry.renderHeight
+
     this.lib.resizeRenderer(this.rendererPtr, this.width, this.height)
+
+    if (this._screenMode === "split-footer" && this._externalOutputMode === "capture-stdout") {
+      this.syncSplitScrollback()
+    } else {
+      this.syncSplitFooterState()
+    }
+
     this.nextRenderBuffer = this.lib.getNextBuffer(this.rendererPtr)
     this.currentRenderBuffer = this.lib.getCurrentBuffer(this.rendererPtr)
     this._console.resize(this.width, this.height)
     this.root.resize(this.width, this.height)
-    this.emit("resize", this.width, this.height)
+    this.emit(CliRenderEvents.RESIZE, this.width, this.height)
     this.requestRender()
   }
 
@@ -1791,6 +3338,15 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
   public setTerminalTitle(title: string): void {
     this.lib.setTerminalTitle(this.rendererPtr, title)
+  }
+
+  /**
+   * Reset the terminal background color to its default via OSC 111.
+   * Called automatically by destroy() and suspend(), but exposed for
+   * consumers that need explicit control (e.g. before SIGTSTP).
+   */
+  public resetTerminalBgColor(): void {
+    process.stdout.write("\x1b]111\x07")
   }
 
   public copyToClipboardOSC52(text: string, target?: ClipboardTarget): boolean {
@@ -1909,6 +3465,11 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     if (!this._isRunning && !this._isDestroyed) {
       this._isRunning = true
 
+      // Invalidate any queued idle one-shot frame.
+      // start()/live/resume transition to the continuous loop, so queued
+      // activateFrame callbacks must no-op via !updateScheduled.
+      this.updateScheduled = false
+
       if (this.memorySnapshotInterval > 0) {
         this.startMemorySnapshotTimer()
       }
@@ -1928,12 +3489,26 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     this._controlState = RendererControlState.EXPLICIT_SUSPENDED
     this.internalPause()
 
+    if (this._terminalIsSetup) {
+      this.flushPendingSplitOutputBeforeTransition(true)
+    }
+
     this._suspendedMouseEnabled = this._useMouse
 
     this.disableMouse()
     this.removeExitListeners()
+    this.waitingForPixelResolution = false
+    this.updateStdinParserProtocolContext({
+      privateCapabilityRepliesActive: false,
+      pixelResolutionQueryActive: false,
+      explicitWidthCprActive: false,
+      startupCursorCprActive: false,
+    })
     this.stdinParser?.reset()
     this.stdin.removeListener("data", this.stdinListener)
+
+    this.themeModeState.cancelRefresh()
+
     this.lib.suspendRenderer(this.rendererPtr)
 
     if (this.stdin.setRawMode) {
@@ -1948,16 +3523,19 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.stdin.setRawMode(true)
     }
 
+    // Drain any input buffered during suspension before registering the
+    // listener. Adding a "data" listener can auto-resume a Readable, so the
+    // drain must come first while the stream is still paused and read()
+    // pulls from the internal buffer rather than being a flowing-mode no-op.
+    while (this.stdin.read() !== null) {}
+    this.stdin.on("data", this.stdinListener)
     this.stdin.resume()
     this.addExitListeners()
 
-    setImmediate(() => {
-      // Consume any existing stdin data to avoid processing stale input
-      while (this.stdin.read() !== null) {}
-      this.stdin.on("data", this.stdinListener)
-    })
-
     this.lib.resumeRenderer(this.rendererPtr)
+    if (this._screenMode === "split-footer" && this._splitHeight > 0) {
+      this.syncSplitFooterState()
+    }
 
     if (this._suspendedMouseEnabled) {
       this.enableMouse()
@@ -2020,26 +3598,26 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     if (this._isDestroyed) return
     this._isDestroyed = true
     this._destroyPending = true
+    this._palettePublishGeneration++
 
     if (this.rendering) {
-      // Defer teardown until the active frame completes to avoid freeing native resources mid-render.
+      // Restore terminal/input state immediately, but defer full native teardown until the frame unwinds.
+      this.prepareDestroyDuringRender()
       return
     }
 
     this.finalizeDestroy()
   }
 
-  private finalizeDestroy(): void {
-    if (this._destroyFinalized) return
-    this._destroyFinalized = true
-    this._destroyPending = false
+  private cleanupBeforeDestroy(): void {
+    if (this._destroyCleanupPrepared) return
+    this._destroyCleanupPrepared = true
 
     process.removeListener("SIGWINCH", this.sigwinchHandler)
     process.removeListener("uncaughtException", this.handleError)
     process.removeListener("unhandledRejection", this.handleError)
     process.removeListener("warning", this.warningHandler)
     process.removeListener("beforeExit", this.exitHandler)
-    capture.removeListener("write", this.captureCallback)
     this.removeExitListeners()
 
     if (this.resizeTimeoutId !== null) {
@@ -2052,28 +3630,77 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.capabilityTimeoutId = null
     }
 
+    if (this.splitStartupSeedTimeoutId !== null) {
+      this.clock.clearTimeout(this.splitStartupSeedTimeoutId)
+      this.splitStartupSeedTimeoutId = null
+    }
+
     if (this.memorySnapshotTimer) {
       this.clock.clearInterval(this.memorySnapshotTimer)
+      this.memorySnapshotTimer = null
     }
+
+    if (this.renderTimeout) {
+      this.clock.clearTimeout(this.renderTimeout)
+      this.renderTimeout = null
+    }
+
+    this.themeModeState.cancelRefresh()
+
+    this._isRunning = false
+    this.waitingForPixelResolution = false
+    this.updateStdinParserProtocolContext(
+      {
+        privateCapabilityRepliesActive: false,
+        pixelResolutionQueryActive: false,
+        explicitWidthCprActive: false,
+        startupCursorCprActive: false,
+      },
+      true,
+    )
+    this._useMouse = false
+    this.setCapturedRenderable(undefined)
+
+    this.stdin.removeListener("data", this.stdinListener)
+    if (this.stdin.setRawMode) {
+      this.stdin.setRawMode(false)
+    }
+
+    this.externalOutputMode = "passthrough"
+
+    if (this._splitHeight > 0) {
+      this.flushStdoutCache(this._splitHeight, true)
+    }
+  }
+
+  private prepareDestroyDuringRender(): void {
+    this.cleanupBeforeDestroy()
+    this.lib.suspendRenderer(this.rendererPtr)
+  }
+
+  private finalizeDestroy(): void {
+    if (this._destroyFinalized) return
+
+    this._destroyFinalized = true
+    this._destroyPending = false
+
+    this.cleanupBeforeDestroy()
 
     // Clean up palette detector
     if (this._paletteDetector) {
       this._paletteDetector.cleanup()
       this._paletteDetector = null
     }
+    this._paletteCache.clear()
     this._paletteDetectionPromise = null
+    this._paletteDetectionSize = 0
     this._cachedPalette = null
+    this._publishedPaletteSignature = null
+    this._paletteEpoch = 0
+
+    this.themeModeState.dispose()
 
     this.emit(CliRenderEvents.DESTROY)
-
-    if (this.renderTimeout) {
-      this.clock.clearTimeout(this.renderTimeout)
-      this.renderTimeout = null
-    }
-    this._isRunning = false
-
-    this.waitingForPixelResolution = false
-    this.setCapturedRenderable(undefined)
 
     try {
       this.root.destroyRecursively()
@@ -2081,20 +3708,26 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       console.error("Error destroying root renderable:", e instanceof Error ? e.stack : String(e))
     }
 
-    this.stdin.removeListener("data", this.stdinListener)
-    if (this.stdin.setRawMode) {
-      this.stdin.setRawMode(false)
-    }
-
     this.stdinParser?.destroy()
     this.stdinParser = null
     this.oscSubscribers.clear()
     this._console.destroy()
-    this.disableStdoutInterception()
 
-    if (this._splitHeight > 0) {
-      this.flushStdoutCache(this._splitHeight, true)
+    if (
+      this._splitHeight > 0 &&
+      this._terminalIsSetup &&
+      this._controlState !== RendererControlState.EXPLICIT_SUSPENDED
+    ) {
+      this.flushPendingSplitOutputBeforeTransition(true)
+      this.renderOffset = 0
+      if (this.clearOnShutdown) {
+        this.lib.setRenderOffset(this.rendererPtr, 0)
+      }
     }
+
+    this._externalOutputMode = "passthrough"
+    this.stdout.write = this.realStdoutWrite
+    this.externalOutputQueue.clear()
 
     this.lib.destroyRenderer(this.rendererPtr)
     rendererTracker.removeRenderer(this)
@@ -2114,7 +3747,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private startRenderLoop(): void {
     if (!this._isRunning) return
 
-    this.lastTime = this.clock.now()
+    this.lastTime = this.normalizeClockTime(this.clock.now(), 0)
     this.frameCount = 0
     this.lastFpsTime = this.lastTime
     this.currentFps = 0
@@ -2132,14 +3765,17 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       this.renderTimeout = null
     }
     try {
-      const now = this.clock.now()
-      const elapsed = now - this.lastTime
+      // Bump before any work so all callers this iteration see the new id.
+      this._frameId++
+
+      const now = this.normalizeClockTime(this.clock.now(), this.lastTime)
+      const elapsed = this.getElapsedMs(now, this.lastTime)
 
       const deltaTime = elapsed
       this.lastTime = now
 
       this.frameCount++
-      if (now - this.lastFpsTime >= 1000) {
+      if (this.getElapsedMs(now, this.lastFpsTime) >= 1000) {
         this.currentFps = this.frameCount
         this.frameCount = 0
         this.lastFpsTime = now
@@ -2184,10 +3820,6 @@ export class CliRenderer extends EventEmitter implements RenderContext {
 
         // Check if hit grid changed and recheck hover state if needed
         if (this._useMouse && this.lib.getHitGridDirty(this.rendererPtr)) {
-          writeFermiOpenTuiDiag("renderer.hitgrid.dirty", {
-            pointer: this._hasPointer ? { x: this._latestPointer.x, y: this._latestPointer.y } : null,
-            renderablesTracked: Renderable.renderablesByNumber.size,
-          })
           this.recheckHoverState()
         }
 
@@ -2238,15 +3870,32 @@ export class CliRenderer extends EventEmitter implements RenderContext {
       throw new Error("Rendering called concurrently")
     }
 
-    let force = false
-    if (this._splitHeight > 0) {
-      // TODO: Flickering could maybe be even more reduced by moving the flush to the native layer,
-      // to output the flush with the buffered writer, after the render is done.
-      force = this.flushStdoutCache(this._splitHeight)
+    this.renderingNative = true
+
+    if (
+      this.pendingSplitStartupCursorSeed &&
+      this.splitStartupSeedTimeoutId !== null &&
+      this._splitHeight > 0 &&
+      this._externalOutputMode === "capture-stdout"
+    ) {
+      this.renderingNative = false
+      return
     }
 
-    this.renderingNative = true
-    this.lib.render(this.rendererPtr, force)
+    if (this._splitHeight > 0 && this._externalOutputMode === "capture-stdout") {
+      // forceFullRepaintRequested is a one-shot latch used when mode/geometry
+      // transitions need a complete footer refresh. Consume it once so steady-state
+      // capture path keeps using diff-based repainting.
+      const forceSplitRepaint = this.forceFullRepaintRequested
+      this.forceFullRepaintRequested = false
+      this.flushPendingSplitCommits(forceSplitRepaint)
+      this.pendingSplitFooterTransition = null
+    } else {
+      const force = this.forceFullRepaintRequested
+      this.forceFullRepaintRequested = false
+      this.pendingSplitFooterTransition = null
+      this.lib.render(this.rendererPtr, force)
+    }
     // this.dumpStdoutBuffer(Date.now())
     this.renderingNative = false
   }
@@ -2394,7 +4043,7 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   private finishSelection(): void {
     if (this.currentSelection) {
       this.currentSelection.isDragging = false
-      this.emit("selection", this.currentSelection)
+      this.emit(CliRenderEvents.SELECTION, this.currentSelection)
       this.notifySelectablesOfSelectionChange()
     }
   }
@@ -2453,12 +4102,92 @@ export class CliRenderer extends EventEmitter implements RenderContext {
   }
 
   public get paletteDetectionStatus(): "idle" | "detecting" | "cached" {
-    if (this._cachedPalette) return "cached"
     if (this._paletteDetectionPromise) return "detecting"
+    if (this._paletteCache.size > 0) return "cached"
     return "idle"
   }
 
+  private getCachedPaletteBySize(size: number): TerminalColors | null {
+    const exactMatch = this._paletteCache.get(size)
+    if (exactMatch) {
+      return exactMatch
+    }
+
+    const largerSize = [...this._paletteCache.keys()].sort((a, b) => a - b).find((candidate) => candidate >= size)
+    if (largerSize === undefined) {
+      return null
+    }
+
+    const source = this._paletteCache.get(largerSize)
+    if (!source) {
+      return null
+    }
+
+    const projected = {
+      ...source,
+      palette: source.palette.slice(0, size),
+    }
+
+    this._paletteCache.set(size, projected)
+    return projected
+  }
+
+  private ensurePaletteDetector(): TerminalPaletteDetector {
+    if (!this._paletteDetector) {
+      const isLegacyTmux =
+        this.capabilities?.terminal?.name?.toLowerCase()?.includes("tmux") &&
+        this.capabilities?.terminal?.version?.localeCompare("3.6") < 0
+      this._paletteDetector = createTerminalPalette(
+        this.stdin,
+        this.stdout,
+        (data) => (this._isDestroyed ? false : this.writeOut(data)),
+        isLegacyTmux,
+        {
+          subscribeOsc: this.subscribeOsc.bind(this),
+        },
+        this.clock,
+      )
+    }
+
+    return this._paletteDetector
+  }
+
+  private syncNativePaletteState(colors: TerminalColors | null): void {
+    const signature = buildTerminalPaletteSignature(colors)
+    if (this._publishedPaletteSignature !== signature) {
+      this._paletteEpoch = (this._paletteEpoch + 1) >>> 0
+    }
+
+    this._publishedPaletteSignature = signature
+
+    const normalized = normalizeTerminalPalette(colors)
+    this.lib.rendererSetPaletteState(
+      this.rendererPtr,
+      normalized.palette,
+      normalized.defaultForeground,
+      normalized.defaultBackground,
+      this._paletteEpoch,
+    )
+  }
+
+  private ensureNativePaletteState(): void {
+    if (!this._terminalIsSetup || this._isDestroyed) return
+    const publishGeneration = this._palettePublishGeneration
+
+    void this.getPalette({ size: NATIVE_PALETTE_QUERY_SIZE })
+      .then((colors) => {
+        if (this._isDestroyed) return
+        if (this._palettePublishGeneration === publishGeneration) {
+          this.syncNativePaletteState(colors)
+        }
+        if (this._isDestroyed) return
+        this.requestRender()
+      })
+      .catch(() => {})
+  }
+
   public clearPaletteCache(): void {
+    this._paletteCache.clear()
     this._cachedPalette = null
   }
 
@@ -2474,41 +4203,72 @@ export class CliRenderer extends EventEmitter implements RenderContext {
     }
 
     const requestedSize = options?.size ?? 16
+    const detectionTimeout = options?.timeout
 
-    if (this._cachedPalette && this._cachedPalette.palette.length !== requestedSize) {
-      this._cachedPalette = null
-    }
-
-    if (this._cachedPalette) {
-      return this._cachedPalette
+    const cachedPalette = this.getCachedPaletteBySize(requestedSize)
+    if (cachedPalette) {
+      this._cachedPalette = cachedPalette
+      return cachedPalette
     }
 
     if (this._paletteDetectionPromise) {
-      return this._paletteDetectionPromise
+      if (this._paletteDetectionSize >= requestedSize) {
+        return this._paletteDetectionPromise.then((palette) => {
+          const cached = this.getCachedPaletteBySize(requestedSize)
+          if (cached) {
+            this._cachedPalette = cached
+            return cached
+          }
+
+          const projected = {
+            ...palette,
+            palette: palette.palette.slice(0, requestedSize),
+          }
+          this._paletteCache.set(requestedSize, projected)
+          this._cachedPalette = projected
+          return projected
+        })
+      }
+
+      await this._paletteDetectionPromise
+
+      const afterWait = this.getCachedPaletteBySize(requestedSize)
+      if (afterWait) {
+        this._cachedPalette = afterWait
+        return afterWait
+      }
     }
 
-    if (!this._paletteDetector) {
-      const isLegacyTmux =
-        this.capabilities?.terminal?.name?.toLowerCase()?.includes("tmux") &&
-        this.capabilities?.terminal?.version?.localeCompare("3.6") < 0
-      this._paletteDetector = createTerminalPalette(
-        this.stdin,
-        this.stdout,
-        this.writeOut.bind(this),
-        isLegacyTmux,
-        {
-          subscribeOsc: this.subscribeOsc.bind(this),
-        },
-        this.clock,
-      )
-    }
+    const detector = this.ensurePaletteDetector()
+    const publishGeneration = this._palettePublishGeneration
+    this._paletteDetectionSize = requestedSize
+    this._paletteDetectionPromise = detector
+      .detect({ ...options, timeout: detectionTimeout })
+      .then((result) => {
+        this._paletteCache.set(result.palette.length, result)
+        this._cachedPalette = result
+        this._paletteDetectionPromise = null
+        this._paletteDetectionSize = 0
 
-    this._paletteDetectionPromise = this._paletteDetector.detect(options).then((result) => {
-      this._cachedPalette = result
-      this._paletteDetectionPromise = null
-      return result
-    })
+        if (!this._isDestroyed && this._palettePublishGeneration === publishGeneration) {
+          if (result.palette.length >= NATIVE_PALETTE_QUERY_SIZE) {
+            this.syncNativePaletteState(result)
+          } else if (this._terminalIsSetup && !this._paletteCache.has(NATIVE_PALETTE_QUERY_SIZE)) {
+            this.ensureNativePaletteState()
+          }
+        }
 
-    return this._paletteDetectionPromise
+        return result
+      })
+      .catch((error) => {
+        this._paletteDetectionPromise = null
+        this._paletteDetectionSize = 0
+        throw error
+      })
+
+    const detected = await this._paletteDetectionPromise
+    const finalPalette = this.getCachedPaletteBySize(requestedSize) ?? detected
+    this._cachedPalette = finalPalette
+    return finalPalette
   }
 }

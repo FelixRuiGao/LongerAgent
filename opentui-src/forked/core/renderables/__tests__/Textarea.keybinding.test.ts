@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Buffer } from "node:buffer"
 import { describe, expect, it, afterAll, beforeEach, afterEach } from "bun:test"
 import { createTestRenderer, type TestRenderer, type MockMouse, type MockInput } from "../../testing/test-renderer.js"
@@ -7,7 +6,7 @@ import { KeyEvent } from "../../lib/KeyHandler.js"
 
 // Helper function to create a KeyEvent from a string
 function createKeyEvent(
-  input: string | { name: string; shift?: boolean; ctrl?: boolean; meta?: boolean; super?: boolean },
+  input: string | { name: string; shift?: boolean; ctrl?: boolean; meta?: boolean; super?: boolean; baseCode?: number },
 ): KeyEvent {
   if (typeof input === "string") {
     return new KeyEvent({
@@ -30,6 +29,7 @@ function createKeyEvent(
       meta: input.meta ?? false,
       shift: input.shift ?? false,
       super: input.super ?? false,
+      baseCode: input.baseCode,
       option: false,
       number: false,
       raw: input.name,
@@ -626,6 +626,23 @@ describe("Textarea - Keybinding Tests", () => {
       expect(editor.logicalCursor.col).toBe(0)
     })
 
+    it("should use baseCode when matching ctrl shortcuts from alternate layouts", async () => {
+      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
+        initialValue: "Hello World",
+        width: 40,
+        height: 10,
+      })
+
+      editor.focus()
+      editor.gotoLine(9999)
+      expect(editor.logicalCursor.col).toBe(11)
+
+      const handled = editor.handleKeyPress(createKeyEvent({ name: "ㅁ", baseCode: 97, ctrl: true }))
+
+      expect(handled).toBe(true)
+      expect(editor.logicalCursor.col).toBe(0)
+    })
+
     it("should support custom keybindings with shift modifier", async () => {
       const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
         initialValue: "Hello World",
@@ -936,23 +953,6 @@ describe("Textarea - Keybinding Tests", () => {
       expect(editor.plainText).toBe("Line 1 content\ncontent\nLine 3 content")
       expect(editor.logicalCursor.col).toBe(0)
       expect(editor.logicalCursor.row).toBe(1)
-    })
-
-    it("should preserve an empty last line when ctrl+u clears the final logical line", async () => {
-      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
-        initialValue: "Line 1\nLine 2\nLine 3",
-        width: 40,
-        height: 10,
-      })
-
-      editor.focus()
-      editor.gotoLine(2)
-      editor.gotoLineEnd()
-
-      currentMockInput.pressKey("u", { ctrl: true })
-      expect(editor.plainText).toBe("Line 1\nLine 2\n")
-      expect(editor.logicalCursor.row).toBe(2)
-      expect(editor.logicalCursor.col).toBe(0)
     })
 
     it("should do nothing with ctrl+k when cursor is at end of line", async () => {
@@ -1486,52 +1486,6 @@ describe("Textarea - Keybinding Tests", () => {
       currentMockInput.pressArrow("up")
       expect(editor.logicalCursor.row).toBe(0)
       expect(editor.logicalCursor.col).toBe(0)
-    })
-
-    it("should collapse a selection to its end when pressing right", async () => {
-      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
-        initialValue: "ab",
-        width: 40,
-        height: 10,
-        selectable: true,
-      })
-
-      editor.focus()
-      editor.cursorOffset = 2
-
-      currentMockInput.pressArrow("left", { shift: true })
-      currentMockInput.pressArrow("left", { shift: true })
-      expect(editor.getSelectedText()).toBe("ab")
-
-      currentMockInput.pressArrow("right")
-      expect(editor.hasSelection()).toBe(false)
-      expect(editor.cursorOffset).toBe(2)
-
-      currentMockInput.pressKey("X")
-      expect(editor.plainText).toBe("abX")
-    })
-
-    it("should collapse a double-width selection to its end when pressing right", async () => {
-      const { textarea: editor } = await createTextareaRenderable(currentRenderer, renderOnce, {
-        initialValue: "🙂a",
-        width: 40,
-        height: 10,
-        selectable: true,
-      })
-
-      editor.focus()
-      editor.cursorOffset = Bun.stringWidth(editor.plainText)
-
-      currentMockInput.pressArrow("left", { shift: true })
-      currentMockInput.pressArrow("left", { shift: true })
-      expect(editor.getSelectedText()).toBe("🙂a")
-
-      currentMockInput.pressArrow("right")
-      expect(editor.hasSelection()).toBe(false)
-      expect(editor.cursorOffset).toBe(Bun.stringWidth("🙂a"))
-
-      currentMockInput.pressKey("X")
-      expect(editor.plainText).toBe("🙂aX")
     })
 
     it("should handle complex keybinding scenario with multiple custom mappings", async () => {

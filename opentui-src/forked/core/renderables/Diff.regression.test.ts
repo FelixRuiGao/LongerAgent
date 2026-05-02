@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { DiffRenderable } from "./Diff.js"
 import { SyntaxStyle } from "../syntax-style.js"

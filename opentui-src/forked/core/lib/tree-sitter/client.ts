@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { EventEmitter } from "events"
 import { createDebounce, clearDebounceScope, DebounceController } from "../debounce.js"
 import { ProcessQueue } from "../queue.js"
@@ -40,13 +39,10 @@ let DEFAULT_PARSERS: FiletypeParserOptions[] = getParsers()
 
 export function addDefaultParsers(parsers: FiletypeParserOptions[]): void {
   for (const parser of parsers) {
-    const existingIndex = DEFAULT_PARSERS.findIndex((p) => p.filetype === parser.filetype)
-
-    if (existingIndex >= 0) {
-      DEFAULT_PARSERS[existingIndex] = parser
-    } else {
-      DEFAULT_PARSERS.push(parser)
-    }
+    DEFAULT_PARSERS = [
+      ...DEFAULT_PARSERS.filter((existingParser) => existingParser.filetype !== parser.filetype),
+      parser,
+    ]
   }
 }
 
@@ -195,6 +191,9 @@ export class TreeSitterClient extends EventEmitter<TreeSitterClientEvents> {
   public addFiletypeParser(filetypeParser: FiletypeParserOptions): void {
     const resolvedParser: FiletypeParserOptions = {
       ...filetypeParser,
+      aliases: filetypeParser.aliases
+        ? [...new Set(filetypeParser.aliases.filter((alias) => alias !== filetypeParser.filetype))]
+        : undefined,
       wasm: this.resolvePath(filetypeParser.wasm),
       queries: {
         highlights: filetypeParser.queries.highlights.map((path) => this.resolvePath(path)),
@@ -343,14 +342,6 @@ export class TreeSitterClient extends EventEmitter<TreeSitterClientEvents> {
       const message = data.join(" ")
 
       this.emit("worker:log", logType, message)
-
-      if (logType === "log") {
-        console.log("TSWorker:", ...data)
-      } else if (logType === "error") {
-        console.error("TSWorker:", ...data)
-      } else if (logType === "warn") {
-        console.warn("TSWorker:", ...data)
-      }
       return
     }
   }

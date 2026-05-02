@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { test, expect, beforeEach, afterEach, describe } from "bun:test"
 import { createTestRenderer, type TestRenderer } from "../testing/test-renderer.js"
 import { BoxRenderable } from "../renderables/Box.js"

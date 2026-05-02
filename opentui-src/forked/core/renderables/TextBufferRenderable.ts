@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Renderable, type RenderableOptions } from "../Renderable.js"
 import { convertGlobalToLocalSelection, Selection, type LocalSelectionBounds } from "../lib/selection.js"
 import { TextBuffer, type TextChunk } from "../text-buffer.js"
@@ -38,8 +37,7 @@ export abstract class TextBufferRenderable extends Renderable implements LineInf
   protected _scrollX: number = 0
   protected _scrollY: number = 0
   protected _truncate: boolean = false
-  protected _pendingWheelDeltaX: number = 0
-  protected _pendingWheelDeltaY: number = 0
+  protected _firstLineOffset: number = 0
 
   protected textBuffer: TextBuffer
   protected textBufferView: TextBufferView
@@ -76,11 +74,13 @@ export abstract class TextBufferRenderable extends Renderable implements LineInf
 
     this.textBuffer = TextBuffer.create(this._ctx.widthMethod)
     this.textBufferView = TextBufferView.create(this.textBuffer)
+    this._firstLineOffset = ctx.claimFirstLineOffset?.(this) ?? 0
 
     this._textBufferSyntaxStyle = SyntaxStyle.create()
     this.textBuffer.setSyntaxStyle(this._textBufferSyntaxStyle)
 
     this.textBufferView.setWrapMode(this._wrapMode)
+    this.textBufferView.setFirstLineOffset(this._firstLineOffset)
     this.setupMeasureFunc()
 
     this.textBuffer.setDefaultFg(this._defaultFg)
@@ -113,69 +113,23 @@ export abstract class TextBufferRenderable extends Renderable implements LineInf
     }
   }
 
-  protected canConsumeScrollDirection(direction: string | undefined): boolean {
-    if (direction === "up") {
-      return this.scrollY > 0
-    }
-    if (direction === "down") {
-      return this.scrollY < this.maxScrollY
-    }
-    if (this._wrapMode === "none") {
-      if (direction === "left") {
-        return this.scrollX > 0
-      }
-      if (direction === "right") {
-        return this.scrollX < this.maxScrollX
-      }
-    }
-
-    return false
-  }
-
   protected handleScroll(event: any): void {
     if (!event.scroll) return
 
     const { direction, delta } = event.scroll
-    const canConsume = this.canConsumeScrollDirection(direction)
-    if (!canConsume) return
 
     if (direction === "up") {
-      this._pendingWheelDeltaY -= delta
+      this.scrollY -= delta
     } else if (direction === "down") {
-      this._pendingWheelDeltaY += delta
+      this.scrollY += delta
     }
 
     if (this._wrapMode === "none") {
       if (direction === "left") {
-        this._pendingWheelDeltaX -= delta
+        this.scrollX -= delta
       } else if (direction === "right") {
-        this._pendingWheelDeltaX += delta
+        this.scrollX += delta
       }
-    }
-
-    event.stopPropagation()
-    event.preventDefault()
-    this.requestRender()
-  }
-
-  protected override onUpdate(deltaTime: number): void {
-    super.onUpdate(deltaTime)
-
-    if (this._pendingWheelDeltaX === 0 && this._pendingWheelDeltaY === 0) {
-      return
-    }
-
-    const pendingX = this._pendingWheelDeltaX
-    const pendingY = this._pendingWheelDeltaY
-    this._pendingWheelDeltaX = 0
-    this._pendingWheelDeltaY = 0
-
-    if (pendingY !== 0) {
-      this.scrollY += pendingY
-    }
-
-    if (pendingX !== 0) {
-      this.scrollX += pendingX
     }
   }
 
@@ -526,20 +480,24 @@ export abstract class TextBufferRenderable extends Renderable implements LineInf
 
   render(buffer: OptimizedBuffer, deltaTime: number): void {
     if (!this.visible) return
+    // Text views do enough per-frame work that avoiding recursive x/y lookups is
+    // measurable; use the layout cache for hit-grid and draw entry points.
+    const screenX = this._screenX
+    const screenY = this._screenY
 
     this.markClean()
-    this._ctx.addToHitGrid(this.x, this.y, this.width, this.height, this.num)
+    this._ctx.addToHitGrid(screenX, screenY, this.width, this.height, this.num)
 
     this.renderSelf(buffer)
 
     if (this.buffered && this.frameBuffer) {
-      buffer.drawFrameBuffer(this.x, this.y, this.frameBuffer)
+      buffer.drawFrameBuffer(screenX, screenY, this.frameBuffer)
     }
   }
 
   protected renderSelf(buffer: OptimizedBuffer): void {
     if (this.textBuffer.ptr) {
-      buffer.drawTextBuffer(this.textBufferView, this.x, this.y)
+      buffer.drawTextBuffer(this.textBufferView, this._screenX, this._screenY)
     }
   }
 
