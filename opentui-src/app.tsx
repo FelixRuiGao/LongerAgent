@@ -338,6 +338,9 @@ export function OpenTuiApp({
     if (activeTab?.kind === "child") {
       const childId = activeTab.id.startsWith("child:") ? activeTab.id.slice(6) : activeTab.id;
       setSelectedChildId(childId);
+    } else if (activeTab?.kind === "detail-thinking" || activeTab?.kind === "detail-tool") {
+      const src = activeTab.sourceSessionKey;
+      setSelectedChildId(src?.startsWith("child:") ? src.slice(6) : null);
     } else {
       setSelectedChildId(null);
     }
@@ -2814,6 +2817,7 @@ export function OpenTuiApp({
             showTodos={showTodos}
             colors={theme.colors}
             contentWidth={terminal.width - (theme.spacing.screenPaddingX * 2)}
+            terminalHeight={terminal.height}
             onAgentClick={enterChildSession}
           />
         );

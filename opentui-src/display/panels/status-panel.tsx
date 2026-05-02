@@ -42,6 +42,7 @@ export interface StatusPanelProps {
   showTodos: boolean;
   colors: ConversationPalette;
   contentWidth: number;
+  terminalHeight: number;
   onAgentClick?: (agentId: string) => void;
 }
 
@@ -73,7 +74,7 @@ function agentStatusLabel(agent: ChildSessionSnapshot): string {
 
 function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSessionSnapshot[]; colors: ConversationPalette; onAgentClick?: (agentId: string) => void }): React.ReactNode {
   return (
-    <box flexDirection="column" gap={0} flexGrow={1}>
+    <>
       {agents.map((agent) => {
         const isActive = agent.lifecycle === "running";
         const isBlocked = agent.lifecycle === "blocked";
@@ -105,8 +106,12 @@ function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSes
           </SelectableRow>
         );
       })}
-    </box>
+    </>
   );
+}
+
+function clampPanelHeight(terminalHeight: number): number {
+  return Math.max(2, Math.min(8, Math.floor(terminalHeight * 0.25)));
 }
 
 // ── Todo rows (plan-panel style) ────────────────────────────
@@ -137,7 +142,7 @@ function TodoRows({ todos }: { todos: readonly PlanCheckpoint[] }): React.ReactN
   const sorted = [...nonDone, ...done];
 
   return (
-    <box flexDirection="column" gap={0} flexGrow={1}>
+    <>
       {sorted.map((cp, i) => (
         <text
           key={i}
@@ -145,7 +150,7 @@ function TodoRows({ todos }: { todos: readonly PlanCheckpoint[] }): React.ReactN
           truncate
         />
       ))}
-    </box>
+    </>
   );
 }
 
@@ -157,6 +162,7 @@ function StatusPanelInner({
   todos,
   showTodos,
   colors,
+  terminalHeight,
   onAgentClick,
 }: StatusPanelProps): React.ReactNode {
   const openTodos = todos.filter((cp) => cp.status !== "done");
@@ -167,6 +173,8 @@ function StatusPanelInner({
   const hasTodos = todos.length > 0 && showTodos;
 
   if (!hasAgents && !hasTodos) return null;
+
+  const maxHeight = clampPanelHeight(terminalHeight);
 
   const agentParts: string[] = [];
   if (runningCount > 0) agentParts.push(`${runningCount} running`);
@@ -184,6 +192,7 @@ function StatusPanelInner({
       <box
         width="100%"
         flexShrink={0}
+        maxHeight={maxHeight + 2}
         border={true}
         borderStyle="rounded"
         borderColor={colors.dim}
@@ -195,21 +204,23 @@ function StatusPanelInner({
         flexDirection="row"
         gap={0}
       >
-        <box width="40%" flexShrink={0} paddingLeft={1} paddingRight={1}>
+        <scrollbox width="40%" flexShrink={0} paddingLeft={1} paddingRight={1} maxHeight={maxHeight} scrollY={true}>
           <AgentRows agents={agents} colors={colors} onAgentClick={onAgentClick} />
-        </box>
-        <box flexGrow={1} paddingLeft={2} paddingRight={1}>
+        </scrollbox>
+        <scrollbox flexGrow={1} paddingLeft={2} paddingRight={1} maxHeight={maxHeight} scrollY={true}>
           <TodoRows todos={todos} />
-        </box>
+        </scrollbox>
       </box>
     );
   }
 
   if (hasAgents) {
     return (
-      <box
+      <scrollbox
         width="100%"
         flexShrink={0}
+        maxHeight={maxHeight + 2}
+        scrollY={true}
         border={true}
         borderStyle="rounded"
         borderColor={colors.dim}
@@ -219,14 +230,16 @@ function StatusPanelInner({
         paddingRight={1}
       >
         <AgentRows agents={agents} colors={colors} onAgentClick={onAgentClick} />
-      </box>
+      </scrollbox>
     );
   }
 
   return (
-    <box
+    <scrollbox
       width="100%"
       flexShrink={0}
+      maxHeight={maxHeight + 2}
+      scrollY={true}
       border={true}
       borderStyle="rounded"
       borderColor={colors.dim}
@@ -236,7 +249,7 @@ function StatusPanelInner({
       paddingRight={1}
     >
       <TodoRows todos={todos} />
-    </box>
+    </scrollbox>
   );
 }
 
