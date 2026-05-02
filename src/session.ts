@@ -1267,18 +1267,45 @@ export class Session {
 
   /**
    * Drain the inbox, writing each message as a separate log entry.
-   * user_input → visible user_message (raw text, no XML wrapper).
-   * peer_message / system_notice → hidden user_message (<system-message> wrapped).
+   *
+   * user_input: If the current turn already has a user_message, the
+   *   user_input starts a new turn (turn_start + user_message).  The old
+   *   turn is left without a turn_end — this is intentional to avoid a
+   *   spurious "worked for Xs" display.  See Docs/SESSION.md §Turn
+   *   splitting for the safety analysis.  If the current turn has no
+   *   user_message yet (e.g. skipUserInput path), the user_input becomes
+   *   the primary message of the current turn.
+   *
+   * peer_message / system_notice → hidden user_message in current turn.
    */
   private _drainInboxAsEntries(): void {
     if (this._inbox.length === 0) return;
     const messages = [...this._inbox];
     this._inbox = [];
 
+    // Determine whether the current turn already has a primary user_message.
+    let currentTurnHasUserMessage = false;
+    for (let i = this._log.length - 1; i >= 0; i--) {
+      const e = this._log[i];
+      if (e.turnIndex < this._turnCount) break;
+      if (e.turnIndex !== this._turnCount || e.discarded) continue;
+      if (e.type === "user_message") { currentTurnHasUserMessage = true; break; }
+    }
+
     for (const msg of messages) {
       const ctxId = this._allocateContextId();
       switch (msg.type) {
         case "user_input": {
+          if (currentTurnHasUserMessage) {
+            // Start a new turn for this real user message.
+            // No turn_end for the old turn — see docstring above.
+            this._turnCount += 1;
+            this._appendEntry(
+              createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
+              false,
+            );
+          }
+          currentTurnHasUserMessage = true;
           this._appendEntry(createUserMessageEntry(
             this._nextLogId("user_message"),
             this._turnCount,
@@ -1315,38 +1342,6 @@ export class Session {
         }
       }
     }
-  }
-
-  /**
-   * Drain inbox as a single string for child session turn input.
-   * Used only by _takeQueuedMessagesAsTurnInput (child session resume).
-   */
-  private _drainInboxToString(): string | null {
-    if (this._inbox.length === 0) return null;
-    const messages = [...this._inbox];
-    this._inbox = [];
-    const sections: string[] = [];
-    for (const msg of messages) {
-      switch (msg.type) {
-        case "user_input":
-          sections.push(msg.content);
-          break;
-        case "peer_message":
-          sections.push(`<system-message>\n${msg.content}\n</system-message>`);
-          break;
-        case "system_notice":
-          sections.push(`<system-message>\n${msg.content}\n</system-message>`);
-          break;
-      }
-    }
-    return sections.join("\n\n---\n\n");
-  }
-
-  /**
-   * Drain inbox as turn input for idle agent activation.
-   */
-  _takeQueuedMessagesAsTurnInput(): string | null {
-    return this._drainInboxToString();
   }
 
   private _makeAbortPromise(signal: AbortSignal | null | undefined): Promise<"aborted"> | null {
@@ -4505,7 +4500,7 @@ export class Session {
     return finalText;
   }
 
-  async turn(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[] }): Promise<string> {
+  async turn(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[]; skipUserInput?: boolean }): Promise<string> {
     return this._withTurnLock(() => this._turnInner(userInput, options));
   }
 
@@ -6360,7 +6355,7 @@ export class Session {
     handle.lastActivityAt = Date.now();
   }
 
-  private _startChildTurn(handle: ChildSessionHandle, input: string): void {
+  private _startChildTurn(handle: ChildSessionHandle, input: string, options?: { skipUserInput?: boolean }): void {
     handle.startTime = performance.now();
     handle.status = "working";
     handle.lifecycle = "running";
@@ -6374,7 +6369,7 @@ export class Session {
     handle.settlePromise = new Promise<void>((resolve) => {
       handle.settleResolve = resolve;
     });
-    handle.turnPromise = handle.session.turn(input, { signal: abortController.signal });
+    handle.turnPromise = handle.session.turn(input, { signal: abortController.signal, skipUserInput: options?.skipUserInput });
     void handle.turnPromise.then(
       () => this._finishChildTurn(handle, undefined),
       (error: unknown) => this._finishChildTurn(handle, error),
@@ -6504,13 +6499,12 @@ export class Session {
       // Persistent: only auto-resume queued work after a natural completion.
       // User/parent-triggered kills must leave the agent idle.
       if (cause === "natural") {
-        const queued = handle.session._takeQueuedMessagesAsTurnInput();
-        if (queued) {
+        if (handle.session._hasInboxMessages()) {
           // Resolve settle before starting next turn (current turn is done)
           const resolve = handle.settleResolve;
           handle.settleResolve = null;
           resolve?.();
-          this._startChildTurn(handle, queued);
+          this._startChildTurn(handle, "", { skipUserInput: true });
           return;
         }
       }
@@ -6588,10 +6582,7 @@ export class Session {
       if (handle.mode === "persistent") {
         handle.lastActivityAt = Date.now();
         (handle.session as Session)._inbox.push(msg);
-        const queuedInput = handle.session._takeQueuedMessagesAsTurnInput();
-        if (queuedInput) {
-          this._startChildTurn(handle, queuedInput);
-        }
+        this._startChildTurn(handle, "", { skipUserInput: true });
         return new ToolResult({ content: `Agent '${childId}' revived and message sent.` });
       }
       return new ToolResult({ content: `Agent '${childId}' is a one-shot agent and cannot receive messages.` });
@@ -6612,10 +6603,7 @@ export class Session {
 
     // idle — queue message and start turn
     (handle.session as Session)._inbox.push(msg);
-    const queuedInput = handle.session._takeQueuedMessagesAsTurnInput();
-    if (queuedInput) {
-      this._startChildTurn(handle, queuedInput);
-    }
+    this._startChildTurn(handle, "", { skipUserInput: true });
     return new ToolResult({ content: `Message sent to '${childId}'.` });
   }
 
@@ -6924,10 +6912,7 @@ export class Session {
 
     // Deliver message and start turn
     handle.session._inbox.push({ type: "user_input", sender: "main", content: messageContent, timestamp: Date.now() });
-    const queuedInput = handle.session._takeQueuedMessagesAsTurnInput();
-    if (queuedInput) {
-      this._startChildTurn(handle, queuedInput);
-    }
+    this._startChildTurn(handle, "", { skipUserInput: true });
 
     // Trigger root save since child references changed
     this.onSaveRequest?.();
