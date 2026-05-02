@@ -111,7 +111,7 @@ function AgentRows({ agents, colors, onAgentClick }: { agents: readonly ChildSes
 }
 
 function clampPanelHeight(terminalHeight: number): number {
-  return Math.max(2, Math.min(8, Math.floor(terminalHeight * 0.25)));
+  return Math.max(2, Math.min(8, Math.floor((terminalHeight - 8) * 0.2)));
 }
 
 // ── Todo rows (plan-panel style) ────────────────────────────
@@ -204,10 +204,10 @@ function StatusPanelInner({
         flexDirection="row"
         gap={0}
       >
-        <scrollbox width="40%" flexShrink={0} paddingLeft={1} paddingRight={1} maxHeight={maxHeight} scrollY={true}>
+        <scrollbox width="40%" flexShrink={0} paddingLeft={1} paddingRight={1} maxHeight={maxHeight} scrollY={true} fitContent={true}>
           <AgentRows agents={agents} colors={colors} onAgentClick={onAgentClick} />
         </scrollbox>
-        <scrollbox flexGrow={1} paddingLeft={2} paddingRight={1} maxHeight={maxHeight} scrollY={true}>
+        <scrollbox flexGrow={1} paddingLeft={2} paddingRight={1} maxHeight={maxHeight} scrollY={true} fitContent={true}>
           <TodoRows todos={todos} />
         </scrollbox>
       </box>
@@ -221,6 +221,7 @@ function StatusPanelInner({
         flexShrink={0}
         maxHeight={maxHeight + 2}
         scrollY={true}
+        fitContent={true}
         border={true}
         borderStyle="rounded"
         borderColor={colors.dim}
@@ -240,6 +241,7 @@ function StatusPanelInner({
       flexShrink={0}
       maxHeight={maxHeight + 2}
       scrollY={true}
+      fitContent={true}
       border={true}
       borderStyle="rounded"
       borderColor={colors.dim}

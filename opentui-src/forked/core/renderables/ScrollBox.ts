@@ -71,6 +71,8 @@ export interface ScrollBoxOptions extends BoxOptions<ScrollBoxRenderable> {
   viewportCulling?: boolean
   /** Hide scrollbars after idle. Set to `true` for 1500ms default, or a number in ms. */
   autoHideScrollbars?: boolean | number
+  /** When true, content shrink-wraps to its natural height instead of filling the viewport. */
+  fitContent?: boolean
 }
 
 const SCROLLBOX_PADDING_KEYS = [
@@ -308,6 +310,7 @@ export class ScrollBoxRenderable extends BoxRenderable {
       scrollY = true,
       scrollAcceleration,
       viewportCulling = true,
+      fitContent = false,
       ...rootBoxOptions
     } = options
 
@@ -362,7 +365,9 @@ export class ScrollBoxRenderable extends BoxRenderable {
       alignSelf: "flex-start",
       flexShrink: 0,
       ...(scrollX ? { minWidth: "100%" } : { minWidth: "100%", maxWidth: "100%" }),
-      ...(scrollY ? { minHeight: "100%" } : { minHeight: "100%", maxHeight: "100%" }),
+      ...(scrollY
+        ? (fitContent ? {} : { minHeight: "100%" })
+        : { minHeight: "100%", maxHeight: "100%" }),
       onSizeChange: () => {
         this.recalculateBarProps()
       },
