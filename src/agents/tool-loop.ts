@@ -735,6 +735,9 @@ export interface ToolLoopOptions {
   beforeToolExecute?: BeforeToolExecuteCallback;
   /** Returns a notification string to append to tool_result content, or null if none. */
   getNotification?: () => string | null;
+  /** Called after all tool_results in a round are written, before the next model call.
+   *  Used by Session to drain queued inbox messages at the round boundary. */
+  onToolRoundComplete?: () => void;
   /** When true, streamed text/reasoning callbacks own the corresponding log entries. */
   streamCallbacksOwnEntries?: boolean;
   /** Called when a network error is detected and a retry is being attempted. */
@@ -796,6 +799,7 @@ export async function asyncRunToolLoop(
     onSaveCheckpoint,
     beforeToolExecute,
     getNotification,
+    onToolRoundComplete,
     streamCallbacksOwnEntries = false,
     onRetryAttempt,
     onRetrySuccess,
@@ -1557,6 +1561,12 @@ export async function asyncRunToolLoop(
       }
     }
     pendingToolCalls.clear();
+
+    // Tool round complete: all tool_results for this round are written.
+    // Drain queued messages (e.g. user input) before the next model call.
+    if (onToolRoundComplete && !suspendedAskResult) {
+      onToolRoundComplete();
+    }
 
     if (suspendedAskResult) {
       return {

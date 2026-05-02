@@ -1234,6 +1234,7 @@ export class Session {
         || e.type === "tool_call"
         || e.type === "tool_result"
         || e.type === "reasoning"
+        || e.type === "turn_end"
       ) {
         return false;
       }
@@ -3977,6 +3978,13 @@ export class Session {
         return "";
       }
 
+      // Post-resume activation boundary drain: tool_results from the
+      // just-resolved approval are in the log; drain any queued inbox
+      // messages before the model sees them in the next activation.
+      if (this._hasInboxMessages()) {
+        this._drainInboxAsEntries();
+      }
+
       const textAccumulator = { text: "" };
       const reasoningAccumulator = { text: "" };
       const result = await this._runTurnActivationLoop(options?.signal, textAccumulator, reasoningAccumulator);
@@ -5295,6 +5303,7 @@ export class Session {
       this._compactInProgress ? undefined : (() => this.onSaveRequest?.()),
       this._beforeToolExecute,
       () => null,
+      () => this._drainInboxAsEntries(),
       !suppressStreaming,
       emitRetryAttempt,
       emitRetrySuccess,
