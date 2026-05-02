@@ -2,13 +2,9 @@
 
 import React from "react";
 
-import { getTreeSitterClient } from "@opentui/core";
-
 import { getFermiAssistantRenderer } from "../../forked/core/lib/diagnostic.js";
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../../components/conversation-types.js";
-
-const MARKDOWN_TREE_SITTER_CLIENT = getTreeSitterClient();
 const ASSISTANT_RENDERER_MODE = getFermiAssistantRenderer();
 
 interface AssistantEntryProps {
@@ -46,7 +42,7 @@ export function AssistantEntry({
         <markdown
           content={text}
           syntaxStyle={markdownStyle}
-          treeSitterClient={MARKDOWN_TREE_SITTER_CLIENT}
+          treeSitterClient={undefined}
           streaming={streaming}
           conceal={true}
           concealCode={false}
