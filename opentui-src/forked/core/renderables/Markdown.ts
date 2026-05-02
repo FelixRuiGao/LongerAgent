@@ -583,7 +583,7 @@ export class MarkdownRenderable extends Renderable {
   }
 
   private normalizeMarkdownBlockRaw(raw: string): string {
-    return raw.replace(TRAILING_MARKDOWN_BLOCK_BREAKS_RE, "\n")
+    return raw
   }
 
   private normalizeScrollbackMarkdownBlockRaw(raw: string): string {
@@ -592,7 +592,7 @@ export class MarkdownRenderable extends Renderable {
 
   private buildRenderableTokens(tokens: MarkedToken[]): MarkedToken[] {
     if (this._renderNode) {
-      return tokens.filter((token) => token.type !== "space")
+      return tokens
     }
 
     const renderTokens: MarkedToken[] = []
@@ -611,19 +611,7 @@ export class MarkdownRenderable extends Renderable {
       const token = tokens[i]
 
       if (token.type === "space") {
-        if (markdownRaw.length === 0) {
-          continue
-        }
-
-        let nextIndex = i + 1
-        while (nextIndex < tokens.length && tokens[nextIndex].type === "space") {
-          nextIndex += 1
-        }
-
-        const nextToken = tokens[nextIndex]
-        if (nextToken && !this.shouldRenderSeparately(nextToken)) {
-          markdownRaw += token.raw
-        }
+        markdownRaw += token.raw
         continue
       }
 
@@ -737,7 +725,7 @@ export class MarkdownRenderable extends Renderable {
     this.renderInlineContent(cell.tokens, chunks)
 
     const baseChunks = chunks.length > 0 ? chunks : [this.createDefaultChunk(" ")]
-    const headingStyle = this.getStyle("markup.heading") || this.getStyle("default")
+    const headingStyle = this.getStyle("markup.heading.table") || this.getStyle("markup.heading") || this.getStyle("default")
     if (!headingStyle) {
       return baseChunks
     }
