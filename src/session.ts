@@ -4421,10 +4421,12 @@ export class Session {
           this._checkAndInjectHint(result);
         }
 
-        // Final output (no tool calls) → turn ends.
+        // Final output (no tool calls in the last provider call) → turn ends.
         // Sub-agent results are processed via auto-resume in a new turn.
         // Model should use await_event explicitly to wait for sub-agents.
-        if (result.toolHistory.length === 0) {
+        // Note: toolHistory.length is cumulative across all rounds in the tool
+        // loop, so it can be > 0 even when the last call had no tool_calls.
+        if (result.endedWithoutToolCalls) {
           reachedLimit = false;
           turnEndStatus = "completed";
           break;

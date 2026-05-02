@@ -609,6 +609,8 @@ export interface ToolLoopResult {
   textHandledInLog?: boolean;
   /** Whether the final reasoning content was already materialized by stream callbacks. */
   reasoningHandledInLog?: boolean;
+  /** True when the final provider call returned no tool_calls (pure text output). */
+  endedWithoutToolCalls?: boolean;
   /** Suspended on an ask tool call that requires user input. */
   suspendedAsk?: {
     ask: AskRequest;
@@ -1501,6 +1503,7 @@ export async function asyncRunToolLoop(
         lastTotalTokens: resp.usage.inputTokens + resp.usage.outputTokens,
         textHandledInLog: streamCallbacksOwnEntries && textHandledViaCallback,
         reasoningHandledInLog: streamCallbacksOwnEntries && reasoningHandledViaCallback,
+        endedWithoutToolCalls: true,
       };
     }
 
