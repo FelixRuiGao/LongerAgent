@@ -81,7 +81,7 @@ export class InputRenderable extends TextareaRenderable {
 
     // Set cursor to end of initial value
     if (initialValue) {
-      this.cursorOffset = initialValue.length
+      this.cursorOffset = Bun.stringWidth(initialValue)
     }
   }
 
@@ -127,7 +127,7 @@ export class InputRenderable extends TextareaRenderable {
     const currentValue = this.plainText
     if (currentValue !== newValue) {
       this.setText(newValue)
-      this.cursorOffset = newValue.length
+      this.cursorOffset = Bun.stringWidth(newValue)
       this.emit(InputRenderableEvents.INPUT, newValue)
     }
   }
