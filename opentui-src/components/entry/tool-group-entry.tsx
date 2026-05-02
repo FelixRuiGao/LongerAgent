@@ -83,7 +83,6 @@ function ToolGroupEntryInner(
       {active ? (
         <box
           flexDirection="row"
-          paddingLeft={1}
           paddingTop={1}
           width="100%"
         >
@@ -97,7 +96,7 @@ function ToolGroupEntryInner(
       ) : (
         <box paddingTop={1}>
           <SelectableRow hoverBackgroundColor={colors.border} onPress={toggleExpand}>
-            <box flexDirection="row" paddingLeft={1} width="100%">
+            <box flexDirection="row" width="100%">
               <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
               <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={summary} flexShrink={0} />
               <text content=" " flexShrink={0} />

@@ -37,7 +37,7 @@ const DEFAULT_DISPLAY_TOKENS: DisplayThemeTokens = {
     errorStatus: "#f05030",
   },
   spacing: {
-    screenPaddingX: 2,
+    screenPaddingX: 0,
     screenPaddingY: 0,
     screenGap: 1,
     sectionGap: 1,

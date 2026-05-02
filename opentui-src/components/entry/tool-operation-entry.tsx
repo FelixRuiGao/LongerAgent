@@ -182,7 +182,6 @@ function ToolOperationEntryInner(
     <box flexDirection="column" width="100%" gap={0}>
       <box
         flexDirection="row"
-        paddingLeft={1}
         paddingTop={1}
         width="100%"
       >

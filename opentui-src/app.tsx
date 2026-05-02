@@ -564,7 +564,6 @@ export function OpenTuiApp({
     setPhase("Working");
     try {
       await session.resumePendingTurn({ signal: controller.signal });
-      setPhase("idle");
       setContextTokens(session.lastInputTokens);
       setCacheReadTokens(session.lastCacheReadTokens ?? 0);
       setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -573,11 +572,16 @@ export function OpenTuiApp({
       if (!controller.signal.aborted) {
         setAskError(err instanceof Error ? err.message : String(err));
         session.appendErrorMessage?.(err instanceof Error ? err.message : String(err), "resume_pending_turn");
-        setPhase("idle");
       }
     } finally {
       abortControllerRef.current = null;
-      setProcessing(false);
+      const suspended = Boolean(session.getPendingAsk?.());
+      if (suspended) {
+        setPhase("Asking");
+      } else {
+        setProcessing(false);
+        setPhase("idle");
+      }
     }
   }, [autoSave, session]);
 
@@ -1431,8 +1435,13 @@ export function OpenTuiApp({
       }
     } finally {
       abortControllerRef.current = null;
-      setProcessing(false);
-      setPhase("idle");
+      const suspended = Boolean(session.getPendingAsk?.());
+      if (suspended) {
+        setPhase("Asking");
+      } else {
+        setProcessing(false);
+        setPhase("idle");
+      }
     }
   }, [session, autoSave]);
 
@@ -2816,7 +2825,7 @@ export function OpenTuiApp({
             todos={planCheckpoints}
             showTodos={showTodos}
             colors={theme.colors}
-            contentWidth={terminal.width - (theme.spacing.screenPaddingX * 2)}
+            contentWidth={terminal.width - 1}
             terminalHeight={terminal.height}
             onAgentClick={enterChildSession}
           />

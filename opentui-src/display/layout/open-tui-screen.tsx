@@ -216,7 +216,7 @@ export function OpenTuiScreen({
   onAgentsPanelClick,
   scrolledAway = false,
 }: OpenTuiScreenProps): React.ReactNode {
-  const conversationColumnWidth = terminal.width - (theme.spacing.screenPaddingX * 2);
+  const conversationColumnWidth = terminal.width - 1;
   const conversationContentWidth = Math.max(20, conversationColumnWidth - 6);
   const pickerMaxVisible = computePickerMaxVisible(terminal.height, theme.layout);
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
@@ -361,8 +361,8 @@ export function OpenTuiScreen({
       backgroundColor={theme.colors.background}
       paddingTop={theme.spacing.screenPaddingY}
       paddingBottom={theme.spacing.screenPaddingY}
-      paddingLeft={theme.spacing.screenPaddingX}
-      paddingRight={theme.spacing.screenPaddingX}
+      paddingLeft={1}
+      paddingRight={0}
       gap={0}
       onMouseDown={onBackgroundMouseDown}
     >

@@ -24,7 +24,7 @@ export function AssistantEntry({
   const streaming = entry.assistantStreaming ?? false;
 
   return (
-    <box paddingLeft={1} paddingTop={1}>
+    <box paddingTop={1}>
       {markdownMode === "raw" ? (
         <text fg={colors.text} content={text} />
       ) : ASSISTANT_RENDERER_MODE === "code" ? (

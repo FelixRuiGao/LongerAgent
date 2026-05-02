@@ -41,7 +41,6 @@ function ThinkingEntryInner(
   return (
     <box
       flexDirection="column"
-      paddingLeft={1}
       paddingTop={1}
       width="100%"
       gap={0}

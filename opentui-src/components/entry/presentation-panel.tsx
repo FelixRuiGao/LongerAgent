@@ -12,7 +12,7 @@ function LogoBlock(
   { lines, gradient }: { lines: readonly string[]; gradient: readonly string[] },
 ): React.ReactNode {
   return (
-    <box paddingLeft={1} paddingRight={1} flexDirection="column" width="100%" paddingBottom={1}>
+    <box flexDirection="column" width="100%" paddingBottom={1}>
       {lines.map((line, index) => (
         <text key={`logo-${index}`} fg={gradient[index]} content={line} />
       ))}

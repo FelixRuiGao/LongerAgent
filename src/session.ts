@@ -1992,6 +1992,7 @@ export class Session {
 
     this._deleteRewindJournal(journalPath);
 
+    this._refreshPlanState();
     this._bumpLogRevision();
     this._notifyLogListeners();
     this.onSaveRequest?.();

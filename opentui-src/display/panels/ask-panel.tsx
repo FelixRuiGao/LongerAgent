@@ -37,7 +37,7 @@ export function AskPanelView({
     const panelHeight = 3 + options.length + (persistentWarning ? 1 : 0) + 1 + (error ? 1 : 0) + 2;
     return (
       <PanelSurface colors={theme.colors} spacing={theme.spacing} height={panelHeight}>
-        <text fg={theme.colors.yellow} content={`⚠ ${ask.summary}`} />
+        <text fg={theme.colors.accent} content={ask.summary} />
         <text fg={theme.colors.dim} content={formatAskSource(ask)} />
         <text content="" />
         {options.map((label, index) => {

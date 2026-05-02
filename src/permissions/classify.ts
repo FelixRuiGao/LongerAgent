@@ -46,6 +46,7 @@ const READ_TOOLS = new Set([
   "show_context", "summarize",
   "ask", "check_status", "await_event", "send",
   "bash_output", "skill", "time",
+  "kill_shell",
 ]);
 
 const WRITE_REVERSIBLE_TOOLS = new Set([
@@ -57,7 +58,7 @@ const SPAWN_TOOLS = new Set([
 ]);
 
 const WRITE_DANGER_TOOLS = new Set([
-  "kill_shell", "kill_agent",
+  "kill_agent",
 ]);
 
 // ------------------------------------------------------------------

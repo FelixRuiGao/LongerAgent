@@ -50,12 +50,15 @@ function UserEntryInner(
   return (
     <box>
       <box height={1} />
-      <box backgroundColor={colors.userBg} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
-        {styledContent
-          ? <text content={styledContent} wrapMode="word" width="100%" />
-          : <text fg={colors.text} content={text} wrapMode="word" width="100%" />
-        }
-        {queued ? <text fg={colors.orange} content=" [queued]" /> : null}
+      <box flexDirection="row">
+        <box width={1} backgroundColor={colors.accent} />
+        <box backgroundColor={colors.userBg} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} flexGrow={1}>
+          {styledContent
+            ? <text content={styledContent} wrapMode="word" width="100%" />
+            : <text fg={colors.text} content={text} wrapMode="word" width="100%" />
+          }
+          {queued ? <text fg={colors.orange} content=" [queued]" /> : null}
+        </box>
       </box>
     </box>
   );

@@ -45,7 +45,7 @@ function SystemEntryInner(
     // Strip any prefix like "[No reply] " from text to get the message part
     const message = text.replace(/^\[.*?\]\s*/, "");
     return (
-      <box paddingLeft={1} paddingTop={1} width="100%" flexDirection="row">
+      <box paddingTop={1} width="100%" flexDirection="row">
         <text content={gradientLabel} attributes={ATTRS_BOLD} />
         <text fg={colors.text} content={`  ${message}`} />
       </box>
@@ -55,35 +55,35 @@ function SystemEntryInner(
   switch (severity) {
     case "error":
       return (
-        <box paddingLeft={1} paddingTop={1} width="100%">
+        <box paddingTop={1} width="100%">
           <text fg={fg} attributes={ATTRS_BOLD} content={`[!] ${text}`} />
         </box>
       );
 
     case "interrupted":
       return (
-        <box paddingLeft={1} width="100%">
+        <box width="100%">
           <text fg={fg} content={text} />
         </box>
       );
 
     case "sub_agent":
       return (
-        <box flexDirection="column" paddingLeft={1} width="100%">
+        <box flexDirection="column" width="100%">
           <text fg={fg} content={text} />
         </box>
       );
 
     case "compact":
       return (
-        <box paddingLeft={1} paddingTop={1} width="100%">
+        <box paddingTop={1} width="100%">
           <text fg={fg} content={text} />
         </box>
       );
 
     default:
       return (
-        <box paddingLeft={1} paddingTop={1} width="100%">
+        <box paddingTop={1} width="100%">
           <text fg={fg} content={text} />
         </box>
       );
