@@ -34,10 +34,12 @@ const savedModelTestEnv = new Map<string, string | undefined>();
 function makeContext(
   registry: ReturnType<typeof buildDefaultRegistry>,
   session: Record<string, unknown>,
+  fermiHomeDir?: string,
 ): CommandContext {
   return {
     session,
     showMessage: mock(),
+    fermiHomeDir,
     autoSave: mock(),
     resetUiState: mock(),
     commandRegistry: registry,
@@ -238,10 +240,9 @@ describe("/model command", () => {
 
   it("prompts for a managed provider key during /model and switches after importing a detected key", async () => {
     process.env["GLM_CODE_API_KEY"] = "glm-code-detected";
-    const previousHome = process.env["HOME"];
     const tempHome = mkdtempSync(join(tmpdir(), "fermi-model-home-"));
-    mkdirSync(join(tempHome, ".fermi"), { recursive: true });
-    process.env["HOME"] = tempHome;
+    const fermiHome = join(tempHome, ".fermi");
+    mkdirSync(fermiHome, { recursive: true });
 
     try {
       const registry = buildDefaultRegistry();
@@ -282,7 +283,7 @@ describe("/model command", () => {
       };
 
       const ctx = {
-        ...makeContext(registry, session),
+        ...makeContext(registry, session, fermiHome),
         promptSelect,
         promptSecret,
       };
@@ -292,6 +293,9 @@ describe("/model command", () => {
       expect(promptSelect).toHaveBeenCalledTimes(1);
       expect(promptSecret).not.toHaveBeenCalled();
       expect(process.env["FERMI_GLM_CODE_API_KEY"]).toBe("glm-code-detected");
+      expect(readFileSync(join(fermiHome, ".env"), "utf-8")).toContain(
+        "FERMI_GLM_CODE_API_KEY=glm-code-detected",
+      );
       expect(upsertModelRaw).toHaveBeenCalledWith(
         "runtime-glm-code-glm-5",
         expect.objectContaining({
@@ -303,11 +307,6 @@ describe("/model command", () => {
       expect(switchModel).toHaveBeenCalledWith("runtime-glm-code-glm-5");
       expect(resetForNewSession).toHaveBeenCalledTimes(1);
     } finally {
-      if (previousHome === undefined) {
-        delete process.env["HOME"];
-      } else {
-        process.env["HOME"] = previousHome;
-      }
       rmSync(tempHome, { recursive: true, force: true });
     }
   });
@@ -364,7 +363,6 @@ describe("/model command", () => {
     expect(cmd).toBeTruthy();
 
     process.env["FERMI_GLM_CODE_API_KEY"] = "glm-test-key";
-    const previousHome = process.env["HOME"];
     const tempHome = mkdtempSync(join(tmpdir(), "fermi-model-home-"));
     const fermiHome = join(tempHome, ".fermi");
     mkdirSync(join(fermiHome, "state"), { recursive: true });
@@ -379,7 +377,6 @@ describe("/model command", () => {
       },
       context_ratio: 0.75,
     }, null, 2));
-    process.env["HOME"] = tempHome;
 
     try {
       const switchModel = mock();
@@ -423,7 +420,7 @@ describe("/model command", () => {
       };
 
       const ctx = {
-        ...makeContext(registry, session),
+        ...makeContext(registry, session, fermiHome),
         store: {
           clearSession: mock(),
         },
@@ -455,11 +452,6 @@ describe("/model command", () => {
         thinking_level: "default",
       });
     } finally {
-      if (previousHome === undefined) {
-        delete process.env["HOME"];
-      } else {
-        process.env["HOME"] = previousHome;
-      }
       rmSync(tempHome, { recursive: true, force: true });
     }
   });

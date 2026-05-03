@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:te
 import { checkForUpdates } from "../src/update-check.js";
 
 describe("checkForUpdates", () => {
-  const originalHome = process.env["HOME"];
   const originalFetch = globalThis.fetch;
   let tempHome: string;
+  let tempFermiHome: string;
 
   beforeEach(() => {
     tempHome = mkdtempSync(join(tmpdir(), "fermi-update-check-"));
-    process.env["HOME"] = tempHome;
+    tempFermiHome = join(tempHome, ".fermi");
     spyOn(console, "log").mockImplementation(() => {});
   });
 
@@ -22,24 +22,18 @@ describe("checkForUpdates", () => {
     } else {
       delete (globalThis as { fetch?: typeof fetch }).fetch;
     }
-    if (originalHome === undefined) {
-      delete process.env["HOME"];
-    } else {
-      process.env["HOME"] = originalHome;
-    }
     rmSync(tempHome, { recursive: true, force: true });
   });
 
   it("prints a cached notice synchronously when available", () => {
-    const cacheDir = join(tempHome, ".fermi");
-    mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(join(cacheDir, ".update-check.json"), JSON.stringify({
+    mkdirSync(tempFermiHome, { recursive: true });
+    writeFileSync(join(tempFermiHome, ".update-check.json"), JSON.stringify({
       lastCheck: Date.now(),
       latestVersion: "0.2.0",
       notice: "Breaking change",
     }));
 
-    const showUpdateNotice = checkForUpdates("0.1.0");
+    const showUpdateNotice = checkForUpdates("0.1.0", tempFermiHome);
     showUpdateNotice();
 
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining("Update available: 0.1.0 → 0.2.0"));
@@ -59,7 +53,7 @@ describe("checkForUpdates", () => {
     });
     globalThis.fetch = mock(async () => await pendingFetch) as typeof fetch;
 
-    const showUpdateNotice = checkForUpdates("0.1.0");
+    const showUpdateNotice = checkForUpdates("0.1.0", tempFermiHome);
     showUpdateNotice();
 
     expect(console.log).not.toHaveBeenCalled();

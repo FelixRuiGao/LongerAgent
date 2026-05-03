@@ -18,7 +18,7 @@ function makeTempDir(prefix: string): string {
 }
 
 describe("path security integration", () => {
-  it("enforces project-root boundary for file tools via executeTool context", async () => {
+  it("allows external reads at executor layer and gates external writes by allowlist", async () => {
     const projectRoot = makeTempDir("fermi-tool-root-");
     const externalRoot = makeTempDir("fermi-tool-ext-");
     try {
@@ -35,18 +35,43 @@ describe("path security integration", () => {
       const outsideFile = join(externalRoot, "outside.txt");
       writeFileSync(outsideFile, "outside\n", "utf-8");
 
-      const cases: Array<[string, Record<string, unknown>]> = [
-        ["read_file", { path: outsideFile }],
-        ["list_dir", { path: externalRoot }],
-        ["grep", { pattern: "outside", path: externalRoot }],
+      const outsideRead = await executeTool(
+        "read_file",
+        { path: outsideFile },
+        { projectRoot },
+      );
+      expect(outsideRead.content).toContain("outside");
+
+      const outsideList = await executeTool(
+        "list_dir",
+        { path: externalRoot },
+        { projectRoot },
+      );
+      expect(outsideList.content).toContain("outside.txt");
+
+      const outsideGrep = await executeTool(
+        "grep",
+        { pattern: "outside", path: externalRoot },
+        { projectRoot },
+      );
+      expect(outsideGrep.content).toContain("outside.txt");
+
+      const deniedWrites: Array<[string, Record<string, unknown>]> = [
         ["edit_file", { path: outsideFile, edits: [{ old_str: "outside", new_str: "edited" }] }],
         ["write_file", { path: join(externalRoot, "new.txt"), content: "x" }],
       ];
 
-      for (const [toolName, args] of cases) {
+      for (const [toolName, args] of deniedWrites) {
         const result = await executeTool(toolName, args, { projectRoot });
         expect(result.content).toContain("project root boundary");
       }
+
+      const allowedWrite = await executeTool(
+        "write_file",
+        { path: join(externalRoot, "new.txt"), content: "x" },
+        { projectRoot, externalPathAllowlist: [externalRoot] },
+      );
+      expect(allowedWrite.content).toContain("OK: Wrote");
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(externalRoot, { recursive: true, force: true });

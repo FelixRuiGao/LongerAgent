@@ -30,13 +30,13 @@ interface RegistryResponse {
   updateNotice?: string;
 }
 
-function cachePath(): string {
-  return join(getFermiHomeDir(), CACHE_FILE);
+function cachePath(homeDir?: string): string {
+  return join(homeDir ?? getFermiHomeDir(), CACHE_FILE);
 }
 
-function readCache(): UpdateCache | null {
+function readCache(homeDir?: string): UpdateCache | null {
   try {
-    const raw = JSON.parse(readFileSync(cachePath(), "utf-8"));
+    const raw = JSON.parse(readFileSync(cachePath(homeDir), "utf-8"));
     if (typeof raw.lastCheck === "number" && typeof raw.latestVersion === "string") {
       return raw as UpdateCache;
     }
@@ -44,11 +44,11 @@ function readCache(): UpdateCache | null {
   return null;
 }
 
-function writeCache(cache: UpdateCache): void {
+function writeCache(cache: UpdateCache, homeDir?: string): void {
   try {
-    const dir = getFermiHomeDir();
+    const dir = homeDir ?? getFermiHomeDir();
     mkdirSync(dir, { recursive: true });
-    writeFileSync(cachePath(), JSON.stringify(cache));
+    writeFileSync(cachePath(homeDir), JSON.stringify(cache));
   } catch { /* ignore */ }
 }
 
@@ -69,11 +69,11 @@ function compareVersions(current: string, latest: string): boolean {
  * time the caller invokes it. This avoids writing to stdout after the Ink UI
  * has taken over the terminal.
  */
-export function checkForUpdates(currentVersion: string): () => void {
+export function checkForUpdates(currentVersion: string, homeDir?: string): () => void {
   let updateMessage: string | null = null;
 
   // Check cache first
-  const cache = readCache();
+  const cache = readCache(homeDir);
   if (cache && Date.now() - cache.lastCheck < CHECK_INTERVAL_MS) {
     if (compareVersions(currentVersion, cache.latestVersion)) {
       updateMessage = formatMessage(currentVersion, cache.latestVersion, cache.notice);
@@ -89,7 +89,7 @@ export function checkForUpdates(currentVersion: string): () => void {
         lastCheck: Date.now(),
         latestVersion: result.version,
         notice: result.notice,
-      });
+      }, homeDir);
       if (compareVersions(currentVersion, result.version)) {
         updateMessage = formatMessage(currentVersion, result.version, result.notice);
       }

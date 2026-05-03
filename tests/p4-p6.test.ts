@@ -61,32 +61,25 @@ describe("P4 shell governance", () => {
     }
   });
 
-  it("enforces project-root boundary for bash cwd and supports approved external cwd allowlist", async () => {
+  it("allows external bash cwd at executor layer", async () => {
     const projectRoot = makeTempDir("fermi-p4-bash-proj-");
     const externalRoot = makeTempDir("fermi-p4-bash-ext-");
     try {
-      const denied = await executeTool(
+      const result = await executeTool(
         "bash",
         { command: "pwd", cwd: externalRoot, timeout: 30 },
         { projectRoot },
       );
-      expect(denied.content).toContain("project root boundary");
-
-      const allowed = await executeTool(
-        "bash",
-        { command: "pwd", cwd: externalRoot, timeout: 30 },
-        { projectRoot, externalPathAllowlist: [externalRoot] },
-      );
-      expect(allowed.content).toContain("STDOUT:");
-      expect(allowed.content).toContain(externalRoot);
-      expect(allowed.content).toContain("EXIT CODE: 0");
+      expect(result.content).toContain("STDOUT:");
+      expect(result.content).toContain(externalRoot);
+      expect(result.content).toContain("EXIT CODE: 0");
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(externalRoot, { recursive: true, force: true });
     }
   });
 
-  it("does not trigger ask preflight for external cwd", async () => {
+  it("asks before running bash in an external cwd", async () => {
     const projectRoot = makeTempDir("fermi-p4-preflight-proj-");
     const externalRoot = makeTempDir("fermi-p4-preflight-ext-");
     try {
@@ -99,7 +92,9 @@ describe("P4 shell governance", () => {
         toolCallId: "tc1",
         summary: "",
       });
-      expect(preflight).toBeUndefined();
+      expect(preflight?.kind).toBe("ask");
+      expect(preflight?.ask.summary).toContain("bash in external directory");
+      expect(preflight?.ask.options).toEqual(["Allow once", "Deny"]);
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(externalRoot, { recursive: true, force: true });
@@ -107,8 +102,8 @@ describe("P4 shell governance", () => {
   });
 });
 
-describe("P6 distill_context behavior", () => {
-  it("distill_context succeeds and hint state is preserved until next API call", () => {
+describe("P6 summarize behavior", () => {
+  it("summarize succeeds and hint state is preserved until next API call", () => {
     const projectRoot = makeTempDir("fermi-p6-distill-hint-");
     try {
       const session = makeSession(projectRoot);
@@ -118,15 +113,15 @@ describe("P6 distill_context behavior", () => {
         createUserMessage("user-001", 1, "hello", "hello", "seed1"),
       );
 
-      const success = (session as any)._execDistillContext({
+      const success = (session as any)._execSummarizeTool({
         operations: [{ context_ids: ["seed1"], content: "compressed" }],
       }) as ToolResult;
       expect(success.content).toContain("1 succeeded");
-      // Hint state is NOT reset by distill_context itself —
+      // Hint state is NOT reset by summarize itself —
       // it's updated by _updateHintStateAfterApiCall based on actual inputTokens
       expect((session as any)._hintState).toBe("level1_sent");
 
-      const fail = (session as any)._execDistillContext({
+      const fail = (session as any)._execSummarizeTool({
         operations: [{ context_ids: ["missing"], content: "will fail" }],
       }) as ToolResult;
       expect(fail.content).toContain("0 succeeded");

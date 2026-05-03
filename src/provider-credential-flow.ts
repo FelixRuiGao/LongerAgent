@@ -30,6 +30,7 @@ export interface CredentialPromptAdapter {
 export interface EnsureManagedCredentialOptions {
   mode: "init" | "model";
   allowReplaceExisting?: boolean;
+  homeDir?: string;
 }
 
 export interface EnsureManagedCredentialResult {
@@ -133,7 +134,7 @@ export async function ensureManagedProviderCredential(
     if (!candidate) {
       throw new Error(`Detected key '${envVar}' is no longer available.`);
     }
-    setDotenvKey(spec.internalEnvVar, candidate.value.trim());
+    setDotenvKey(spec.internalEnvVar, candidate.value.trim(), options.homeDir);
     return {
       status: "configured",
       source: "imported",
@@ -150,7 +151,7 @@ export async function ensureManagedProviderCredential(
       return { status: "skipped", envVar: spec.internalEnvVar };
     }
     if (pasted.trim() === "") continue;
-    setDotenvKey(spec.internalEnvVar, pasted.trim());
+    setDotenvKey(spec.internalEnvVar, pasted.trim(), options.homeDir);
     return {
       status: "configured",
       source: "pasted",
