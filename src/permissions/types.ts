@@ -57,6 +57,10 @@ export interface InvocationAssessment {
   canonicalPattern?: string;
   /** Whether a tool_pattern rule is meaningful for this invocation. */
   canMemoize?: boolean;
+  /** For bash: effective cwd after cd resolution, set when outside projectRoot. */
+  externalCwd?: string;
+  /** For file tools: resolved path that is outside projectRoot. */
+  externalPathPrefix?: string;
 }
 
 // ------------------------------------------------------------------
@@ -72,7 +76,7 @@ export type AdvisorDecision =
 // Approval offers — what the user can choose when asked
 // ------------------------------------------------------------------
 
-export type ApprovalOfferType = "tool_once" | "tool_pattern";
+export type ApprovalOfferType = "tool_once" | "tool_pattern" | "external_path" | "mode_upgrade";
 
 export interface ApprovalOffer {
   type: ApprovalOfferType;
@@ -86,7 +90,7 @@ export interface ApprovalOffer {
 // Permission rules — persisted allow/deny rules
 // ------------------------------------------------------------------
 
-export interface PermissionRule {
+export interface ToolPatternRule {
   id: string;
   type: "tool_pattern";
   action: "allow" | "deny";
@@ -97,6 +101,19 @@ export interface PermissionRule {
   scope: "session" | "project" | "global";
   createdAt: number;
 }
+
+export interface ExternalPathRule {
+  id: string;
+  type: "external_path";
+  action: "allow";
+  accessKind: "read" | "write_reversible";
+  /** Directory prefix (resolved absolute path). */
+  pathPrefix: string;
+  scope: "session" | "project";
+  createdAt: number;
+}
+
+export type PermissionRule = ToolPatternRule | ExternalPathRule;
 
 export interface PermissionRuleFile {
   version: 1;

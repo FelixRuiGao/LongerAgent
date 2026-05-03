@@ -103,8 +103,10 @@ function walkNode(
     case "pipeline":
       return appendCommandSegment(node, "pipeline", state, segments);
     case "redirected_statement":
+      return handleRedirectedStatement(node, state, segments);
     case "file_redirect":
-      return unsupported("redirection", "Shell redirection requires manual approval.", node);
+      // Standalone file_redirect outside a redirected_statement — safe to ignore
+      return;
     case "heredoc_redirect":
     case "heredoc_start":
     case "heredoc_body":
@@ -121,7 +123,8 @@ function walkNode(
         node,
       );
     case "variable_assignment":
-      return unsupported("variable_assignment_prefix", "Shell variable assignment prefixes require manual approval.", node);
+      // Standalone variable assignment (e.g. `FOO=bar`) is a no-op in subprocess — skip
+      return;
     default:
       if (node.isNamed) {
         return unsupported("unsupported_node", `Unsupported shell node: ${node.type}`, node);
@@ -177,6 +180,77 @@ function appendCommandSegment(
   state.connectorBefore = null;
 }
 
+/**
+ * Handle `redirected_statement`: unwrap the inner command/pipeline,
+ * and check if the redirect writes to a real file (vs /dev/null).
+ */
+function handleRedirectedStatement(
+  node: TreeNode,
+  state: { connectorBefore: BashConnector | null },
+  segments: ParsedBashSegment[],
+): void | UnsupportedBashScript {
+  let innerNode: TreeNode | null = null;
+  let hasFileWrite = false;
+
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child) continue;
+
+    if (child.type === "command" || child.type === "pipeline") {
+      innerNode = child;
+    } else if (child.type === "file_redirect" || child.type === "heredoc_redirect") {
+      if (child.type === "heredoc_redirect") {
+        return unsupported("heredoc", "Shell heredoc syntax requires manual approval.", child);
+      }
+      // Determine if this redirect writes to a real file
+      const redirectTarget = getRedirectTarget(child);
+      if (redirectTarget && redirectTarget !== "/dev/null") {
+        hasFileWrite = true;
+      }
+    }
+  }
+
+  if (!innerNode) {
+    return unsupported("unsupported_node", "Redirected statement has no inner command.", node);
+  }
+
+  const operator = innerNode.type === "pipeline" ? "pipeline" as const : "command" as const;
+  const commands: ParsedBashCommand[] = [];
+  if (operator === "command") {
+    const command = tokenizeCommandNode(innerNode);
+    if (isUnsupported(command)) return command;
+    commands.push(command);
+  } else {
+    for (const child of namedChildren(innerNode)) {
+      const command = tokenizeCommandNode(child);
+      if (isUnsupported(command)) return command;
+      commands.push(command);
+    }
+  }
+
+  segments.push({
+    index: segments.length,
+    text: node.text,
+    operator,
+    connectorBefore: state.connectorBefore,
+    commands,
+    hasFileWriteRedirect: hasFileWrite || undefined,
+  });
+  state.connectorBefore = null;
+}
+
+function getRedirectTarget(fileRedirectNode: TreeNode): string | null {
+  for (let i = 0; i < fileRedirectNode.childCount; i++) {
+    const child = fileRedirectNode.child(i);
+    if (!child) continue;
+    // The target is typically a "word" node after the operator (>, >>, 2>)
+    if (child.type === "word" || child.type === "string" || child.type === "raw_string") {
+      return child.text.replace(/^["']|["']$/g, "");
+    }
+  }
+  return null;
+}
+
 // ------------------------------------------------------------------
 // Command tokenization
 // ------------------------------------------------------------------
@@ -186,9 +260,8 @@ function tokenizeCommandNode(node: TreeNode): ParsedBashCommand | UnsupportedBas
   let nameToken: BashToken | null = null;
 
   for (const child of namedChildren(node)) {
-    if (child.type === "variable_assignment") {
-      return unsupported("variable_assignment_prefix", "Shell variable assignment prefixes require manual approval.", child);
-    }
+    // VAR=val prefix before a command — skip, classify the real command
+    if (child.type === "variable_assignment") continue;
 
     const forbidden = findForbiddenNode(child);
     if (forbidden) return forbidden;
@@ -277,9 +350,6 @@ function findForbiddenNode(node: TreeNode): UnsupportedBashScript | null {
       );
     case "process_substitution":
       return unsupported("process_substitution", "Shell process substitution requires manual approval.", node);
-    case "redirected_statement":
-    case "file_redirect":
-      return unsupported("redirection", "Shell redirection requires manual approval.", node);
     case "heredoc_redirect":
     case "heredoc_start":
     case "heredoc_body":

@@ -8,12 +8,10 @@ export type BashUnsupportedReason =
   | "parse_error"
   | "timeout"
   | "subshell"
-  | "redirection"
   | "backticks"
   | "command_substitution"
   | "process_substitution"
   | "heredoc"
-  | "variable_assignment_prefix"
   | "unsupported_node"
   | "unresolved_cd_target";
 
@@ -39,6 +37,8 @@ export interface ParsedBashSegment {
   readonly operator: "command" | "pipeline";
   readonly connectorBefore: BashConnector | null;
   readonly commands: readonly ParsedBashCommand[];
+  /** Whether this segment redirects output to a real file (not /dev/null). */
+  readonly hasFileWriteRedirect?: boolean;
 }
 
 export interface ParsedBashScript {

@@ -1,10 +1,13 @@
 export { classifyTool, classifyToolAsync, initBashParser } from "./classify.js";
 export { PermissionRuleStore } from "./rules.js";
 export { PermissionAdvisor } from "./advisor.js";
+export { extractCdTarget, resolveCdContext, resolveCdContextParsed } from "./cd-context.js";
 export type {
   PermissionMode,
   PermissionClass,
   PermissionRule,
+  ToolPatternRule,
+  ExternalPathRule,
   PermissionRuleFile,
   InvocationAssessment,
   AdvisorDecision,

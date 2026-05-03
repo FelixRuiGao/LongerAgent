@@ -9,6 +9,7 @@
 import fs from "node:fs/promises";
 import { existsSync, statSync, readFileSync, readdirSync, realpathSync, writeFileSync as fsWriteFileSync, unlinkSync, mkdirSync, copyFileSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
+import { homedir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
@@ -324,6 +325,22 @@ function splitCompoundBash(command: string): string[] {
   return segments;
 }
 
+/**
+ * Extract cd target from a bash segment (for mutation tracking).
+ * Inline version — avoids importing cd-context.ts to prevent circular deps.
+ */
+function extractCdTargetForBash(segment: string): string | null {
+  const trimmed = segment.trim().replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)+/, "");
+  const parts = trimmed.split(/\s+/);
+  if (parts[0] !== "cd") return null;
+  if (parts.length === 1) return homedir();
+  const target = parts[1]!;
+  if (target === "-" || (target.startsWith("$") && target !== "$HOME") || target.includes("`") || target.includes("$(")) return null;
+  if (target === "$HOME" || target === "~") return homedir();
+  if (target.startsWith("~/")) return path.join(homedir(), target.slice(2));
+  return target;
+}
+
 function computeSha256(content: string): string {
   return createHash("sha256").update(content, "utf-8").digest("hex");
 }
@@ -595,7 +612,7 @@ const BASH: ToolDef = {
     },
     required: ["command", "timeout"],
   },
-  summaryTemplate: "{agent} is running a shell command",
+  summaryTemplate: "{agent} is running: {command}",
   tuiPolicy: { partialReveal: { completeArgs: ["command"] } },
 };
 
@@ -2010,7 +2027,8 @@ function scopedPath(
       }
     }
 
-    // Read-like operations outside scope: resolve and allow without boundary enforcement
+    // Read-like operations outside scope: advisor is the sole gate for external reads,
+    // executor does not double-enforce.
     if (READ_ACCESS_KINDS.has(accessKind)) {
       const resolved = path.isAbsolute(requestedPath)
         ? path.resolve(requestedPath)
@@ -2545,12 +2563,28 @@ function createDispatch(ctx?: ExecuteToolContext): Record<string, ToolExecutor> 
         const effectiveCwd = cwd || toolRoot(ctx);
         const backupsDir = path.join(ctx?.sessionArtifactsDir ?? effectiveCwd, "rewind-backups");
 
-        // Pre-exec: detect tracked commands and snapshot state
+        // Pre-exec: detect tracked commands and snapshot state.
+        // cd-aware: track effectiveCwd through cd segments so mutation
+        // paths resolve correctly. External paths skip tracking.
         const segments = splitCompoundBash(command);
         const preExecStates: Array<{ segmentIndex: number; state: BashPreExecState }> = [];
-        for (let i = 0; i < segments.length; i++) {
-          const state = prepareBashPreExec(segments[i]!, backupsDir, effectiveCwd);
-          if (state) preExecStates.push({ segmentIndex: i, state });
+        const projectRoot = ctx?.projectRoot ?? effectiveCwd;
+        {
+          let segmentCwd = effectiveCwd;
+          for (let i = 0; i < segments.length; i++) {
+            const cdTarget = extractCdTargetForBash(segments[i]!);
+            if (cdTarget !== null) {
+              segmentCwd = path.isAbsolute(cdTarget)
+                ? path.resolve(cdTarget)
+                : path.resolve(segmentCwd, cdTarget);
+              continue;
+            }
+            // Skip mutation tracking for external paths
+            const rel = path.relative(projectRoot, segmentCwd);
+            if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+            const state = prepareBashPreExec(segments[i]!, backupsDir, segmentCwd);
+            if (state) preExecStates.push({ segmentIndex: i, state });
+          }
         }
 
         const output = await toolBash(command, timeout, cwd, { signal: rtCtx?.signal });

@@ -162,6 +162,8 @@ export interface ExecutorDeps {
   /** Called after a file write to check if plan.md was modified */
   isPlanFile?: (filePath: string) => boolean;
   onPlanFileWrite?: () => void;
+  /** Dynamic getter for approved external path prefixes from permission rules. */
+  getApprovedExternalPrefixes?: () => string[];
 }
 
 export function buildToolExecutors(deps: ExecutorDeps): Record<string, ToolExecutor> {
@@ -174,12 +176,16 @@ export function buildToolExecutors(deps: ExecutorDeps): Record<string, ToolExecu
     onFileWrite,
     isPlanFile,
     onPlanFileWrite,
+    getApprovedExternalPrefixes,
   } = deps;
 
   const scopedBuiltin = (toolName: string): ToolExecutor =>
     (args, rtCtx) => executeTool(toolName, args, {
       projectRoot,
-      externalPathAllowlist: [getSessionArtifactsDir()],
+      externalPathAllowlist: [
+        getSessionArtifactsDir(),
+        ...(getApprovedExternalPrefixes?.() ?? []),
+      ],
       sessionArtifactsDir: getSessionArtifactsDir(),
       supportsMultimodal,
       signal: rtCtx?.signal,
@@ -227,7 +233,10 @@ export function buildToolExecutors(deps: ExecutorDeps): Record<string, ToolExecu
     web_fetch: (args, rtCtx) => executeTool("web_fetch", args, { signal: rtCtx?.signal }),
     bash: (args, rtCtx) => executeTool("bash", args, {
       projectRoot,
-      externalPathAllowlist: [getSessionArtifactsDir()],
+      externalPathAllowlist: [
+        getSessionArtifactsDir(),
+        ...(getApprovedExternalPrefixes?.() ?? []),
+      ],
       signal: rtCtx?.signal,
     }),
     ...commExecutors,

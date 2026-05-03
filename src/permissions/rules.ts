@@ -18,7 +18,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { getFermiHomeDir } from "../home-path.js";
-import type { PermissionRule, PermissionRuleFile, InvocationAssessment } from "./types.js";
+import type { PermissionRule, PermissionRuleFile, InvocationAssessment, ExternalPathRule } from "./types.js";
 
 // ------------------------------------------------------------------
 // PermissionRuleStore — manages rules across all layers
@@ -76,11 +76,11 @@ export class PermissionRuleStore {
   // -- Mutations -------------------------------------------------------
 
   addRule(rule: Omit<PermissionRule, "id" | "createdAt">): PermissionRule {
-    const full: PermissionRule = {
+    const full = {
       ...rule,
       id: this._generateId(rule.scope),
       createdAt: Date.now(),
-    };
+    } as PermissionRule;
 
     if (full.scope === "session") {
       this._sessionRules.push(full);
@@ -125,10 +125,40 @@ export class PermissionRuleStore {
     this._sessionRules = [];
   }
 
+  // -- External path rules ---------------------------------------------
+
+  findMatchingExternalPathRule(
+    resolvedPath: string,
+    accessKind: "read" | "write_reversible",
+  ): ExternalPathRule | null {
+    const allRules = this._getEffectiveRules();
+    for (const rule of allRules) {
+      if (rule.type !== "external_path") continue;
+      if (rule.action !== "allow") continue;
+      if (accessKind === "write_reversible" && rule.accessKind !== "write_reversible") continue;
+      // Normalize: ensure prefix ends with / to prevent /tmp/foo matching /tmp/foobar
+      const prefix = rule.pathPrefix.endsWith("/") ? rule.pathPrefix : rule.pathPrefix + "/";
+      if (resolvedPath.startsWith(prefix) || resolvedPath === prefix.slice(0, -1)) return rule;
+    }
+    return null;
+  }
+
+  /** Get all approved external path prefixes (for executor allowlist). */
+  getApprovedExternalPrefixes(): string[] {
+    const allRules = this._getEffectiveRules();
+    const prefixes: string[] = [];
+    for (const rule of allRules) {
+      if (rule.type !== "external_path") continue;
+      if (rule.action !== "allow") continue;
+      prefixes.push(rule.pathPrefix.endsWith("/") ? rule.pathPrefix : rule.pathPrefix + "/");
+    }
+    return prefixes;
+  }
+
   // -- Rule matching ---------------------------------------------------
 
   private _ruleMatches(rule: PermissionRule, assessment: InvocationAssessment): boolean {
-    if (rule.type !== "tool_pattern") return false;
+    if (rule.type === "external_path") return false;
     if (rule.tool !== assessment.toolName) return false;
 
     // If rule has a pattern, match against canonical pattern or raw commands

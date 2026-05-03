@@ -87,7 +87,7 @@ import {
   type GateAdvisor,
 } from "./tool-runtime.js";
 import { BackgroundShellManager } from "./background-shell-manager.js";
-import { PermissionAdvisor, PermissionRuleStore, initBashParser, type PermissionMode } from "./permissions/index.js";
+import { PermissionAdvisor, PermissionRuleStore, initBashParser, type PermissionMode, type PermissionRule, type ApprovalOffer } from "./permissions/index.js";
 import { HookRuntime, type HookEvent, type HookPayload } from "./hooks/index.js";
 import type { HookManifest } from "./hooks/types.js";
 import { assembleFullSystemPrompt } from "./prompt-assembler.js";
@@ -936,6 +936,7 @@ export class Session {
     this._permissionAdvisor = new PermissionAdvisor({
       ruleStore: this._permissionRuleStore,
       sessionMode: opts.permissionMode ?? "reversible",
+      projectRoot: this._projectRoot,
     });
     this.toolGate.addAdvisor(this._permissionAdvisor);
 
@@ -3015,6 +3016,10 @@ export class Session {
       },
       isPlanFile: (filePath) => this._isPlanFilePath(filePath),
       onPlanFileWrite: () => this._refreshPlanState(),
+      getApprovedExternalPrefixes: () => {
+        if (this._permissionAdvisor.sessionMode === "yolo") return ["/"];
+        return this._permissionRuleStore.getApprovedExternalPrefixes();
+      },
     });
   }
 
@@ -5588,8 +5593,17 @@ export class Session {
       // _drainPendingToolCalls during resume.
       if (offer?.type === "tool_once") {
         this._permissionAdvisor.grantAllowOnce(payload.toolCallId);
-      } else if (offer?.type === "tool_pattern" && offer.rule) {
-        this._permissionAdvisor.acceptOffer(offer as any);
+      } else if (offer?.type === "mode_upgrade") {
+        this.permissionMode = "reversible";
+        this._permissionAdvisor.grantAllowOnce(payload.toolCallId);
+      } else if ((offer?.type === "tool_pattern" || offer?.type === "external_path") && offer.rule) {
+        this._permissionAdvisor.acceptOffer({
+          type: offer.type as ApprovalOffer["type"],
+          label: offer.label,
+          scope: offer.scope as ApprovalOffer["scope"],
+          rule: offer.rule as unknown as PermissionRule,
+        });
+        this._permissionAdvisor.grantAllowOnce(payload.toolCallId);
       }
     }
 
