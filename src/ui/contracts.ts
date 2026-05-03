@@ -13,7 +13,7 @@ import type {
   AgentQuestionDecision,
 } from "../ask.js";
 import type { LogEntry, LogIdAllocator } from "../log-entry.js";
-import type { ChildSessionSnapshot } from "../session-tree-types.js";
+import type { ChildSessionSnapshot, DeliverMessageResult } from "../session-tree-types.js";
 import type {
   CommandRegistry as ActualCommandRegistry,
   CommandContext,
@@ -154,7 +154,8 @@ export interface Session {
   config?: { modelNames: string[]; getModel(name: string): { provider: string; model: string; contextLength: number; supportsThinking: boolean; supportsMultimodal: boolean } };
   _resetTransientState(): void;
   _initConversation(): void;
-  deliverMessage?(source: "user" | "system", content: string): void;
+  deliverMessage?(source: "user" | "system", content: string): DeliverMessageResult | void;
+  restoreQueuedUserInput?(): string | null;
   log?: readonly LogEntry[];
   subscribeLog?(listener: () => void): () => void;
   getLogRevision?(): number;

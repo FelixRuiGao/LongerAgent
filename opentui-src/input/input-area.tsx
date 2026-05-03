@@ -23,6 +23,7 @@ interface InputAreaProps {
   processing: boolean;
   pendingAsk: boolean;
   selectedChildId: string | null;
+  hasQueuedUserInput?: boolean;
   phase: ActivityPhase;
   modelName: string;
   /** Thinking level suffix shown after the model name in dim color, e.g. "(high)". Empty string = hidden. */
@@ -112,6 +113,7 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
     processing,
     pendingAsk,
     selectedChildId,
+    hasQueuedUserInput = false,
     phase,
     modelName,
     modelColor,
@@ -153,7 +155,9 @@ function InputAreaInner(props: InputAreaProps): React.ReactNode {
     ? "ask pending..."
     : selectedChildId
       ? "Esc/^C close or interrupt · Opt+←→ switch tabs · Opt+↑ main"
-      : "message or /command";
+      : hasQueuedUserInput
+        ? "↑ to edit the queued message"
+        : "message or /command";
 
   const focused = phase !== "closing" && !pendingAsk && !commandPicker && !checkboxPicker && !promptSelect && !promptSecret && !selectedChildId;
 

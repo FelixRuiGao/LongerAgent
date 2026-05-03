@@ -60,6 +60,7 @@ export interface OpenTuiScreenProps {
   markdownMode: "rendered" | "raw";
   scrollRef: React.RefObject<ScrollBoxRenderable | null>;
   selectedChildId: string | null;
+  hasQueuedUserInput?: boolean;
   onEntryClick: (entry: PresentationEntry) => void;
   onAgentClick?: (agentId: string) => void;
   pendingAsk: PendingAskUi | null;
@@ -150,6 +151,7 @@ export function OpenTuiScreen({
   markdownMode,
   scrollRef,
   selectedChildId,
+  hasQueuedUserInput = false,
   onEntryClick,
   onAgentClick,
   pendingAsk,
@@ -250,6 +252,7 @@ export function OpenTuiScreen({
       processing={processing}
       pendingAsk={Boolean(pendingAsk)}
       selectedChildId={selectedChildId}
+      hasQueuedUserInput={hasQueuedUserInput}
       phase={phase}
       modelName={modelName}
       thinkingSuffix={thinkingSuffix}
@@ -418,11 +421,12 @@ export function OpenTuiScreen({
                 {/* Spacer between entries and input section */}
                 <box height={1} />
 
+                {/* Pending queued messages — above the entire input section */}
+                {pendingMessages}
+                {pendingMessages ? <box height={1} /> : null}
+
                 {/* Status panel (agents + todos) */}
                 {statusPanel}
-
-                {/* Pending queued messages (above input, compact user bubble style) */}
-                {pendingMessages}
 
                 {/* Input area — inside the scrollbox */}
                 {inputAreaElement}
@@ -453,8 +457,9 @@ export function OpenTuiScreen({
       {isDetailTab ? (
         <>
           <box height={1} />
-          {statusPanel}
           {pendingMessages}
+          {pendingMessages ? <box height={1} /> : null}
+          {statusPanel}
           {inputAreaElement}
           {overlaysBlock}
         </>

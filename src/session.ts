@@ -165,6 +165,7 @@ import type {
   ChildSessionOutcome,
   ChildSessionPhase,
   ChildSessionSnapshot,
+  DeliverMessageResult,
   MessageEnvelope,
   MessageType,
 } from "./session-tree-types.js";
@@ -1154,7 +1155,7 @@ export class Session {
     display: string,
     content: unknown,
     contextId: string,
-    tuiVisible = false,
+    tuiVisible = true,
   ): void {
     this._appendEntry(
       createUserMessageEntry(
@@ -1290,7 +1291,13 @@ export class Session {
    * All states push to inbox. Idle state also schedules auto-resume.
    * Working/waiting: the activation boundary or await_event poll drains.
    */
-  private _deliverMessage(msg: MessageEnvelope): void {
+  private _deliverMessage(msg: MessageEnvelope): DeliverMessageResult {
+    if (msg.type === "user_input" && msg.sender === "user") {
+      const queued = this._getQueuedUserInputs();
+      if (queued.length > 0) {
+        return { accepted: false, reason: "queued_user_input_pending" };
+      }
+    }
     if (msg.type === "user_input" && msg.inputIndex === undefined) {
       const received = this._recordInputReceived("user", msg.content, msg.content);
       msg = {
@@ -1306,19 +1313,82 @@ export class Session {
     if (this._agentState === "idle") {
       this._scheduleAutoResume();
     }
+    return { accepted: true };
   }
 
   /**
    * Public wrapper for TUI / GUI to deliver messages.
    * Preserves the original (source, content) signature for external callers.
    */
-  deliverMessage(source: "user" | "system", content: string): void {
-    this._deliverMessage({
+  deliverMessage(source: "user" | "system", content: string): DeliverMessageResult {
+    return this._deliverMessage({
       type: source === "user" ? "user_input" : "system_notice",
       sender: source,
       content,
       timestamp: Date.now(),
     });
+  }
+
+  private _getQueuedUserInputs(): Array<{
+    inputId: string;
+    inboxIndex: number;
+    message: MessageEnvelope;
+    inputEntry: LogEntry;
+  }> {
+    const deliveredInputIds = new Set<string>();
+    for (const entry of this._log) {
+      if (entry.discarded || entry.type !== "user_message") continue;
+      const inputId = entry.meta["inputId"];
+      if (typeof inputId === "string" && inputId.trim()) {
+        deliveredInputIds.add(inputId);
+      }
+    }
+
+    const queued: Array<{
+      inputId: string;
+      inboxIndex: number;
+      message: MessageEnvelope;
+      inputEntry: LogEntry;
+    }> = [];
+    for (let inboxIndex = 0; inboxIndex < this._inbox.length; inboxIndex++) {
+      const message = this._inbox[inboxIndex];
+      if (message.type !== "user_input" || message.sender !== "user") continue;
+      if (!message.inputId || deliveredInputIds.has(message.inputId)) continue;
+      const inputEntry = this._log.find((entry) => {
+        if (entry.discarded || entry.type !== "input_received") return false;
+        if (entry.meta["inputKind"] !== "user") return false;
+        return entry.meta["inputId"] === message.inputId;
+      });
+      if (!inputEntry) continue;
+      queued.push({ inputId: message.inputId, inboxIndex, message, inputEntry });
+    }
+    return queued;
+  }
+
+  private _maxLiveInputIndex(): number {
+    let max = 0;
+    for (const entry of this._log) {
+      if (entry.discarded) continue;
+      if (entry.type !== "input_received" && entry.type !== "turn_start") continue;
+      max = Math.max(max, entry.turnIndex);
+    }
+    return max;
+  }
+
+  restoreQueuedUserInput(): string | null {
+    const queued = this._getQueuedUserInputs();
+    if (queued.length !== 1) return null;
+
+    const item = queued[0];
+    if (!item) return null;
+    this._inbox.splice(item.inboxIndex, 1);
+    item.inputEntry.discarded = true;
+    if (this._turnCount === item.inputEntry.turnIndex) {
+      this._turnCount = this._maxLiveInputIndex();
+    }
+    this._touchLog();
+    this.onSaveRequest?.();
+    return item.message.content;
   }
 
   private _autoResumeScheduled = false;
@@ -1442,7 +1512,6 @@ export class Session {
             msg.content,
             msg.content,
             msg.contextId,
-            false,
           );
           break;
         }
@@ -3619,7 +3688,6 @@ export class Session {
       displayText,
       content,
       received.contextId,
-      false,
     );
     this.onSaveRequest?.();
 
@@ -4758,7 +4826,6 @@ export class Session {
         displayText,
         logContent,
         received.contextId,
-        false,
       );
     }
     this.onSaveRequest?.();

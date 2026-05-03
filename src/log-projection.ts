@@ -87,6 +87,7 @@ const PRIMARY_ROUND_ENTRY_TYPES = new Set<LogEntry["type"]>([
 
 function isProjectableTuiEntry(entry: LogEntry, coveredSet?: Set<string>): boolean {
   if (entry.discarded) return false;
+  if (entry.type === "input_received") return false;
   if (!entry.tuiVisible) return false;
   if (coveredSet && isCoveredBySummary(entry, coveredSet)) return false;
   if (
@@ -97,6 +98,43 @@ function isProjectableTuiEntry(entry: LogEntry, coveredSet?: Set<string>): boole
     return false;
   }
   return true;
+}
+
+export interface QueuedInputProjection {
+  id: string;
+  text: string;
+  turnIndex: number;
+  timestamp: number;
+}
+
+export function projectQueuedInputs(entries: LogEntry[]): QueuedInputProjection[] {
+  const deliveredInputIds = new Set<string>();
+  for (const entry of entries) {
+    if (entry.discarded || entry.type !== "user_message") continue;
+    const inputId = entry.meta["inputId"];
+    if (typeof inputId === "string" && inputId.trim()) {
+      deliveredInputIds.add(inputId);
+    }
+  }
+
+  const queued: QueuedInputProjection[] = [];
+  for (const entry of entries) {
+    if (entry.discarded || entry.type !== "input_received") continue;
+    const inputKind = entry.meta["inputKind"];
+    if (inputKind !== "user") continue;
+    const inputIdRaw = entry.meta["inputId"];
+    const inputId = typeof inputIdRaw === "string" && inputIdRaw.trim()
+      ? inputIdRaw
+      : entry.id;
+    if (deliveredInputIds.has(inputId)) continue;
+    queued.push({
+      id: inputId,
+      text: entry.display,
+      turnIndex: entry.turnIndex,
+      timestamp: entry.timestamp,
+    });
+  }
+  return queued;
 }
 
 function toConversationEntry(

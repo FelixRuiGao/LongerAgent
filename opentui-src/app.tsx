@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { execSync } from "node:child_process";
 
 import type {
@@ -12,6 +12,7 @@ import type {
 import type { SessionStore } from "../src/persistence.js";
 import type { ChildSessionSnapshot } from "../src/session-tree-types.js";
 import { saveLog } from "../src/persistence.js";
+import { projectQueuedInputs } from "../src/log-projection.js";
 import { isCommandExitSignal } from "../src/commands.js";
 import { ProgressReporter, type ProgressEvent } from "../src/progress.js";
 import { scanCandidates } from "../src/file-attach.js";
@@ -260,28 +261,15 @@ export function OpenTuiApp({
   const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
   const [todoPanelOpen, setTodoPanelOpen] = useState(false);
   const [scrolledAway, setScrolledAway] = useState(false);
-  const [queuedUserInputs, setQueuedUserInputs] = useState<string[]>([]);
-  const prevUserEntryCountRef = useRef(0);
-
-  // Clear queued inputs when drain creates new user entries in the conversation.
-  // Only count on root transcript (selectedChildId === null) to avoid miscounting
-  // when switching to/from child tabs.
+  const [rootLogRevision, setRootLogRevision] = useState(session.getLogRevision?.() ?? 0);
+  const queuedInputs = useMemo(() => {
+    if (selectedChildId !== null) return [];
+    return projectQueuedInputs([...(session.log ?? [])]);
+  }, [rootLogRevision, selectedChildId, session]);
+  const queuedInputsRef = useRef(queuedInputs);
   useEffect(() => {
-    if (selectedChildId !== null) return;
-    const count = presentationEntries.filter((e) => e.kind === "user").length;
-    const newUsers = count - prevUserEntryCountRef.current;
-    prevUserEntryCountRef.current = count;
-    if (newUsers > 0 && queuedUserInputs.length > 0) {
-      setQueuedUserInputs((prev) => prev.slice(newUsers));
-    }
-  }, [presentationEntries, selectedChildId]);
-
-  // Fallback: clear when processing ends
-  useEffect(() => {
-    if (!processing && queuedUserInputs.length > 0) {
-      setQueuedUserInputs([]);
-    }
-  }, [processing]);
+    queuedInputsRef.current = queuedInputs;
+  }, [queuedInputs]);
 
   // Auto-open panels on first appearance (once per session)
   const hasAutoOpenedAgents = useRef(false);
@@ -756,6 +744,7 @@ export function OpenTuiApp({
       // appear in snapshots. No need for frozenChildView protection here.
       setPendingAsk(session.getPendingAsk?.() ?? null);
       setPermissionModeState(session.permissionMode ?? "reversible");
+      setRootLogRevision(session.getLogRevision?.() ?? 0);
       if (session.lastInputTokens > 0) {
         setContextTokens(session.lastInputTokens);
         setCacheReadTokens(session.lastCacheReadTokens ?? 0);
@@ -1514,20 +1503,19 @@ export function OpenTuiApp({
     const input = submittedValue.trim();
     if (!input) return;
 
-    appendPromptHistory(input);
+    const cmdToken = input.startsWith("/") ? input.split(/\s/)[0] : "";
+    const isUiOnlyCommand = Boolean(cmdToken && UI_ONLY_COMMANDS.has(cmdToken));
 
     // UI-only commands: always intercept, even when processing
-    if (input.startsWith("/")) {
-      const cmdToken = input.split(/\s/)[0];
-      if (UI_ONLY_COMMANDS.has(cmdToken)) {
-        clearInput();
-        const command = commandRegistry.lookup(cmdToken);
-        if (command) {
-          const args = input.slice(cmdToken.length).trim();
-          try { await command.handler(buildCommandContext(), args); } catch { /* ignore */ }
-        }
-        return;
+    if (isUiOnlyCommand) {
+      appendPromptHistory(input);
+      clearInput();
+      const command = commandRegistry.lookup(cmdToken);
+      if (command) {
+        const args = input.slice(cmdToken.length).trim();
+        try { await command.handler(buildCommandContext(), args); } catch { /* ignore */ }
       }
+      return;
     }
 
     if (pendingAsk) {
@@ -1542,6 +1530,7 @@ export function OpenTuiApp({
     if (!processingRef.current && input.startsWith("/") && !/\s/.test(input)) {
       const command = commandRegistry.lookup(input);
       if (command?.options && startCommandPicker(input)) {
+        appendPromptHistory(input);
         if (inputRef.current) {
           inputRef.current.extmarks.clear();
           inputRef.current.setText("");
@@ -1553,6 +1542,33 @@ export function OpenTuiApp({
         return;
       }
     }
+
+    // Use ref to avoid stale closure — OpenTUI's custom renderer may not
+    // re-create useCallback closures on every state change.
+    const isProcessing = processingRef.current;
+
+    if (isProcessing) {
+      if (queuedInputsRef.current.length > 0) {
+        showHint("A message is already queued");
+        return;
+      }
+      if (typeof session.deliverMessage === "function") {
+        const decision = session.deliverMessage("user", input);
+        queuedInputsRef.current = projectQueuedInputs([...(session.log ?? [])]);
+        if (decision && decision.accepted === false) {
+          showHint("A message is already queued");
+          return;
+        }
+        appendPromptHistory(input);
+        clearInput();
+        showHint("Message queued");
+      } else {
+        showHint("The assistant is busy and this prototype cannot queue input here.");
+      }
+      return;
+    }
+
+    appendPromptHistory(input);
 
     // Capture image tokens before clearInput destroys composer state
     let inlineImages: InlineImageInput[] | undefined;
@@ -1568,21 +1584,6 @@ export function OpenTuiApp({
     }
 
     clearInput();
-
-    // Use ref to avoid stale closure — OpenTUI's custom renderer may not
-    // re-create useCallback closures on every state change.
-    const isProcessing = processingRef.current;
-
-    if (isProcessing) {
-      if (typeof session.deliverMessage === "function") {
-        session.deliverMessage("user", input);
-        setQueuedUserInputs((prev) => [...prev, input]);
-        showHint("Message queued");
-      } else {
-        showHint("The assistant is busy and this prototype cannot queue input here.");
-      }
-      return;
-    }
 
     if (input.startsWith("/")) {
       const [cmdName] = input.split(/\s+/, 1);
@@ -2624,6 +2625,29 @@ export function OpenTuiApp({
     // Prompt history: ↑ at the very start, ↓ at the very end. Multi-line cursor
     // movement still wins via the gotoVisualLineHome/End branches below — they
     // run when cursor isn't yet at the absolute boundary.
+    if (
+      event.name === "up" &&
+      composer.cursorOffset === 0 &&
+      composer.plainText.length === 0 &&
+      !selectedChildId &&
+      queuedInputsRef.current.length > 0
+    ) {
+      const restored = session.restoreQueuedUserInput?.() ?? null;
+      queuedInputsRef.current = projectQueuedInputs([...(session.log ?? [])]);
+      if (restored !== null) {
+        composer.extmarks.clear();
+        composer.setText(restored);
+        composer.cursorOffset = displayWidthWithNewlines(restored);
+        syncComposerState();
+        showHint("Queued message restored");
+      } else {
+        showHint("Queued message is already being sent");
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     if (event.name === "up" && composer.cursorOffset === 0 && !selectedChildId) {
       const recalled = navigatePromptHistory(-1, composer.plainText);
       if (recalled !== undefined) {
@@ -2793,6 +2817,7 @@ export function OpenTuiApp({
       markdownMode={markdownMode}
       scrollRef={scrollRef}
       selectedChildId={selectedChildId}
+      hasQueuedUserInput={queuedInputs.length > 0}
       onEntryClick={openDetailTab}
       onAgentClick={enterChildSession}
       pendingAsk={pendingAsk}
@@ -2873,11 +2898,11 @@ export function OpenTuiApp({
           />
         );
       })()}
-      pendingMessages={queuedUserInputs.length > 0 ? (
+      pendingMessages={queuedInputs.length > 0 ? (
         <box flexDirection="column" gap={0}>
-          {queuedUserInputs.map((text, idx) => (
-            <box key={idx} backgroundColor={theme.colors.userBg} paddingLeft={1} paddingRight={1}>
-              <text fg={theme.colors.dim} content={text} wrapMode="word" width="100%" />
+          {queuedInputs.map((queued) => (
+            <box key={queued.id} backgroundColor={theme.colors.userBg} paddingLeft={1} paddingRight={1}>
+              <text fg={theme.colors.dim} content={queued.text} wrapMode="word" width="100%" />
             </box>
           ))}
         </box>
