@@ -118,9 +118,10 @@ import {
   LogIdAllocator,
   type LogEntry,
   createSystemPrompt,
-  createTurnStart,
+  createWorkStart,
+  createWorkEnd,
+  createInputReceived,
   type TurnKind,
-  createTurnEnd,
   createUserMessage as createUserMessageEntry,
   createAgentResult,
   createAssistantText,
@@ -614,6 +615,9 @@ export class Session {
 
   // Counters
   _turnCount = 0;
+  private _workCount = 0;
+  private _currentWorkId: string | null = null;
+  private _currentWorkStartedAt = 0;
   _compactCount = 0;
   private _usedContextIds = new Set<string>();
 
@@ -989,6 +993,9 @@ export class Session {
     this._log = [];
     this._logRevision = 0;
     this._idAllocator = new LogIdAllocator();
+    this._currentWorkId = null;
+    this._currentWorkStartedAt = 0;
+    this._workCount = 0;
 
     // Assemble system prompt and cache it for prompt cache stability
     this._reloadPromptAndTools();
@@ -1016,6 +1023,18 @@ export class Session {
    * Auto-triggers save request and notifies log listeners.
    */
   private _appendEntry(entry: LogEntry, save = true): void {
+    if (
+      entry.roundIndex !== undefined &&
+      (
+        entry.type === "assistant_text" ||
+        entry.type === "reasoning" ||
+        entry.type === "tool_call" ||
+        entry.type === "tool_result" ||
+        entry.type === "no_reply"
+      )
+    ) {
+      entry.meta["providerRoundId"] ??= `input-${entry.turnIndex}:round-${entry.roundIndex}`;
+    }
     this._log.push(entry);
     this._bumpLogRevision();
     this._notifyLogListeners();
@@ -1040,6 +1059,114 @@ export class Session {
   /** Allocate the next log entry ID for a given type. */
   private _nextLogId(type: LogEntry["type"]): string {
     return this._idAllocator.next(type);
+  }
+
+  private _nextWorkId(): string {
+    this._workCount += 1;
+    return `work-${String(this._workCount).padStart(3, "0")}`;
+  }
+
+  private _beginWorkIfNeeded(): string {
+    if (this._currentWorkId) return this._currentWorkId;
+    const workId = this._nextWorkId();
+    this._currentWorkId = workId;
+    this._currentWorkStartedAt = performance.now();
+    this._appendEntry(
+      createWorkStart(this._nextLogId("work_start"), this._turnCount, workId),
+      false,
+    );
+    return workId;
+  }
+
+  private _finishCurrentWork(
+    status: "completed" | "interrupted" | "error",
+    interruptHints?: string[],
+  ): void {
+    const workId = this._currentWorkId ?? this._beginWorkIfNeeded();
+    const elapsedMs = this._currentWorkStartedAt > 0
+      ? Math.round(performance.now() - this._currentWorkStartedAt)
+      : undefined;
+    this._appendEntry(
+      createWorkEnd(
+        this._nextLogId("work_end"),
+        this._turnCount,
+        workId,
+        status,
+        elapsedMs,
+        interruptHints,
+      ),
+      false,
+    );
+    this._lastTurnEndStatus = status;
+    this._currentWorkId = null;
+    this._currentWorkStartedAt = 0;
+    this.onSaveRequest?.();
+  }
+
+  /**
+   * Record an input_received entry.
+   *
+   * `_turnCount` (the "current input index" used by subsequent provider rounds)
+   * advances to this new input ONLY when the agent is idle. While the agent
+   * is working/waiting, the new input gets its own higher inputIndex but
+   * `_turnCount` stays put — round entries from the in-flight activation must
+   * keep using the current input's index until drain delivers the new one.
+   */
+  private _recordInputReceived(
+    inputKind: "user" | "summarize" | "compact",
+    display: string,
+    content: unknown,
+    contextId?: string,
+  ): { inputIndex: number; inputId: string; contextId: string } {
+    let maxInputIndex = this._turnCount;
+    for (const entry of this._log) {
+      if (entry.discarded) continue;
+      if (entry.type === "input_received" && entry.turnIndex > maxInputIndex) {
+        maxInputIndex = entry.turnIndex;
+      }
+    }
+    const inputIndex = maxInputIndex + 1;
+    const inputId = this._nextLogId("input_received");
+    const inputContextId = contextId ?? this._allocateContextId();
+    if (this._agentState === "idle") {
+      this._turnCount = inputIndex;
+    }
+    this._appendEntry(
+      createInputReceived(
+        inputId,
+        inputIndex,
+        inputId,
+        inputKind,
+        display,
+        content,
+        inputContextId,
+        { tuiVisible: true, sender: "user" },
+      ),
+      false,
+    );
+    return { inputIndex, inputId, contextId: inputContextId };
+  }
+
+  private _appendDeliveredUserMessage(
+    inputIndex: number,
+    inputId: string,
+    inputKind: "user" | "summarize" | "compact",
+    display: string,
+    content: unknown,
+    contextId: string,
+    tuiVisible = false,
+  ): void {
+    this._appendEntry(
+      createUserMessageEntry(
+        this._nextLogId("user_message"),
+        inputIndex,
+        display,
+        content,
+        contextId,
+        { tuiVisible, inputId, inputKind },
+      ),
+      false,
+    );
   }
 
   /** Compute the next roundIndex for the current turn based on existing entries. */
@@ -1164,6 +1291,17 @@ export class Session {
    * Working/waiting: the activation boundary or await_event poll drains.
    */
   private _deliverMessage(msg: MessageEnvelope): void {
+    if (msg.type === "user_input" && msg.inputIndex === undefined) {
+      const received = this._recordInputReceived("user", msg.content, msg.content);
+      msg = {
+        ...msg,
+        inputId: received.inputId,
+        inputIndex: received.inputIndex,
+        contextId: received.contextId,
+        tuiVisible: true,
+      };
+      this.onSaveRequest?.();
+    }
     this._inbox.push(msg);
     if (this._agentState === "idle") {
       this._scheduleAutoResume();
@@ -1226,19 +1364,21 @@ export class Session {
    * them.
    */
   private _hasUnprocessedUserMessage(): boolean {
+    const delivered = new Set<string>();
+    for (const entry of this._log) {
+      if (entry.discarded) continue;
+      if (entry.type !== "user_message") continue;
+      const inputId = entry.meta["inputId"];
+      if (typeof inputId === "string") delivered.add(inputId);
+    }
     for (let i = this._log.length - 1; i >= 0; i--) {
-      const e = this._log[i];
-      if (e.discarded) continue;
-      if (e.type === "user_message") return true;
-      if (
-        e.type === "assistant_text"
-        || e.type === "tool_call"
-        || e.type === "tool_result"
-        || e.type === "reasoning"
-        || e.type === "turn_end"
-      ) {
-        return false;
-      }
+      const entry = this._log[i];
+      if (entry.discarded) continue;
+      if (entry.type !== "input_received") continue;
+      const inputKind = entry.meta["inputKind"];
+      if (inputKind !== "user" && inputKind !== "summarize" && inputKind !== "compact") continue;
+      const inputId = entry.meta["inputId"];
+      return typeof inputId === "string" && !delivered.has(inputId);
     }
     return false;
   }
@@ -1267,68 +1407,61 @@ export class Session {
   // ------------------------------------------------------------------
 
   /**
-   * Drain the inbox, writing each message as a separate log entry.
+   * Deliver queued messages to the model-facing log.
    *
-   * user_input: If the current turn already has a user_message, the
-   *   user_input starts a new turn (turn_start + user_message).  The old
-   *   turn is left without a turn_end — this is intentional to avoid a
-   *   spurious "worked for Xs" display.  See Docs/SESSION.md §Turn
-   *   splitting for the safety analysis.  If the current turn has no
-   *   user_message yet (e.g. skipUserInput path), the user_input becomes
-   *   the primary message of the current turn.
-   *
-   * peer_message / system_notice → hidden user_message in current turn.
+   * User messages are displayed when received, then delivered here only after
+   * the current provider round has finished. This preserves the API ordering:
+   * user A → assistant A → user B, even when user B was typed while assistant A
+   * was still streaming.
    */
-  private _drainInboxAsEntries(): void {
-    if (this._inbox.length === 0) return;
+  private _drainInboxAsEntries(): number {
+    if (this._inbox.length === 0) return 0;
     const messages = [...this._inbox];
     this._inbox = [];
 
-    // Determine whether the current turn already has a primary user_message.
-    let currentTurnHasUserMessage = false;
-    for (let i = this._log.length - 1; i >= 0; i--) {
-      const e = this._log[i];
-      if (e.turnIndex < this._turnCount) break;
-      if (e.turnIndex !== this._turnCount || e.discarded) continue;
-      if (e.type === "user_message") { currentTurnHasUserMessage = true; break; }
-    }
-
     for (const msg of messages) {
-      const ctxId = this._allocateContextId();
       switch (msg.type) {
         case "user_input": {
-          if (currentTurnHasUserMessage) {
-            // Start a new turn for this real user message.
-            // No turn_end for the old turn — see docstring above.
-            this._turnCount += 1;
-            this._appendEntry(
-              createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
-              false,
+          // Invariant: _deliverMessage populates these fields synchronously
+          // when user_input arrives. Drain should never see an unprepared one.
+          if (msg.inputIndex === undefined || !msg.inputId || !msg.contextId) {
+            throw new Error(
+              "user_input must have inputId/inputIndex/contextId by drain time " +
+              "(set in _deliverMessage). Got: " + JSON.stringify({
+                inputId: msg.inputId,
+                inputIndex: msg.inputIndex,
+                contextId: msg.contextId,
+              }),
             );
           }
-          currentTurnHasUserMessage = true;
-          this._appendEntry(createUserMessageEntry(
-            this._nextLogId("user_message"),
-            this._turnCount,
+          this._turnCount = Math.max(this._turnCount, msg.inputIndex);
+          this._appendDeliveredUserMessage(
+            msg.inputIndex,
+            msg.inputId,
+            "user",
             msg.content,
             msg.content,
-            ctxId,
-          ), false);
+            msg.contextId,
+            false,
+          );
           break;
         }
         case "peer_message": {
+          const ctxId = this._allocateContextId();
           const entry = createUserMessageEntry(
             this._nextLogId("user_message"),
             this._turnCount,
             `[Agent ${msg.sender}]`,
             `<system-message>\n${msg.content}\n</system-message>`,
             ctxId,
+            { tuiVisible: false, inputKind: "peer" },
           );
           entry.tuiVisible = false;
           this._appendEntry(entry, false);
           break;
         }
         case "system_notice": {
+          const ctxId = this._allocateContextId();
           const display = msg.tuiVisible ? msg.content : "[System]";
           const entry = createUserMessageEntry(
             this._nextLogId("user_message"),
@@ -1336,6 +1469,7 @@ export class Session {
             display,
             `<system-message>\n${msg.content}\n</system-message>`,
             ctxId,
+            { tuiVisible: Boolean(msg.tuiVisible), inputKind: "system" },
           );
           if (!msg.tuiVisible) entry.tuiVisible = false;
           this._appendEntry(entry, false);
@@ -1343,6 +1477,7 @@ export class Session {
         }
       }
     }
+    return messages.length;
   }
 
   private _makeAbortPromise(signal: AbortSignal | null | undefined): Promise<"aborted"> | null {
@@ -1562,6 +1697,8 @@ export class Session {
     this._hintState = "none";
     this._agentState = "idle";
     this._inbox = [];
+    this._currentWorkId = null;
+    this._currentWorkStartedAt = 0;
     // _waitHandle removed — await_event uses polling now
     this._activeAsk = null;
     this._askHistory = [];
@@ -1640,20 +1777,18 @@ export class Session {
 
     for (let i = 0; i < this._log.length; i++) {
       const entry = this._log[i];
-      if (entry.type !== "turn_start" || entry.discarded) continue;
+      if (entry.discarded) continue;
+      if (entry.type !== "input_received" && entry.type !== "turn_start") continue;
 
       const meta = entry.meta as Record<string, unknown>;
-      const turnKind = (meta.turnKind as TurnKind) ?? "user";
+      const turnKind = entry.type === "input_received"
+        ? ((meta.inputKind as TurnKind) ?? "user")
+        : ((meta.turnKind as TurnKind) ?? "user");
+      if (turnKind !== "user" && turnKind !== "summarize" && turnKind !== "compact") continue;
 
-      let preview = "";
-      for (let j = i + 1; j < this._log.length; j++) {
-        const next = this._log[j];
-        if (next.turnIndex !== entry.turnIndex) break;
-        if (next.type === "user_message" && !next.discarded) {
-          preview = (next.display || "").replace(/\s+/g, " ").trim().slice(0, 240);
-          break;
-        }
-      }
+      const preview = entry.type === "input_received"
+        ? (entry.display || "").replace(/\s+/g, " ").trim().slice(0, 240)
+        : "";
 
       turns.push({
         turnIndex: entry.turnIndex,
@@ -1884,7 +2019,7 @@ export class Session {
     }
 
     const cutoff = this._log.findIndex(
-      (e) => e.turnIndex >= toTurnIndex && e.type === "turn_start" && !e.discarded,
+      (e) => e.turnIndex >= toTurnIndex && (e.type === "input_received" || e.type === "turn_start") && !e.discarded,
     );
     if (cutoff < 0) {
       return { removed: 0, error: `Turn ${toTurnIndex} not found in log.` };
@@ -2284,15 +2419,21 @@ export class Session {
     this._showContextAnnotations = null;
     this._activeLogEntryId = null;
     this._lastTurnEndStatus = null;
+    this._currentWorkId = null;
+    this._currentWorkStartedAt = 0;
     this._cachedSummary = undefined;
 
     this._usedContextIds.clear();
     this._compactCount = 0;
+    this._workCount = 0;
     for (const entry of log) {
       const ctx = (entry.meta as Record<string, unknown>)?.["contextId"];
       if (typeof ctx === "string") this._usedContextIds.add(ctx);
       if (entry.type === "compact_marker" && !entry.discarded) {
         this._compactCount += 1;
+      }
+      if (entry.type === "work_start" && !entry.discarded) {
+        this._workCount += 1;
       }
     }
 
@@ -2410,6 +2551,9 @@ export class Session {
     // causing the transcript panel to skip the update.
     this._idAllocator = shadow._idAllocator;
     this._turnCount = shadow._turnCount;
+    this._workCount = shadow._workCount;
+    this._currentWorkId = shadow._currentWorkId;
+    this._currentWorkStartedAt = shadow._currentWorkStartedAt;
     this._compactCount = shadow._compactCount;
     this._preferredThinkingLevel = shadow._preferredThinkingLevel;
     this._thinkingLevel = shadow._thinkingLevel;
@@ -2551,9 +2695,13 @@ export class Session {
 
     // Rebuild usedContextIds from entries
     this._usedContextIds = new Set<string>();
+    this._workCount = 0;
+    this._currentWorkId = null;
+    this._currentWorkStartedAt = 0;
     for (const e of entries) {
       const ctxId = (e.meta as Record<string, unknown>)["contextId"];
       if (ctxId) this._usedContextIds.add(String(ctxId));
+      if (e.type === "work_start" && !e.discarded) this._workCount += 1;
     }
 
     // Restore last token counts from log
@@ -2714,7 +2862,7 @@ export class Session {
           }
         }
       }
-      if (entry.type === "turn_end") {
+      if (entry.type === "turn_end" || entry.type === "work_end") {
         const status = (entry.meta as Record<string, unknown>)["status"];
         if (status === "completed" || status === "interrupted" || status === "error") {
           this._lastTurnEndStatus = status;
@@ -2730,10 +2878,10 @@ export class Session {
     for (let i = this._log.length - 1; i >= 0; i--) {
       const entry = this._log[i];
       if (entry.discarded) continue;
-      if (entry.type === "turn_end") {
+      if (entry.type === "turn_end" || entry.type === "work_end") {
         break;
       }
-      if (entry.type === "turn_start") {
+      if (entry.type === "turn_start" || entry.type === "input_received") {
         turnStartIndex = i;
         interruptedTurnIndex = entry.turnIndex;
         break;
@@ -2803,11 +2951,7 @@ export class Session {
     interruptionEntry.tuiVisible = false;
     interruptionEntry.displayKind = null;
     this._appendEntry(interruptionEntry, false);
-    this._appendEntry(
-      createTurnEnd(this._nextLogId("turn_end"), interruptedTurnIndex, "interrupted"),
-      false,
-    );
-    this._lastTurnEndStatus = "interrupted";
+    this._finishCurrentWork("interrupted");
     this._turnCount = originalTurnCount;
     this._recordSessionEvent("recovered interrupted turn");
   }
@@ -2959,6 +3103,9 @@ export class Session {
 
     // 3. Reset counters
     this._turnCount = 0;
+    this._workCount = 0;
+    this._currentWorkId = null;
+    this._currentWorkStartedAt = 0;
     this._compactCount = 0;
     this._usedContextIds = new Set<string>();
 
@@ -3462,21 +3609,16 @@ export class Session {
     content: string,
     opts?: { signal?: AbortSignal; turnKind?: TurnKind },
   ): Promise<string> {
-    const userCtxId = this._allocateContextId();
     this._lastTurnEndStatus = null;
-    this._turnCount += 1;
-    this._appendEntry(
-      createTurnStart(this._nextLogId("turn_start"), this._turnCount, opts?.turnKind ?? "summarize"),
-      false,
-    );
-    this._appendEntry(
-      createUserMessageEntry(
-        this._nextLogId("user_message"),
-        this._turnCount,
-        displayText,
-        content,
-        userCtxId,
-      ),
+    const inputKind = opts?.turnKind ?? "summarize";
+    const received = this._recordInputReceived(inputKind, displayText, content);
+    this._appendDeliveredUserMessage(
+      received.inputIndex,
+      received.inputId,
+      inputKind,
+      displayText,
+      content,
+      received.contextId,
       false,
     );
     this.onSaveRequest?.();
@@ -3656,12 +3798,9 @@ export class Session {
       const blocker = this._getManualContextCommandBlocker("/compact");
       if (blocker) throw new Error(blocker);
 
-      this._turnCount += 1;
       this._lastTurnEndStatus = null;
-      this._appendEntry(
-        createTurnStart(this._nextLogId("turn_start"), this._turnCount, "compact"),
-        false,
-      );
+      const displayText = instruction?.trim() ? `/compact ${instruction.trim()}` : "/compact";
+      this._recordInputReceived("compact", displayText, displayText);
       this._appendEntry(
         createStatus(
           this._nextLogId("status"),
@@ -3681,10 +3820,17 @@ export class Session {
       const prevAgentState = this._agentState;
       const turnSignalState = this._installCurrentTurnSignal(options?.signal);
       this._agentState = "working";
+      this._beginWorkIfNeeded();
       try {
         await this._doAutoCompact("output", turnSignalState.signal, prompt);
         this._hintState = "none";
         this.onSaveRequest?.();
+        this._finishCurrentWork("completed");
+      } catch (err) {
+        if (!turnSignalState.signal.aborted) {
+          this._finishCurrentWork("error");
+        }
+        throw err;
       } finally {
         this._restoreCurrentTurnSignal(turnSignalState);
         this._agentState = prevAgentState;
@@ -4230,7 +4376,7 @@ export class Session {
     let turnEndStatus: "completed" | "interrupted" | "error" | null = null;
     const turnSignalState = this._installCurrentTurnSignal(signal);
     const activeSignal = turnSignalState.signal;
-    const turnStartMs = performance.now();
+    this._beginWorkIfNeeded();
     try {
       let reachedLimit = true;
       for (let activationIdx = 0; activationIdx < MAX_ACTIVATIONS_PER_TURN; activationIdx++) {
@@ -4385,6 +4531,7 @@ export class Session {
         this.onSaveRequest?.();
 
         if (result.compactNeeded && result.compactScenario) {
+          const drainedBeforeCompact = this._hasInboxMessages();
           if (this._hasInboxMessages()) {
             this._drainInboxAsEntries();
           }
@@ -4413,6 +4560,10 @@ export class Session {
           this.onSaveRequest?.();
 
           if (result.compactScenario === "output") {
+            if (drainedBeforeCompact) {
+              activationIdx = -1;
+              continue;
+            }
             reachedLimit = false;
             turnEndStatus = "completed";
             break;
@@ -4428,6 +4579,13 @@ export class Session {
           this._checkAndInjectHint(result);
         }
 
+        // Messages typed while the assistant was producing a final text reply
+        // become the next model input in the same work lifecycle.
+        if (this._hasInboxMessages()) {
+          this._drainInboxAsEntries();
+          continue;
+        }
+
         // Final output (no tool calls in the last provider call) → turn ends.
         // Sub-agent results are processed via auto-resume in a new turn.
         // Model should use await_event explicitly to wait for sub-agents.
@@ -4438,12 +4596,8 @@ export class Session {
           turnEndStatus = "completed";
           break;
         }
-
-        // ★ ACTIVATION BOUNDARY DRAIN — after tool_results, before next activation ★
-        if (this._hasInboxMessages()) {
-          this._drainInboxAsEntries();
-          continue;  // new activation to process drained messages
-        }
+        // No explicit boundary drain here — the earlier drain check (above)
+        // already handles inbox messages before this break decision.
       }
 
       if (reachedLimit && !activeSignal.aborted) {
@@ -4459,10 +4613,6 @@ export class Session {
       this._restoreCurrentTurnSignal(turnSignalState);
       if (turnEndStatus === "interrupted" && this._hasActiveAgents()) {
         await this._waitForAllChildTurnsSettled();
-      }
-      // Drain any messages that arrived after the last activation boundary.
-      if (!this._deferQueuedMessageInjectionOnTurnExit && this._hasInboxMessages()) {
-        this._drainInboxAsEntries();
       }
       this._agentState = "idle";
       // Finalize tool_call entries stuck in non-terminal state (e.g. abort during await_event).
@@ -4487,17 +4637,11 @@ export class Session {
       this._activeLogEntryId = null;
       this._setSelfPhase("idle");
       if (!this._activeAsk && this._turnCount > 0 && turnEndStatus) {
-        this._lastTurnEndStatus = turnEndStatus;
-        const turnElapsedMs = Math.round(performance.now() - turnStartMs);
         let interruptHints: string[] | undefined;
         if (turnEndStatus === "interrupted") {
           interruptHints = this._collectInterruptHints();
         }
-        this._appendEntry(
-          createTurnEnd(this._nextLogId("turn_end"), this._turnCount, turnEndStatus, turnElapsedMs, interruptHints),
-          false,
-        );
-        this.onSaveRequest?.();
+        this._finishCurrentWork(turnEndStatus, interruptHints);
       }
       // If the finally drain wrote messages to the log without the model
       // seeing them, schedule an auto-resume turn to process them.
@@ -4546,11 +4690,9 @@ export class Session {
     // entries instead of writing a synthetic empty user input.
     if (options?.skipUserInput) {
       this._lastTurnEndStatus = null;
-      this._turnCount += 1;
-      this._appendEntry(
-        createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
-        false,
-      );
+      if (!this._hasInboxMessages() && !this._hasUnprocessedUserMessage()) {
+        return "";
+      }
       this._drainInboxAsEntries();
       this.onSaveRequest?.();
     } else {
@@ -4582,16 +4724,7 @@ export class Session {
         }
       }
 
-      // Assign context_id to user message (metadata only, no visible §{id}§ tag in content)
-      const userCtxId = this._allocateContextId();
       this._lastTurnEndStatus = null;
-      this._turnCount += 1;
-
-      // v2 log: turn_start + user_message
-      this._appendEntry(
-        createTurnStart(this._nextLogId("turn_start"), this._turnCount, "user"),
-        false,
-      );
       // Merge inline images (clipboard paste) into multimodal content
       const inlineImages = options?.inlineImages;
       if (inlineImages && inlineImages.length > 0) {
@@ -4617,14 +4750,14 @@ export class Session {
       const displayText = userInput;
       // For the log entry, replace inline base64 images with image_ref file paths
       const logContent = this._extractAndSaveImages(userContent);
-      this._appendEntry(
-        createUserMessageEntry(
-          this._nextLogId("user_message"),
-          this._turnCount,
-          displayText,
-          logContent,
-          userCtxId,
-        ),
+      const received = this._recordInputReceived("user", displayText, logContent);
+      this._appendDeliveredUserMessage(
+        received.inputIndex,
+        received.inputId,
+        "user",
+        displayText,
+        logContent,
+        received.contextId,
         false,
       );
     }
@@ -4648,12 +4781,7 @@ export class Session {
         this._turnOutputTarget?.(`[Error] ${errorMsg}`);
       }
       if (!this._activeAsk && this._turnCount > 0 && this._lastTurnEndStatus === null) {
-        this._lastTurnEndStatus = "error";
-        this._appendEntry(
-          createTurnEnd(this._nextLogId("turn_end"), this._turnCount, "error"),
-          false,
-        );
-        this.onSaveRequest?.();
+        this._finishCurrentWork("error");
       }
       throw err;
     }

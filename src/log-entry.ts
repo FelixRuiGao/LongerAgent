@@ -12,6 +12,9 @@
 
 export type LogEntryType =
   | "system_prompt"
+  | "work_start"
+  | "work_end"
+  | "input_received"
   | "turn_start"
   | "turn_end"
   | "user_message"
@@ -35,6 +38,7 @@ export type LogEntryType =
   | "token_update";
 
 export type TurnKind = "user" | "summarize" | "compact";
+export type InputKind = "user" | "system" | "peer" | "summarize" | "compact";
 
 export type TuiDisplayKind =
   | "user"
@@ -62,7 +66,11 @@ export interface LogEntry {
   /** Unix millisecond timestamp. */
   timestamp: number;
 
-  /** Turn index (starts at 1, increments on each user input). */
+  /**
+   * User-visible input index (starts at 1, increments on each real user
+   * input). This field is intentionally still named turnIndex during the
+   * runtime migration; semantically it is no longer a work lifecycle id.
+   */
   turnIndex: number;
 
   /**
@@ -121,6 +129,9 @@ export interface ToolCallLogContent {
 /** Map from LogEntryType to its ID prefix. */
 const TYPE_PREFIX_MAP: Record<LogEntryType, string> = {
   system_prompt: "sys",
+  work_start: "ws",
+  work_end: "we",
+  input_received: "in",
   turn_start: "ts",
   turn_end: "te",
   user_message: "user",
@@ -226,6 +237,57 @@ export function createSystemPrompt(
   });
 }
 
+export function createWorkStart(
+  id: string,
+  turnIndex: number,
+  workId: string,
+): LogEntry {
+  return baseEntry(id, "work_start", turnIndex, {
+    meta: { workId, timestamp: Date.now() },
+  });
+}
+
+export function createWorkEnd(
+  id: string,
+  turnIndex: number,
+  workId: string,
+  status: "completed" | "interrupted" | "error",
+  elapsedMs?: number,
+  interruptHints?: string[],
+): LogEntry {
+  return baseEntry(id, "work_end", turnIndex, {
+    tuiVisible: true,
+    displayKind: "status",
+    display: "",
+    meta: { workId, status, timestamp: Date.now(), elapsedMs, interruptHints },
+  });
+}
+
+export function createInputReceived(
+  id: string,
+  turnIndex: number,
+  inputId: string,
+  inputKind: InputKind,
+  display: string,
+  content: unknown,
+  contextId: string,
+  opts?: { tuiVisible?: boolean; sender?: string },
+): LogEntry {
+  const tuiVisible = opts?.tuiVisible ?? (
+    inputKind === "user" || inputKind === "summarize" || inputKind === "compact"
+  );
+  const meta: Record<string, unknown> = { inputId, inputKind, contextId };
+  if (opts?.sender) meta.sender = opts.sender;
+  return baseEntry(id, "input_received", turnIndex, {
+    tuiVisible,
+    displayKind: tuiVisible ? "user" : null,
+    display,
+    apiRole: null,
+    content,
+    meta,
+  });
+}
+
 export function createTurnStart(
   id: string,
   turnIndex: number,
@@ -257,14 +319,19 @@ export function createUserMessage(
   display: string,
   content: unknown,
   contextId: string,
+  opts?: { tuiVisible?: boolean; inputId?: string; inputKind?: InputKind },
 ): LogEntry {
+  const tuiVisible = opts?.tuiVisible ?? true;
+  const meta: Record<string, unknown> = { contextId };
+  if (opts?.inputId) meta.inputId = opts.inputId;
+  if (opts?.inputKind) meta.inputKind = opts.inputKind;
   return baseEntry(id, "user_message", turnIndex, {
-    tuiVisible: true,
-    displayKind: "user",
+    tuiVisible,
+    displayKind: tuiVisible ? "user" : null,
     display,
     apiRole: "user",
     content,
-    meta: { contextId },
+    meta,
   });
 }
 

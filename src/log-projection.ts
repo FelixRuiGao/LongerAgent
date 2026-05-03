@@ -103,7 +103,7 @@ function toConversationEntry(
   entry: LogEntry,
   toolElapsedMap?: Map<string, number>,
 ): ConversationEntry {
-  if (entry.type === "turn_end") {
+  if (entry.type === "turn_end" || entry.type === "work_end") {
     const meta = entry.meta as Record<string, unknown>;
     const status = meta.status as string;
     const elapsedMs = typeof meta.elapsedMs === "number" ? meta.elapsedMs : 0;

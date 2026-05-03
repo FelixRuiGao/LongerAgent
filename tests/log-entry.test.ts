@@ -6,7 +6,11 @@ import { describe, it, expect } from "bun:test";
 import {
   LogIdAllocator,
   createSystemPrompt,
+  createWorkStart,
+  createWorkEnd,
+  createInputReceived,
   createTurnStart,
+  createTurnEnd,
   createUserMessage,
   createAgentResult,
   createAssistantText,
@@ -91,6 +95,36 @@ describe("Factory functions", () => {
     expect(e.tuiVisible).toBe(false);
     expect(e.apiRole).toBeNull();
     expect(e.meta.turnIndex).toBe(1);
+  });
+
+  it("createWorkStart", () => {
+    const e = createWorkStart("ws-001", 1, "work-001");
+    expect(e.type).toBe("work_start");
+    expect(e.turnIndex).toBe(1);
+    expect(e.tuiVisible).toBe(false);
+    expect(e.apiRole).toBeNull();
+    expect(e.meta.workId).toBe("work-001");
+  });
+
+  it("createWorkEnd", () => {
+    const e = createWorkEnd("we-001", 2, "work-001", "completed", 1234);
+    expect(e.type).toBe("work_end");
+    expect(e.tuiVisible).toBe(true);
+    expect(e.displayKind).toBe("status");
+    expect(e.meta.workId).toBe("work-001");
+    expect(e.meta.status).toBe("completed");
+    expect(e.meta.elapsedMs).toBe(1234);
+  });
+
+  it("createInputReceived", () => {
+    const e = createInputReceived("in-001", 1, "in-001", "user", "Hello", "Hello", "c1");
+    expect(e.type).toBe("input_received");
+    expect(e.tuiVisible).toBe(true);
+    expect(e.displayKind).toBe("user");
+    expect(e.apiRole).toBeNull();
+    expect(e.meta.inputId).toBe("in-001");
+    expect(e.meta.inputKind).toBe("user");
+    expect(e.meta.contextId).toBe("c1");
   });
 
   it("createUserMessage", () => {
@@ -327,13 +361,14 @@ describe("Factory functions", () => {
 });
 
 // ------------------------------------------------------------------
-// All 21 types produce valid entries
+// All entry types produce valid entries
 // ------------------------------------------------------------------
 
-describe("All 21 entry types", () => {
+describe("All entry types", () => {
   it("every type has a factory that produces correct type field", () => {
     const allTypes: LogEntryType[] = [
-      "system_prompt", "turn_start", "user_message", "agent_result", "assistant_text",
+      "system_prompt", "work_start", "work_end", "input_received",
+      "turn_start", "turn_end", "user_message", "agent_result", "assistant_text",
       "reasoning", "tool_call", "tool_result", "ask_request",
       "ask_resolution", "no_reply", "compact_marker", "compact_context",
       "summary", "interruption_marker", "sub_agent_start", "sub_agent_tool_call",
@@ -342,7 +377,11 @@ describe("All 21 entry types", () => {
 
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
+      createWorkStart("ws-001", 1, "work-001"),
+      createWorkEnd("we-001", 1, "work-001", "completed", 100),
+      createInputReceived("in-001", 1, "in-001", "user", "hi", "hi", "c0"),
       createTurnStart("ts-001", 1),
+      createTurnEnd("te-001", 1, "completed", 100),
       createUserMessage("user-001", 1, "hi", "hi", "c1"),
       createAgentResult("ar-001", 1, "agent-1", 1, "reviewer", "completed", "natural", 1200, "[Agent \"agent-1\" completed]\nok", "ok", "c-ar"),
       createAssistantText("asst-001", 1, 0, "reply", "reply"),

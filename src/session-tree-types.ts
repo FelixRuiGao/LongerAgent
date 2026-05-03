@@ -66,6 +66,12 @@ export interface MessageEnvelope {
   timestamp: number;
   /** When true, the TUI entry created from this message is visible to the user. Default: false for system_notice/peer_message. */
   tuiVisible?: boolean;
+  /** Stable input entry created when the user submitted the message. */
+  inputId?: string;
+  /** User-visible input index. Present for real user input. */
+  inputIndex?: number;
+  /** Context id assigned to the input before delivery to the model. */
+  contextId?: string;
 }
 
 /**
