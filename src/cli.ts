@@ -43,6 +43,58 @@ import type { PersistedModelSelection } from "./model-selection.js";
 import { applyPersistedModelSelectionToSession } from "./model-restore.js";
 import { hasAnyManagedCredential } from "./managed-provider-credentials.js";
 import { setAccent } from "./accent.js";
+import { findSessionById } from "./session-resume.js";
+
+/**
+ * Handle `fermi --resume <id>` before Commander parses argv.
+ *
+ * Looks the session up across all projects in the Fermi home. If it lives
+ * under a different cwd, prompts the user to switch (Y) or quit (N). On
+ * success, stashes the resolved session dir in an env var so that
+ * `launchTui()` can call `applySessionRestore` after bootstrap. The flag and
+ * its argument are spliced out of argv so Commander never sees them.
+ */
+async function maybeHandleResumeFlag(argv: string[]): Promise<void> {
+  const idx = argv.indexOf("--resume");
+  if (idx < 0) return;
+
+  const id = argv[idx + 1];
+  if (!id || id.startsWith("--")) {
+    console.error("Error: --resume requires a session ID.");
+    console.error("Usage: fermi --resume <sessionId>");
+    process.exit(1);
+  }
+
+  const found = findSessionById(id);
+  if (!found) {
+    console.error(`Error: session not found: ${id}`);
+    process.exit(1);
+  }
+
+  const cwd = process.cwd();
+  if (found.projectPath && found.projectPath !== cwd) {
+    let willCd: boolean;
+    try {
+      const { confirm } = await import("@inquirer/prompts");
+      willCd = await confirm({
+        message: `This session lives in ${found.projectPath}.\n  Switch to that directory and resume?`,
+        default: true,
+      });
+    } catch {
+      process.exit(130); // user Ctrl+C
+    }
+    if (!willCd) process.exit(0);
+    try {
+      process.chdir(found.projectPath);
+    } catch (e) {
+      console.error(`Error: failed to chdir to ${found.projectPath}: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    }
+  }
+
+  process.env["FERMI_RESUME_SESSION_DIR"] = found.sessionDir;
+  argv.splice(idx, 2);
+}
 
 // ------------------------------------------------------------------
 // Primary agent resolution
@@ -74,6 +126,12 @@ function identifyPrimaryAgent(
 // ------------------------------------------------------------------
 
 export async function main(argv: string[] = process.argv): Promise<void> {
+  // ── --resume <id> short-circuit ──
+  // Locate the session globally; if it lives under a different project, ask
+  // before chdir'ing. Has to run before Commander parses the rest of argv,
+  // so the session-resolved cwd is in effect for everything below.
+  await maybeHandleResumeFlag(argv);
+
   // Server mode short-circuit — bypass commander/TUI entirely.
   // The GUI (Electron main process) spawns this with `--server --work-dir <path>`.
   if (argv.includes("--server")) {

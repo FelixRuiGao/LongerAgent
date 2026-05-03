@@ -8,7 +8,7 @@ import {
 
 describe("command picker", () => {
   it("skips disabled heading rows for initial selection and submission", () => {
-    const picker = createCommandPicker("/sessions", [
+    const picker = createCommandPicker("/session", [
       { label: "Created  Active  Title", value: "", disabled: true },
       { label: "2 days ago  1 day ago  Fix login", value: "session-a" },
       { label: "5 days ago  5 days ago  Refactor picker", value: "session-b" },
@@ -17,7 +17,7 @@ describe("command picker", () => {
     expect(picker.stack[0]?.selected).toBe(1);
     expect(acceptCommandPickerSelection(picker)).toEqual({
       kind: "submit",
-      command: "/sessions session-a",
+      command: "/session session-a",
     });
 
     const unchanged = setCommandPickerSelection(picker, 0);

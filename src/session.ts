@@ -3414,11 +3414,12 @@ export class Session {
     return Math.round((this.primaryAgent?.modelConfig?.contextLength ?? 0) * this._contextRatio);
   }
 
-  appendStatusMessage(text: string, statusType = "status"): void {
-    this._appendEntry(
-      createStatus(this._nextLogId("status"), this._turnCount, text, statusType),
-      true,
-    );
+  appendStatusMessage(text: string, statusType = "status", ephemeral = false): void {
+    const entry = createStatus(this._nextLogId("status"), this._turnCount, text, statusType);
+    if (ephemeral) {
+      (entry.meta as Record<string, unknown>)["ephemeral"] = true;
+    }
+    this._appendEntry(entry, true);
   }
 
   appendErrorMessage(text: string, errorType?: string): void {

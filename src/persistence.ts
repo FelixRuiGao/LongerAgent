@@ -7,14 +7,15 @@
  *   └── projects/
  *       ├── <project_slug>/           # <dir_name>_<sha256[:6]>
  *       │   ├── project.json
- *       │   ├── 20260212_143052_chat/
+ *       │   ├── <session_uuid_v7>/    # e.g. 019de786-1e41-7d21-b1e6-43919a4be1ce
  *       │   │   ├── log.json
+ *       │   │   ├── meta.json
  *       │   │   └── artifacts/
  *       │   └── ...
  *       └── general/                  # sessions without a project path
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -97,18 +98,32 @@ function nowTimestamps(): {
   };
 }
 
-function timestampSlug(): string {
-  const d = new Date();
-  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-  return [
-    d.getUTCFullYear(),
-    pad(d.getUTCMonth() + 1),
-    pad(d.getUTCDate()),
-    "_",
-    pad(d.getUTCHours()),
-    pad(d.getUTCMinutes()),
-    pad(d.getUTCSeconds()),
-  ].join("");
+/**
+ * Generate a UUIDv7 — 48-bit ms timestamp (big-endian) + version + random.
+ * Time-ordered so lexicographic and chronological listings agree, useful as
+ * the session directory name (which doubles as the session ID).
+ */
+export function randomSessionId(): string {
+  const ts = BigInt(Date.now());
+  const buf = new Uint8Array(16);
+  buf[0] = Number((ts >> 40n) & 0xffn);
+  buf[1] = Number((ts >> 32n) & 0xffn);
+  buf[2] = Number((ts >> 24n) & 0xffn);
+  buf[3] = Number((ts >> 16n) & 0xffn);
+  buf[4] = Number((ts >> 8n) & 0xffn);
+  buf[5] = Number(ts & 0xffn);
+  const rand = randomBytes(10);
+  buf.set(rand, 6);
+  buf[6] = (buf[6]! & 0x0f) | 0x70; // version 7
+  buf[8] = (buf[8]! & 0x3f) | 0x80; // variant 10
+  const hex = Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function looksLikeSessionId(name: string): boolean {
+  return SESSION_ID_RE.test(name);
 }
 
 // ------------------------------------------------------------------
@@ -188,15 +203,11 @@ export class SessionStore {
   }
 
   private static _findUniqueSessionDir(projectDir: string): string {
-    const ts = timestampSlug();
-    const first = join(projectDir, `${ts}_chat`);
-    if (!existsSync(first)) {
-      return first;
-    }
-    for (let idx = 1; idx < 1000; idx++) {
-      const candidate = join(projectDir, `${ts}_${String(idx).padStart(3, "0")}_chat`);
-      if (existsSync(candidate)) continue;
-      return candidate;
+    // UUIDv7 collisions are astronomically unlikely; if it ever happens,
+    // we just regenerate.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const candidate = join(projectDir, randomSessionId());
+      if (!existsSync(candidate)) return candidate;
     }
     throw new Error("Failed to allocate a unique session directory.");
   }
@@ -386,8 +397,8 @@ export class SessionStore {
     const entries = readdirSync(this._projectDir).sort().reverse();
 
     for (const name of entries) {
+      if (!looksLikeSessionId(name)) continue;
       const d = join(this._projectDir, name);
-      if (!name.endsWith("_chat")) continue;
       try {
         if (!statSync(d).isDirectory()) continue;
       } catch {
@@ -764,6 +775,7 @@ function entryFromSnake(obj: Record<string, unknown>): LogEntry {
 // ------------------------------------------------------------------
 
 export interface SessionMetaSummary {
+  session_id?: string;
   created_at: string;
   last_active_at: string;
   summary: string;
@@ -784,6 +796,7 @@ export function saveSessionMeta(sessionDir: string, meta: LogSessionMeta): void 
   } catch { /* ignore */ }
   const payload: Record<string, unknown> = {
     ...existing,
+    session_id: meta.sessionId,
     created_at: meta.createdAt,
     last_active_at: meta.updatedAt,
     summary: meta.summary,
@@ -838,7 +851,9 @@ export function saveLog(
     compact_count: meta.compactCount,
     thinking_level: meta.thinkingLevel,
     child_sessions: meta.childSessions ?? null,
-    entries: entries.map(entryToSnake),
+    // entries marked meta.ephemeral === true are in-memory only (e.g. /fork
+    // origin pointer); they reach the TUI but never persist.
+    entries: entries.filter((e) => !e.meta?.["ephemeral"]).map(entryToSnake),
   };
 
   const logFile = join(dir, "log.json");
@@ -1199,7 +1214,7 @@ export function fixStorage(baseDir?: string): FixStorageResult {
     // Scan sessions and fix meta.json
     let latestActiveAt = "";
     for (const sessionName of readdirSync(projectDir)) {
-      if (!sessionName.endsWith("_chat")) continue;
+      if (!looksLikeSessionId(sessionName)) continue;
       const sessionDir = join(projectDir, sessionName);
       try {
         if (!statSync(sessionDir).isDirectory()) continue;
@@ -1215,6 +1230,7 @@ export function fixStorage(baseDir?: string): FixStorageResult {
           try {
             const raw = JSON.parse(readFileSync(logFile, "utf-8"));
             const payload: SessionMetaSummary = {
+              session_id: (raw.session_id as string | undefined) ?? sessionName,
               created_at: raw.created_at ?? "",
               last_active_at: raw.updated_at ?? "",
               summary: raw.summary ?? "",

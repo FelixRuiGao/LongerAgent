@@ -123,7 +123,7 @@ function makeSession(
 describe("resume command", () => {
   it("builds picker options from saved sessions", () => {
     const registry = buildDefaultRegistry();
-    const resume = registry.lookup("/resume");
+    const resume = registry.lookup("/session");
     expect(resume?.options).toBeTruthy();
 
     const options = resume!.options!({
@@ -153,9 +153,9 @@ describe("resume command", () => {
     }));
   });
 
-  it("does not pre-truncate /resume summaries in picker labels", () => {
+  it("does not pre-truncate /session summaries in picker labels", () => {
     const registry = buildDefaultRegistry();
-    const resume = registry.lookup("/resume");
+    const resume = registry.lookup("/session");
     expect(resume?.options).toBeTruthy();
 
     const options = resume!.options!({
@@ -177,9 +177,9 @@ describe("resume command", () => {
     expect(options[1]?.label).toContain("123456789012345678901234567890");
   });
 
-  it("normalizes newlines in /resume summaries before truncation", () => {
+  it("normalizes newlines in /session summaries before truncation", () => {
     const registry = buildDefaultRegistry();
-    const resume = registry.lookup("/resume");
+    const resume = registry.lookup("/session");
     expect(resume?.options).toBeTruthy();
 
     const options = resume!.options!({
@@ -204,7 +204,7 @@ describe("resume command", () => {
 
   it("restores from log.json and rebuilds conversation", async () => {
     const registry = buildDefaultRegistry();
-    const resume = registry.lookup("/resume");
+    const resume = registry.lookup("/session");
     expect(resume).toBeTruthy();
 
     const entries = [
@@ -266,7 +266,7 @@ describe("resume command", () => {
 
   it("shows error when no log.json exists", async () => {
     const registry = buildDefaultRegistry();
-    const resume = registry.lookup("/resume");
+    const resume = registry.lookup("/session");
 
     const tmpDir = join(tmpdir(), `la-resume-test-${randomBytes(4).toString("hex")}`);
     const sessionDir = join(tmpDir, "20260301_chat");
@@ -299,7 +299,7 @@ describe("resume command", () => {
 
   it("surfaces restore failures and does not bind the store to the target session", async () => {
     const registry = buildDefaultRegistry();
-    const resume = registry.lookup("/resume");
+    const resume = registry.lookup("/session");
     expect(resume).toBeTruthy();
 
     const entries = [
@@ -354,7 +354,7 @@ describe("resume command", () => {
 
   it("resumes a session that has persisted child sessions", async () => {
     const registry = buildDefaultRegistry();
-    const resume = registry.lookup("/resume");
+    const resume = registry.lookup("/session");
     expect(resume).toBeTruthy();
 
     const tmpDir = join(tmpdir(), `la-resume-real-${randomBytes(4).toString("hex")}`);
@@ -446,9 +446,9 @@ describe("resume command", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("shows local timestamps in /resume list output", async () => {
+  it("shows local timestamps in /session list output", async () => {
     const registry = buildDefaultRegistry();
-    const resume = registry.lookup("/resume");
+    const resume = registry.lookup("/session");
     expect(resume).toBeTruthy();
 
     const showMessage = mock();

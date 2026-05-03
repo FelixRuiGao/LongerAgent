@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { basename, join } from "node:path";
+
 import {
   getFermiAssistantRenderer,
   getFermiOpenTuiDiagPath,
@@ -62,6 +65,21 @@ export async function launchTui(): Promise<void> {
     });
   }
   const runtime = await bootstrapOpenTuiRuntime(args);
+
+  // If `fermi --resume <id>` set this in cli.ts, restore the session log
+  // into the freshly bootstrapped runtime before the TUI renders.
+  const resumeDir = process.env["FERMI_RESUME_SESSION_DIR"];
+  if (resumeDir) {
+    delete process.env["FERMI_RESUME_SESSION_DIR"];
+    const { applySessionRestore } = await import("../src/session-resume.js");
+    const result = applySessionRestore(runtime.session, runtime.store, resumeDir);
+    if (!result.ok && result.error) {
+      console.error(result.error);
+      process.exit(1);
+    }
+    for (const w of result.warnings) console.warn(w);
+  }
+
   const useThread = resolveRendererThreadSetting();
   writeFermiOpenTuiDiag("main.bootstrap", {
     verbose: args.verbose,
@@ -136,6 +154,18 @@ export async function launchTui(): Promise<void> {
         process.stdout.write(`\n${farewell}\n`);
       } catch {
         console.log(farewell);
+      }
+    }
+
+    // Resume hint — only if a log was actually written for this session
+    // (i.e. the user sent at least one message). New sessions that never
+    // got past the prompt don't have a log.json, so there's nothing to resume.
+    const sessionDir = runtime.store.sessionDir;
+    if (sessionDir && existsSync(join(sessionDir, "log.json"))) {
+      try {
+        process.stdout.write(`\nTo continue this session, run \nfermi --resume ${basename(sessionDir)}\n`);
+      } catch {
+        // ignore
       }
     }
 

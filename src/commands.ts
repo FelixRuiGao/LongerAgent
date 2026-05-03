@@ -10,10 +10,11 @@
  *   }
  */
 
-import { existsSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { SessionStore, LocalProviderConfig, ModelSelectionState, FermiSettings, ProviderEntry, ModelTierEntry } from "./persistence.js";
-import { loadLog, validateAndRepairLog, saveModelSelectionState, saveSettings, globalSettingsPath, loadGlobalSettings } from "./persistence.js";
+import { randomSessionId, saveModelSelectionState, saveSettings, globalSettingsPath, loadGlobalSettings } from "./persistence.js";
+import { applySessionRestore, findSessionById } from "./session-resume.js";
 import { setDotenvKey } from "./dotenv.js";
 import { fetchModelsFromServer } from "./model-discovery.js";
 import {
@@ -69,8 +70,19 @@ export interface CommandContext {
   /** Display a message in the conversation area. */
   showMessage: ShowMessageFn;
 
+  /**
+   * Brief, non-persistent UI hint shown in the input area's bottom-left
+   * corner (TUI) — for short, no-copy-value confirmations like "Copied" or
+   * "Wait until the agent finishes." Falls back to `showMessage` when not
+   * wired (e.g. tests, server mode).
+   */
+  showHint?: (message: string) => void;
+
   /** The SessionStore for persistence (may be undefined). */
   store?: SessionStore;
+
+  /** Fermi home directory override, used by tests to avoid real user config. */
+  fermiHomeDir?: string;
 
   /** Auto-save the current session (TUI provides the implementation). */
   autoSave: () => void;
@@ -92,6 +104,12 @@ export interface CommandContext {
 
   /** Trigger a manual compact request through the TUI execution pipeline. */
   onManualCompactRequested?: (instruction: string) => void;
+
+  /** Copy text to the system clipboard. Returns true on success. */
+  copyToClipboard?: (text: string) => boolean;
+
+  /** True while the agent is producing output for the current turn. */
+  isProcessing?: () => boolean;
 
   /** Prompt the user to choose one option during command execution. */
   promptSelect?: (request: PromptSelectRequest) => Promise<string | undefined>;
@@ -144,7 +162,7 @@ export interface CommandOptionsContext {
  * A single slash command.
  */
 export interface SlashCommand {
-  /** The command name, e.g. "/sessions". */
+  /** The command name, e.g. "/session". */
   name: string;
   /** Short description shown in /help output. */
   description: string;
@@ -158,7 +176,7 @@ export interface SlashCommand {
   options?: (ctx: CommandOptionsContext) => CommandOption[];
   /** When true, TUI uses a checkbox multi-select picker instead of single-select. */
   checkboxMode?: boolean;
-  /** Alternative names that also match during search (e.g. ["/resume"] for "/sessions"). */
+  /** Alternative names that also match during search. */
   aliases?: string[];
   /** Optional display title for the picker; the command name is still submitted. */
   pickerTitle?: string;
@@ -372,83 +390,52 @@ async function cmdResume(ctx: CommandContext, args: string): Promise<void> {
   }
 
   const sessions = store.listSessions();
-  if (sessions.length === 0) {
-    ctx.showMessage("No previous sessions in this project.");
-    return;
-  }
-
   const trimmed = args.trim();
+
   if (!trimmed) {
+    if (sessions.length === 0) {
+      ctx.showMessage("No previous sessions in this project.");
+      return;
+    }
     const lines = ["Sessions", "", ...buildSessionTableRows(sessions)];
-    lines.push("", "Use /sessions <sessionId> to load a session.");
+    lines.push("", "Use /session <sessionId> to load a session.");
     ctx.showMessage(lines.join("\n"));
     return;
   }
 
-  // Load specific session
+  // Resolve the requested session within the current project. Numeric index
+  // (1-based) acts as a shortcut from the picker; otherwise match by UUID
+  // (which equals the directory basename).
   const numericIdx = /^\d+$/.test(trimmed) ? parseInt(trimmed, 10) - 1 : Number.NaN;
   const target = Number.isInteger(numericIdx)
     ? sessions[numericIdx]
     : sessions.find((s) => s.sessionId === trimmed || basename(s.path) === trimmed);
+
   if (!target) {
+    // Not in this project — check if it lives elsewhere so we can give an
+    // actionable hint instead of a bare "not found".
+    const elsewhere = findSessionById(trimmed);
+    if (elsewhere && elsewhere.projectPath) {
+      ctx.showMessage(
+        `This session belongs to ${elsewhere.projectPath}. Exit and run:\n` +
+          `cd ${elsewhere.projectPath}\n` +
+          `fermi --resume ${trimmed}`,
+      );
+      return;
+    }
     ctx.showMessage(`Session not found: ${trimmed}`);
     return;
   }
 
   // Auto-save current first
   ctx.autoSave();
-
-  const session = ctx.session;
-  const logJsonPath = join(target.path, "log.json");
-  const hasLogJson = existsSync(logJsonPath);
-
-  if (!hasLogJson) {
-    ctx.showMessage("No log.json found for this session.");
-    return;
-  }
-
-  let logData;
-  try {
-    logData = loadLog(target.path);
-  } catch (e) {
-    ctx.showMessage(
-      `Failed to load log: ${e instanceof Error ? e.message : String(e)}`,
-    );
-    return;
-  }
-
-  // Validate and repair
-  const { entries: repairedEntries, repaired, warnings } = validateAndRepairLog(logData.entries);
-  if (repaired) {
-    for (const w of warnings) {
-      ctx.showMessage(`[repair] ${w}`);
-    }
-  }
-
   ctx.resetUiState();
 
-  const bindingState = store.captureBindingState();
-  try {
-    store.attachToExistingSession(target.path);
-    // setStore BEFORE prepareRestoreFromLog so that _childSessionDir()
-    // resolves agent paths from the resumed session's artifacts, not the current one.
-    if (typeof session.setStore === "function") {
-      session.setStore(store);
-    }
-    const prepared = session.prepareRestoreFromLog(logData.meta, repairedEntries, logData.idAllocator);
-    const warnings = session.commitPreparedRestore(prepared);
-    for (const warning of warnings) {
-      ctx.showMessage(`[resume] ${warning}`);
-    }
-  } catch (e) {
-    store.restoreBindingState(bindingState);
-    ctx.showMessage(
-      `Failed to restore session: ${e instanceof Error ? e.message : String(e)}`,
-    );
-    return;
+  const result = applySessionRestore(ctx.session, store, target.path);
+  for (const w of result.warnings) ctx.showMessage(w);
+  if (!result.ok && result.error) {
+    ctx.showMessage(result.error);
   }
-
-  store.attachToExistingSession(target.path);
 }
 
 function formatRelativeTime(value: string | undefined, now: number): string {
@@ -560,7 +547,7 @@ function persistModelSelection(ctx: CommandContext): void {
         ? prefs.thinkingLevel
         : undefined,
     };
-    saveModelSelectionState(state);
+    saveModelSelectionState(state, ctx.fermiHomeDir);
   } catch {
     // Ignore persistence failures during command execution.
   }
@@ -570,10 +557,10 @@ function persistModelSelection(ctx: CommandContext): void {
  * Persist a partial settings update to global settings.json.
  * Reads existing settings, merges the patch, and writes back.
  */
-function persistSettingsPatch(patch: Partial<FermiSettings>): void {
+function persistSettingsPatch(patch: Partial<FermiSettings>, homeDir?: string): void {
   try {
-    const existing = loadGlobalSettings();
-    saveSettings({ ...existing, ...patch }, globalSettingsPath());
+    const existing = loadGlobalSettings(homeDir);
+    saveSettings({ ...existing, ...patch }, globalSettingsPath(homeDir));
   } catch {
     // Ignore persistence failures during command execution.
   }
@@ -758,7 +745,7 @@ async function ensureModelSelectionReady(
       const result = await ensureManagedProviderCredential(
         parsedTarget.provider,
         adapter,
-        { mode: "model", allowReplaceExisting: false },
+        { mode: "model", allowReplaceExisting: false, homeDir: ctx.fermiHomeDir },
       );
       if (result.status === "skipped") return undefined;
       return resolveModelSelection(ctx.session, target);
@@ -985,7 +972,7 @@ async function cmdModelLocalDiscover(ctx: CommandContext, providerId: string): P
 
   // Persist local provider config to settings.json so it survives restarts
   {
-    const existing = loadGlobalSettings();
+    const existing = loadGlobalSettings(ctx.fermiHomeDir);
     const providerEntry: ProviderEntry = {
       base_url: baseUrl,
       model: modelChoice,
@@ -997,7 +984,7 @@ async function cmdModelLocalDiscover(ctx: CommandContext, providerId: string): P
         ...(existing.providers ?? {}),
         [providerId]: providerEntry,
       },
-    });
+    }, ctx.fermiHomeDir);
   }
 
   // Switch to the new model
@@ -1082,13 +1069,13 @@ async function cmdAddProvider(ctx: CommandContext): Promise<boolean> {
     const tokens = await ctx.requestOAuthLogin("codex");
     if (!tokens) return false;
     // Register models in config
-    const existing = loadGlobalSettings();
+    const existing = loadGlobalSettings(ctx.fermiHomeDir);
     persistSettingsPatch({
       providers: {
         ...(existing.providers ?? {}),
         [preset.id]: { api_key_env: "_OPENAI_CODEX_OAUTH" },
       },
-    });
+    }, ctx.fermiHomeDir);
     // Register preset models in runtime config
     for (const model of preset.models) {
       config.upsertModelRaw(`${preset.id}:${model.key}`, {
@@ -1108,13 +1095,13 @@ async function cmdAddProvider(ctx: CommandContext): Promise<boolean> {
     }
     const tokens = await ctx.requestOAuthLogin("copilot");
     if (!tokens) return false;
-    const existing = loadGlobalSettings();
+    const existing = loadGlobalSettings(ctx.fermiHomeDir);
     persistSettingsPatch({
       providers: {
         ...(existing.providers ?? {}),
         [preset.id]: { api_key_env: "_COPILOT_OAUTH" },
       },
-    });
+    }, ctx.fermiHomeDir);
     for (const model of preset.models) {
       config.upsertModelRaw(`${preset.id}:${model.key}`, {
         provider: preset.id,
@@ -1154,7 +1141,10 @@ async function cmdAddProvider(ctx: CommandContext): Promise<boolean> {
       select: (req) => ctx.promptSelect!(req),
       secret: (req) => ctx.promptSecret!(req),
     };
-    const result = await ensureManagedProviderCredential(targetPreset.id, adapter, { mode: "model" });
+    const result = await ensureManagedProviderCredential(targetPreset.id, adapter, {
+      mode: "model",
+      homeDir: ctx.fermiHomeDir,
+    });
     if (!result) return false;
 
     // Register preset models in runtime config
@@ -1202,17 +1192,17 @@ async function cmdAddProvider(ctx: CommandContext): Promise<boolean> {
   }
 
   // Save key to .env
-  setDotenvKey(envVarName, apiKey);
+  setDotenvKey(envVarName, apiKey, ctx.fermiHomeDir);
   process.env[envVarName] = apiKey;
 
   // Register in settings.json
-  const existing = loadGlobalSettings();
+  const existing = loadGlobalSettings(ctx.fermiHomeDir);
   persistSettingsPatch({
     providers: {
       ...(existing.providers ?? {}),
       [preset.id]: { api_key_env: envVarName },
     },
-  });
+  }, ctx.fermiHomeDir);
 
   // Register preset models in runtime config
   for (const model of preset.models) {
@@ -1267,7 +1257,7 @@ async function cmdTheme(ctx: CommandContext, args: string): Promise<void> {
 
   setAccent(color);
   ctx.session.accentColor = color;
-  persistSettingsPatch({ accent_color: color });
+  persistSettingsPatch({ accent_color: color }, ctx.fermiHomeDir);
 
   const label = preset ? `${preset.label} (${color})` : color;
   ctx.showMessage(`Accent color set to: ${label}`);
@@ -1510,7 +1500,7 @@ async function cmdTier(ctx: CommandContext, args: string): Promise<void> {
 
   // Handle "clear" — remove all tiers
   if (trimmed === "clear") {
-    persistSettingsPatch({ model_tiers: {} });
+    persistSettingsPatch({ model_tiers: {} }, ctx.fermiHomeDir);
     // Update runtime config
     if (session.config?._modelTiers !== undefined) {
       (session.config as any)._modelTiers = {};
@@ -1550,7 +1540,7 @@ async function cmdTier(ctx: CommandContext, args: string): Promise<void> {
   if (action === "clear_one") {
     const updatedTiers = { ...tiers };
     delete updatedTiers[level];
-    persistSettingsPatch({ model_tiers: updatedTiers });
+    persistSettingsPatch({ model_tiers: updatedTiers }, ctx.fermiHomeDir);
     if (session.config?._modelTiers !== undefined) {
       (session.config as any)._modelTiers = updatedTiers;
     }
@@ -1611,7 +1601,7 @@ async function cmdTier(ctx: CommandContext, args: string): Promise<void> {
 
   // Persist
   const updatedTiers = { ...tiers, [level]: tierEntry };
-  persistSettingsPatch({ model_tiers: updatedTiers });
+  persistSettingsPatch({ model_tiers: updatedTiers }, ctx.fermiHomeDir);
 
   // Update runtime config
   if (session.config?._modelTiers !== undefined) {
@@ -1634,7 +1624,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/help", description: "Show commands and shortcuts", handler: cmdHelp });
   registry.register({ name: "/compact", description: "Manually compact the active context", handler: cmdCompact });
   registry.register({ name: "/new", description: "Start a new session", handler: cmdNew });
-  registry.register({ name: "/sessions", description: "Resume a previous session", handler: cmdResume, options: resumeOptions, aliases: ["/resume"], pickerTitle: "Sessions" });
+  registry.register({ name: "/session", description: "Resume a previous session", handler: cmdResume, options: resumeOptions, pickerTitle: "Sessions" });
   registry.register({ name: "/summarize", description: "Manually summarize older context", handler: cmdSummarize });
   registry.register({ name: "/model", description: "Switch model", handler: cmdModel, options: modelOptions });
   registry.register({ name: "/tier", description: "Configure sub-agent model tiers", handler: cmdTier, options: tierOptions });
@@ -1649,7 +1639,158 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/permission", description: "Set permission mode", handler: cmdPermission, options: permissionOptions });
   registry.register({ name: "/rewind", description: "Rewind to a previous turn", handler: cmdRewind, options: rewindOptions, aliases: ["/undo"] });
   registry.register({ name: "/hooks", description: "Show registered hooks", handler: cmdHooks });
+  registry.register({ name: "/copy", description: "Copy the agent's most recent text response", handler: cmdCopy });
+  registry.register({ name: "/fork", description: "Fork the current session into a new branch", handler: cmdFork });
   return registry;
+}
+
+// ------------------------------------------------------------------
+// /copy
+// ------------------------------------------------------------------
+
+async function cmdCopy(ctx: CommandContext): Promise<void> {
+  const hint = ctx.showHint ?? ctx.showMessage;
+
+  if (ctx.isProcessing?.()) {
+    hint("Wait until the agent finishes.");
+    return;
+  }
+
+  const log = ctx.session.log as ReadonlyArray<{ type: string; content?: unknown; discarded?: boolean }> | undefined;
+  if (!Array.isArray(log)) {
+    hint("No agent response to copy.");
+    return;
+  }
+
+  let lastText: string | null = null;
+  for (let i = log.length - 1; i >= 0; i--) {
+    const entry = log[i];
+    if (entry?.discarded) continue;
+    if (entry?.type === "assistant_text" && typeof entry.content === "string" && entry.content.length > 0) {
+      lastText = entry.content;
+      break;
+    }
+  }
+
+  if (lastText === null) {
+    hint("No agent response to copy.");
+    return;
+  }
+
+  if (!ctx.copyToClipboard) {
+    hint("Clipboard is not available in this environment.");
+    return;
+  }
+
+  const ok = ctx.copyToClipboard(lastText);
+  hint(ok ? `Copied agent response (${lastText.length} chars).` : "Copy failed.");
+}
+
+// ------------------------------------------------------------------
+// /fork
+// ------------------------------------------------------------------
+
+async function cmdFork(ctx: CommandContext): Promise<void> {
+  const hint = ctx.showHint ?? ctx.showMessage;
+  const session = ctx.session;
+  const store = ctx.store;
+
+  if (!store) {
+    ctx.showMessage("Session persistence not available.");
+    return;
+  }
+
+  if (session.currentTurnRunning) {
+    hint("Cannot fork while a turn is running.");
+    return;
+  }
+
+  const childSnapshots = (typeof session.getChildSessionSnapshots === "function"
+    ? session.getChildSessionSnapshots()
+    : []) as Array<{ lifecycle: string }>;
+  const liveChildren = childSnapshots.filter(
+    (s) => s.lifecycle === "running" || s.lifecycle === "blocked",
+  );
+  if (liveChildren.length > 0) {
+    hint("Cannot fork while sub-agents are running.");
+    return;
+  }
+
+  const sourceDir = store.sessionDir;
+  if (!sourceDir) {
+    ctx.showMessage("No active session to fork.");
+    return;
+  }
+
+  // Save current state so we copy the latest log/meta to disk before cloning.
+  ctx.autoSave();
+
+  // Empty sessions have no log.json yet (saveLog skips when turnCount === 0).
+  if (!existsSync(join(sourceDir, "log.json"))) {
+    hint("Cannot fork an empty session.");
+    return;
+  }
+
+  const origSessionId = basename(sourceDir);
+  const newSessionId = randomSessionId();
+  const newDir = join(store.projectDir, newSessionId);
+
+  try {
+    cpSync(sourceDir, newDir, { recursive: true });
+  } catch (e) {
+    try { rmSync(newDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    ctx.showMessage(`Fork failed: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+
+  // Patch new meta.json + log.json: fresh ID, fresh timestamps, branch title.
+  try {
+    const nowIso = new Date().toISOString();
+    const metaPath = join(newDir, "meta.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+    const origTitleSrc = (typeof meta.title === "string" && meta.title.length > 0)
+      ? meta.title
+      : (typeof meta.summary === "string" ? meta.summary : "");
+    const branchTitle = origTitleSrc.startsWith("(branch) ")
+      ? origTitleSrc
+      : `(branch) ${origTitleSrc}`.trim();
+    meta.session_id = newSessionId;
+    meta.created_at = nowIso;
+    meta.last_active_at = nowIso;
+    meta.title = branchTitle;
+    writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+
+    const logPath = join(newDir, "log.json");
+    const logData = JSON.parse(readFileSync(logPath, "utf-8"));
+    logData.session_id = newSessionId;
+    logData.created_at = nowIso;
+    logData.updated_at = nowIso;
+    logData.title = branchTitle;
+    writeFileSync(logPath, JSON.stringify(logData, null, 2));
+  } catch (e) {
+    try { rmSync(newDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    ctx.showMessage(`Fork failed: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+
+  ctx.resetUiState();
+
+  const result = applySessionRestore(session, store, newDir);
+  for (const w of result.warnings) ctx.showMessage(w);
+  if (!result.ok && result.error) {
+    ctx.showMessage(result.error);
+    return;
+  }
+
+  // Ephemeral pointer back to the parent — visible in the conversation,
+  // not persisted to log.json (saveLog filters meta.ephemeral entries).
+  if (typeof session.appendStatusMessage === "function") {
+    session.appendStatusMessage(
+      `To continue the original session, enter /session ${origSessionId}`,
+      "fork_origin",
+      true,
+    );
+  }
 }
 
 // ------------------------------------------------------------------
@@ -1791,7 +1932,10 @@ async function cmdSkills(ctx: CommandContext, args: string): Promise<void> {
   const disabledSkills = allSkills
     .filter((s: { name: string }) => !enabledNames.has(s.name))
     .map((s: { name: string }) => s.name);
-  persistSettingsPatch({ disabled_skills: disabledSkills.length > 0 ? disabledSkills : undefined });
+  persistSettingsPatch(
+    { disabled_skills: disabledSkills.length > 0 ? disabledSkills : undefined },
+    ctx.fermiHomeDir,
+  );
 }
 
 // ------------------------------------------------------------------

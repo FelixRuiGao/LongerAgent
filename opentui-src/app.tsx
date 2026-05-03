@@ -119,6 +119,7 @@ import {
 import { clamp, computePickerMaxVisible } from "./display/layout/metrics.js";
 import { OpenTuiScreen } from "./display/layout/open-tui-screen.js";
 import { resolveModelNameColor } from "./display/utils/model.js";
+import { appendPromptHistory, navigatePromptHistory } from "./input/prompt-history.js";
 
 export interface OpenTuiAppProps {
   session: TuiSession;
@@ -1368,6 +1369,9 @@ export function OpenTuiApp({
       onManualCompactRequested: (instruction: string) => {
         void runManualCompact(instruction);
       },
+      showHint,
+      copyToClipboard: (text: string) => copyToClipboard(text, (t) => renderer.copyToClipboardOSC52(t)),
+      isProcessing: () => processingRef.current,
       promptSecret: async (request: PromptSecretRequest) => {
         resolvePromptSecret(undefined);
         resolvePromptSelect(undefined);
@@ -1501,11 +1505,16 @@ export function OpenTuiApp({
     return serializeComposerText(composer, ensureComposerTokenType(composer));
   }, [draftValue]);
 
-  const UI_ONLY_COMMANDS = new Set(["/agents", "/raw", "/sidebar"]);
+  // Commands that run regardless of streaming state. /copy is here so its
+  // "wait until the agent finishes" hint actually fires (otherwise the
+  // default path would queue "/copy" as a user message to the LLM).
+  const UI_ONLY_COMMANDS = new Set(["/agents", "/raw", "/sidebar", "/copy"]);
 
   const handleSubmit = useCallback(async (submittedValue: string) => {
     const input = submittedValue.trim();
     if (!input) return;
+
+    appendPromptHistory(input);
 
     // UI-only commands: always intercept, even when processing
     if (input.startsWith("/")) {
@@ -2610,6 +2619,39 @@ export function OpenTuiApp({
       event.preventDefault();
       event.stopPropagation();
       return;
+    }
+
+    // Prompt history: ↑ at the very start, ↓ at the very end. Multi-line cursor
+    // movement still wins via the gotoVisualLineHome/End branches below — they
+    // run when cursor isn't yet at the absolute boundary.
+    if (event.name === "up" && composer.cursorOffset === 0 && !selectedChildId) {
+      const recalled = navigatePromptHistory(-1, composer.plainText);
+      if (recalled !== undefined) {
+        composer.extmarks.clear();
+        composer.setText(recalled);
+        composer.cursorOffset = 0;
+        syncComposerState();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
+
+    if (
+      event.name === "down"
+      && composer.cursorOffset === composer.plainText.length
+      && !selectedChildId
+    ) {
+      const recalled = navigatePromptHistory(1, composer.plainText);
+      if (recalled !== undefined) {
+        composer.extmarks.clear();
+        composer.setText(recalled);
+        composer.cursorOffset = displayWidthWithNewlines(recalled);
+        syncComposerState();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
     }
 
     if (event.name === "up" && isAtFirstVisualLine()) {
