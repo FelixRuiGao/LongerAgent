@@ -25,8 +25,6 @@ import { getFermiHomeDir } from "./home-path.js";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 // child_process — now only used by BackgroundShellManager
 import * as yaml from "js-yaml";
-import { countTokens as gptCountTokens, encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
-
 
 import { loadTemplate, validateTemplate, assembleSystemPrompt } from "./templates/loader.js";
 
@@ -955,7 +953,6 @@ export class Session {
     this._ensureCommTools();
     this._ensureSkillTool();
     this._persistedModelSelection = this._buildPersistedModelSelection();
-    this._updateInitialTokenEstimate();
 
     // Init tree-sitter bash parser (async, non-blocking)
     initBashParser();
@@ -1004,7 +1001,6 @@ export class Session {
       createSystemPrompt(this._nextLogId("system_prompt"), this._cachedSystemPrompt!),
       false,
     );
-    this._updateInitialTokenEstimate();
     this._notifyLogListeners();
   }
 
@@ -3518,10 +3514,6 @@ export class Session {
       newModelConfig.model,
       this._preferredThinkingLevel,
     );
-    if (this._turnCount === 0) {
-      this._updateInitialTokenEstimate();
-      this._notifyLogListeners();
-    }
   }
 
   applyGlobalPreferences(preferences: GlobalTuiPreferences): void {
@@ -5972,73 +5964,6 @@ export class Session {
     return undefined;
   };
 
-  private _countProjectedMessageTokens(content: unknown): number {
-    if (typeof content === "string") {
-      return gptEncode(content).length;
-    }
-    if (Array.isArray(content)) {
-      return content.reduce((sum, item) => sum + this._countProjectedMessageTokens(item), 0);
-    }
-    if (content && typeof content === "object") {
-      const record = content as Record<string, unknown>;
-      if (typeof record["text"] === "string") {
-        return gptEncode(record["text"]).length;
-      }
-      if (typeof record["content"] === "string") {
-        return gptEncode(record["content"]).length;
-      }
-      if (typeof record["input_text"] === "string") {
-        return gptEncode(record["input_text"]).length;
-      }
-    }
-    return 0;
-  }
-
-  private _estimateToolDefinitionTokens(): number {
-    const tools = Array.isArray(this.primaryAgent.tools) ? this.primaryAgent.tools : [];
-    if (tools.length === 0) return 0;
-
-    try {
-      const provider = (this.primaryAgent as any)._provider as Record<string, unknown> | undefined;
-      const convertTools = provider?.["_convertTools"];
-      if (typeof convertTools === "function") {
-        const converted = convertTools.call(provider, tools);
-        const normalized = Array.isArray(converted)
-          ? converted
-          : converted && typeof converted === "object" && Array.isArray((converted as Record<string, unknown>)["toolsList"])
-          ? (converted as Record<string, unknown>)["toolsList"]
-          : tools;
-        return gptEncode(JSON.stringify(normalized)).length;
-      }
-    } catch {
-      // Fall back to raw tool definitions.
-    }
-
-    return gptEncode(JSON.stringify(tools)).length;
-  }
-
-  private _estimateInitialApiInputTokens(): number {
-    const messages = projectToApiMessages(this._log, {
-      systemPrompt: this._getSystemPrompt(),
-      resolveImageRef: (refPath) => this._resolveImageRef(refPath),
-      requiresAlternatingRoles: (this.primaryAgent as any)._provider?.requiresAlternatingRoles,
-    });
-
-    try {
-      return gptCountTokens(messages as any) + this._estimateToolDefinitionTokens();
-    } catch {
-      return messages.reduce((sum, message) => sum + this._countProjectedMessageTokens(message["content"]), 0)
-        + this._estimateToolDefinitionTokens();
-    }
-  }
-
-  private _updateInitialTokenEstimate(): void {
-    if (this._turnCount !== 0) return;
-    const estimate = this._estimateInitialApiInputTokens();
-    this._lastInputTokens = estimate;
-    this._lastTotalTokens = estimate;
-    this._lastCacheReadTokens = 0;
-  }
 
   private _getArtifactsDirIfAvailable(): string | undefined {
     if (!this._store) return undefined;
@@ -6195,7 +6120,6 @@ export class Session {
    */
   private _refreshSystemPromptPaths(): void {
     this._reloadPromptAndTools();
-    this._updateInitialTokenEstimate();
   }
 
   // ==================================================================

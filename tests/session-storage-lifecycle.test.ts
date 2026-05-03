@@ -475,7 +475,7 @@ describe("session storage lifecycle", () => {
     }
   });
 
-  it("estimates initial input tokens for a fresh session before the first user message", () => {
+  it("starts a fresh session with zero input tokens before the first user message", () => {
     const previousHome = process.env["HOME"];
     const baseDir = makeTempDir("fermi-lifecycle-base-");
     const projectRoot = makeTempDir("fermi-lifecycle-project-");
@@ -483,48 +483,10 @@ describe("session storage lifecycle", () => {
       process.env["HOME"] = baseDir;
       const store = new SessionStore({ baseDir, projectPath: projectRoot });
       const session = makeSession(projectRoot, store);
-      const expected = (session as any)._estimateInitialApiInputTokens();
 
-      expect(session.lastInputTokens).toBe(expected);
-      expect(session.lastTotalTokens).toBe(expected);
+      expect(session.lastInputTokens).toBe(0);
+      expect(session.lastTotalTokens).toBe(0);
       expect(session.lastCacheReadTokens).toBe(0);
-    } finally {
-      if (previousHome === undefined) {
-        delete process.env["HOME"];
-      } else {
-        process.env["HOME"] = previousHome;
-      }
-      rmSync(baseDir, { recursive: true, force: true });
-      rmSync(projectRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("includes tool definitions in the initial input token estimate", async () => {
-    const previousHome = process.env["HOME"];
-    const baseDir = makeTempDir("fermi-lifecycle-base-");
-    const projectRoot = makeTempDir("fermi-lifecycle-project-");
-    try {
-      process.env["HOME"] = baseDir;
-      const store = new SessionStore({ baseDir, projectPath: projectRoot });
-      const session = makeSession(projectRoot, store);
-      const tools = [
-        {
-          name: "write_file",
-          description: "Write a file to disk",
-          parameters: {
-            type: "object",
-            properties: {
-              path: { type: "string" },
-              content: { type: "string" },
-            },
-            required: ["path", "content"],
-          },
-        },
-      ];
-      (session.primaryAgent as any).tools = tools;
-
-      await session.resetForNewSession(store);
-      expect(session.lastInputTokens).toBe((session as any)._estimateInitialApiInputTokens());
     } finally {
       if (previousHome === undefined) {
         delete process.env["HOME"];
