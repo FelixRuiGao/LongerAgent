@@ -84,6 +84,7 @@ fermi -c key=value          # Override a setting for this session
 fermi oauth                 # Log in to OpenAI via OAuth
 fermi oauth status          # Check OAuth login status
 fermi oauth logout          # Log out
+fermi fix                   # Check and repair session storage
 fermi --templates <path>    # Use a specific templates directory
 fermi --verbose             # Enable debug logging
 fermi --version             # Show version
