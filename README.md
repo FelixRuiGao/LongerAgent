@@ -1,7 +1,10 @@
 # Fermi
 
 <p align="center">
-  <strong>The coding agent that compresses its own memory.</strong>
+  <strong>The coding agent that manages its own contexts.</strong>
+</p>
+<p align="center">
+  Terminal UI built on <a href="https://github.com/anomalyco/opentui">OpenTUI</a>.
 </p>
 <p align="center">
   English | <a href="./README.zh-CN.md">中文</a>
@@ -9,6 +12,7 @@
 <p align="center">
   <a href="https://github.com/FelixRuiGao/Fermi/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/FelixRuiGao/Fermi?style=flat-square" /></a>
   <a href="https://felixruigao.github.io/Fermi/"><img alt="Docs" src="https://img.shields.io/badge/docs-website-4b4bf0?style=flat-square" /></a>
+  <a href="https://github.com/anomalyco/opentui"><img alt="OpenTUI" src="https://img.shields.io/badge/built%20on-OpenTUI-7c3aed?style=flat-square" /></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
 </p>
 
