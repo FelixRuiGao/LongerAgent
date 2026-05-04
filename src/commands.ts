@@ -1624,7 +1624,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/help", description: "Show commands and shortcuts", handler: cmdHelp });
   registry.register({ name: "/compact", description: "Manually compact the active context", handler: cmdCompact });
   registry.register({ name: "/new", description: "Start a new session", handler: cmdNew });
-  registry.register({ name: "/session", description: "Resume a previous session", handler: cmdResume, options: resumeOptions, pickerTitle: "Sessions" });
+  registry.register({ name: "/session", description: "Resume a previous session", handler: cmdResume, options: resumeOptions, pickerTitle: "Sessions", aliases: ["/resume"] });
   registry.register({ name: "/summarize", description: "Manually summarize older context", handler: cmdSummarize });
   registry.register({ name: "/model", description: "Switch model", handler: cmdModel, options: modelOptions });
   registry.register({ name: "/tier", description: "Configure sub-agent model tiers", handler: cmdTier, options: tierOptions });

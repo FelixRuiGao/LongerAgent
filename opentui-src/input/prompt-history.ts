@@ -83,15 +83,18 @@ export function __resetPromptHistoryForTesting(homeDir: string | null = null): v
 /**
  * Append a submitted prompt to history.
  * - Skips empty input.
+ * - Skips slash commands (anything starting with "/") — they're invocations,
+ *   not prompts the user wants to recall and re-edit.
  * - Skips if identical to the most recent entry (adjacent dedup).
  * - Trims to MAX_ENTRIES.
- * - Resets navigation state (index = 0, liveDraft = "").
+ * - Resets navigation state (index = 0, liveDraft = "") on every call,
+ *   including the skip paths.
  * - Persists to disk via append, or full rewrite when trimmed.
  * Errors are swallowed (best-effort).
  */
 export function appendPromptHistory(input: string): void {
   ensureLoaded();
-  if (!input) {
+  if (!input || input.startsWith("/")) {
     state.index = 0;
     state.liveDraft = "";
     return;

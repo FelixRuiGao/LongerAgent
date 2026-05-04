@@ -47,6 +47,31 @@ describe("prompt-history", () => {
       expect(existsSync(stateFile)).toBe(false);
     });
 
+    it("skips slash commands", () => {
+      appendPromptHistory("/help");
+      appendPromptHistory("/model gpt-5");
+      appendPromptHistory("/fork");
+      expect(existsSync(stateFile)).toBe(false);
+    });
+
+    it("does not affect interleaved real prompts", () => {
+      appendPromptHistory("hello");
+      appendPromptHistory("/copy");
+      appendPromptHistory("world");
+      expect(readJsonl(stateFile).map((l) => JSON.parse(l).input)).toEqual(["hello", "world"]);
+    });
+
+    it("slash command submission resets navigation index", () => {
+      appendPromptHistory("a");
+      appendPromptHistory("b");
+      // User walks back into history.
+      expect(navigatePromptHistory(-1, "")).toBe("b");
+      expect(navigatePromptHistory(-1, "b")).toBe("a");
+      // Submitting a slash command should reset just like a normal submit.
+      appendPromptHistory("/help");
+      expect(navigatePromptHistory(-1, "")).toBe("b");
+    });
+
     it("dedupes when identical to most recent", () => {
       appendPromptHistory("ls");
       appendPromptHistory("ls");
@@ -177,6 +202,40 @@ describe("prompt-history", () => {
       expect(navigatePromptHistory(-1, "")).toBe("D");
       // ↓ back to draft slot — should be "" not the old "draft"
       expect(navigatePromptHistory(1, "D")).toBe("");
+    });
+  });
+
+  describe("re-entry preserves position (方案 2)", () => {
+    beforeEach(() => {
+      appendPromptHistory("A");
+      appendPromptHistory("B");
+      appendPromptHistory("C");
+    });
+
+    it("↓ at end after edit walks forward from preserved index", () => {
+      // User types "draft", ↑ to C, ↑ to B. Then edits "B" → "B改" while
+      // still at index=-2. Position must be preserved: ↓ should reach C, not
+      // be stuck at the draft slot.
+      navigatePromptHistory(-1, "draft"); // → C, liveDraft = "draft"
+      navigatePromptHistory(-1, "C");     // → B, index = -2
+      // (App-level mode would have exited after the edit; the next ↓ at end
+      // re-enters by calling navigate with the edited text.)
+      expect(navigatePromptHistory(1, "B改")).toBe("C");
+    });
+
+    it("↑ at start after edit walks backward from preserved index", () => {
+      navigatePromptHistory(-1, "draft");
+      navigatePromptHistory(-1, "C");     // → B, index = -2
+      expect(navigatePromptHistory(-1, "B改")).toBe("A");
+    });
+
+    it("walking all the way back restores original liveDraft, not edits", () => {
+      // 方案 2: edits to a recalled entry are lost on next nav; the original
+      // captured liveDraft is what comes back at index=0.
+      navigatePromptHistory(-1, "draft"); // captures liveDraft="draft", → C
+      navigatePromptHistory(-1, "C-edited"); // → B (edit dropped)
+      navigatePromptHistory(1, "B-edited");  // → C (edit dropped)
+      expect(navigatePromptHistory(1, "C")).toBe("draft");
     });
   });
 });
