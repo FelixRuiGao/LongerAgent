@@ -283,7 +283,12 @@ function isDirectEntry(): boolean {
 
 if (isDirectEntry()) {
   const subcommand = process.argv[2];
-  if (subcommand === "update") {
+  if (subcommand === "--version" || subcommand === "-v") {
+    void import("../src/version.js").then(({ VERSION }) => {
+      process.stdout.write(`${VERSION}\n`);
+      process.exit(0);
+    });
+  } else if (subcommand === "update") {
     import("../src/version.js").then(({ VERSION }) =>
       import("../src/update-check.js").then(({ runUpdate }) => runUpdate(VERSION)),
     ).then(() => process.exit(0)).catch((err) => {

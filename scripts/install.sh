@@ -7,19 +7,17 @@ INSTALL_DIR="${FERMI_INSTALL_DIR:-$HOME/.fermi/bin}"
 os="$(uname -s)"
 arch="$(uname -m)"
 
-case "$os" in
-  Darwin) platform="darwin" ;;
-  Linux) platform="linux" ;;
-  *) echo "fermi: unsupported OS: $os" >&2; exit 1 ;;
-esac
+if [ "$os" != "Darwin" ]; then
+  echo "fermi: only macOS is supported in this release (got $os)" >&2
+  exit 1
+fi
 
 case "$arch" in
-  arm64|aarch64) machine="arm64" ;;
-  x86_64|amd64) machine="x64" ;;
-  *) echo "fermi: unsupported architecture: $arch" >&2; exit 1 ;;
+  arm64|aarch64) ;;
+  *) echo "fermi: only Apple Silicon (arm64) is supported (got $arch)" >&2; exit 1 ;;
 esac
 
-asset="fermi-${platform}-${machine}.tar.gz"
+asset="fermi-darwin-arm64.tar.gz"
 if [ "${FERMI_VERSION:-}" ]; then
   url="https://github.com/${REPO}/releases/download/${FERMI_VERSION}/${asset}"
 else
@@ -45,6 +43,10 @@ fi
 mkdir -p "$INSTALL_DIR"
 tar -xzf "$tmp/$asset" -C "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/fermi" 2>/dev/null || true
+
+# Remove the macOS quarantine attribute so Gatekeeper doesn't block the
+# unsigned binary on first launch.
+xattr -dr com.apple.quarantine "$INSTALL_DIR/fermi" 2>/dev/null || true
 
 path_line='export PATH="$HOME/.fermi/bin:$PATH"'
 profile=""

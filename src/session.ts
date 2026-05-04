@@ -2510,7 +2510,7 @@ export class Session {
   }
 
   private _getRewindJournalPath(): string {
-    const dir = this._getArtifactsDirIfAvailable() ?? join(homedir(), ".vigil", "tmp");
+    const dir = this._getArtifactsDirIfAvailable() ?? join(homedir(), ".fermi", "tmp");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     return join(dir, "rewind-journal.json");
   }

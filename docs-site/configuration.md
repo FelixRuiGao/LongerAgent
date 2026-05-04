@@ -42,6 +42,7 @@ User-editable settings file (JSONC format). Created manually or via `-c` overrid
 | `disabled_skills` | string[] | Skills disabled by default. |
 | `accent_color` | string | Hex color for TUI accent. |
 | `mcp_servers` | object | MCP servers (alternative to mcp.json, supports local overrides). |
+| `auto_update` | boolean | Background update checks against GitHub Releases. Default: true. Toggle via `/autoupdate`. |
 
 Override per-session via CLI: `fermi -c context_budget_percent=70`.
 
@@ -151,6 +152,7 @@ These live in your home directory and project root, not inside `~/.fermi/`. The 
 fermi --version           # Show version
 fermi --templates <path>  # Use a specific templates directory
 fermi --verbose           # Enable debug logging
+fermi update              # Install the latest GitHub release
 ```
 
 ## Asset Discovery Priority

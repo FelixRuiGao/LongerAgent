@@ -7,7 +7,7 @@
   English | <a href="./README.zh-CN.md">中文</a>
 </p>
 <p align="center">
-  <a href="https://www.npmjs.com/package/fermi-code"><img alt="npm" src="https://img.shields.io/npm/v/fermi-code?style=flat-square" /></a>
+  <a href="https://github.com/FelixRuiGao/Fermi/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/FelixRuiGao/Fermi?style=flat-square" /></a>
   <a href="https://felixruigao.github.io/Fermi/"><img alt="Docs" src="https://img.shields.io/badge/docs-website-4b4bf0?style=flat-square" /></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
 </p>
@@ -21,12 +21,12 @@ Fermi is a terminal AI coding agent designed for multi-hour sessions. The agent 
 ## Install
 
 ```bash
-bun install -g fermi-code
+curl -fsSL https://raw.githubusercontent.com/FelixRuiGao/Fermi/main/scripts/install.sh | sh
 fermi init      # setup wizard — pick providers, models, API keys
 fermi           # start a session
 ```
 
-Requires [Bun](https://bun.sh) 1.3+.
+Single binary, no runtime required. Updates: `fermi update` (manual) or `/autoupdate` to toggle background checks.
 
 ## Context Management
 

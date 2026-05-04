@@ -9,10 +9,10 @@ Get Fermi running in under a minute. Three commands — install, configure, laun
 ## Install
 
 ```bash
-bun install -g fermi-code
+curl -fsSL https://raw.githubusercontent.com/FelixRuiGao/Fermi/main/scripts/install.sh | sh
 ```
 
-Requires [Bun](https://bun.sh) 1.3 or later.
+Single self-contained binary — no Bun, Node, or other runtime required. The installer extracts to `~/.fermi/bin/` and adds it to your PATH.
 
 ## Setup
 
@@ -79,6 +79,7 @@ See [Context Management](/guide/context) for details.
 ```text
 fermi                       # Start with auto-detected config
 fermi init                  # Run setup wizard
+fermi update                # Check GitHub Releases and install the latest version
 fermi --resume <id>         # Resume a specific session by ID
 fermi -c key=value          # Override a setting for this session
 fermi oauth                 # Log in to OpenAI via OAuth
@@ -89,6 +90,13 @@ fermi --templates <path>    # Use a specific templates directory
 fermi --verbose             # Enable debug logging
 fermi --version             # Show version
 ```
+
+## Updates
+
+Fermi checks GitHub Releases for new versions in the background (at most once every 24 hours). When a new version is available it downloads to `~/.fermi/staged/`, and the next time you launch `fermi` the new binary is applied automatically.
+
+- `fermi update` — check and install the latest version manually; restart to use it
+- `/autoupdate` — toggle background update checks (on/off, persists in global settings)
 
 ## Safety
 

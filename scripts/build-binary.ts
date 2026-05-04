@@ -3,16 +3,22 @@
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
+// Fermi v0.3.0 ships a single binary for macOS Apple Silicon. Other platforms
+// are not supported in this release.
+if (process.platform !== "darwin" || process.arch !== "arm64") {
+  console.error(`build-binary: unsupported host ${process.platform}-${process.arch}; expected darwin-arm64`);
+  process.exit(1);
+}
+
 const root = resolve(import.meta.dir, "..");
 const buildDir = join(root, "build");
-const binaryName = process.platform === "win32" ? "fermi.exe" : "fermi";
+const binaryName = "fermi";
 const binaryPath = join(buildDir, binaryName);
 const entrypoint = join(root, "opentui-src", "main.tsx");
 const treeSitterWorkerEntrypoint = join(root, "opentui-src", "forked", "core", "lib", "tree-sitter", "parser.worker.ts");
 const treeSitterWorkerDir = join(buildDir, "tree-sitter");
 const assetDirs = ["agent_templates", "prompts", "skills"] as const;
-const releaseArch = process.arch === "x64" ? "x64" : process.arch;
-const releaseTarball = join(buildDir, `fermi-${process.platform}-${releaseArch}.tar.gz`);
+const releaseTarball = join(buildDir, "fermi-darwin-arm64.tar.gz");
 
 function nativeLibName(): string {
   if (process.platform === "darwin") return "libopentui.dylib";
@@ -57,6 +63,7 @@ await run([
   "bun",
   "build",
   "--compile",
+  "--target=bun-darwin-arm64",
   "--outfile",
   binaryPath,
   "--external",
