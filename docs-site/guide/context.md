@@ -59,15 +59,17 @@ Before-turn compact is interruptible: pressing Ctrl+C cancels the compact and pr
 
 ## Context Budget
 
-The effective context size can be restricted without switching models:
+The effective context size can be restricted without switching models. In `~/.fermi/settings.json` (or `<project>/.fermi/settings.json` for per-project override):
 
-```json
+```jsonc
 {
   "context_budget_percent": 70
 }
 ```
 
 This sets the effective budget to 70% of the model's maximum context length. All threshold calculations (hints, compact) operate against this budget. Useful when you want to leave headroom for large tool results.
+
+You can also set it per-session via the CLI: `fermi -c context_budget_percent=70`.
 
 ## Manual Intervention
 

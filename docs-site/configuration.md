@@ -6,7 +6,8 @@ Fermi loads bundled defaults from the installed package and user overrides from 
 
 ```text
 ~/.fermi/
-├── tui-preferences.json   # Model selection, local provider config, preferences
+├── settings.json          # User settings (JSONC) — context budget, permissions, etc.
+├── tui-preferences.json   # Model selection, local provider config (auto-managed)
 ├── .env                   # API keys and managed provider slots (0600 permissions)
 ├── mcp.json               # MCP server configurations (optional, user-edited)
 ├── auth.json              # OAuth tokens (auto-managed)
@@ -16,22 +17,34 @@ Fermi loads bundled defaults from the installed package and user overrides from 
 └── prompts/               # User prompt overrides
 ```
 
-## tui-preferences.json
+## settings.json
 
-The primary configuration file. Created and managed by `fermi init`. Stores:
+User-editable settings file (JSONC format). Created manually or via `-c` overrides. Supports global (`~/.fermi/settings.json`) and project-local (`<project>/.fermi/settings.json`) — local overrides global.
 
-- Model selection (provider, model ID, thinking level)
-- Local provider configurations (base URL, context length)
-- UI preferences (accent color, raw mode)
-- Context budget percent
-
-This file is auto-managed. While you can edit it by hand, running `fermi init` or using `/model` is the recommended way to make changes.
-
-### Notable Settings
+```jsonc
+{
+  "context_budget_percent": 80,
+  "permission_mode": "reversible",
+  "accent_color": "#4b4bf0"
+}
+```
 
 | Setting | Type | Description |
 |---------|------|-------------|
 | `context_budget_percent` | number (1–100) | Restricts effective context to this percentage of model max. Default: 100. |
+| `permission_mode` | string | Default permission mode: `read_only`, `reversible`, or `yolo`. |
+| `accent_color` | string | Hex color for the TUI accent. |
+
+Override per-session via CLI: `fermi -c context_budget_percent=70`.
+
+## tui-preferences.json
+
+Auto-managed by `fermi init` and `/model`. Stores:
+
+- Model selection (provider, model ID, thinking level)
+- Local provider configurations (base URL, context length)
+
+This file is auto-managed. Running `fermi init` or using `/model` is the recommended way to make changes.
 
 ## .env
 
