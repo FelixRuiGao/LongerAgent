@@ -1,6 +1,6 @@
 # Getting Started
 
-Fermi is a terminal AI coding agent built for long sessions. Its three-layer context management system — hint compression, agent-initiated summarization, and auto-compact — keeps sessions productive for hours without losing important context.
+Get Fermi running in under a minute. Three commands — install, configure, launch.
 
 <!-- MEDIA: Hero screenshot of Fermi TUI in action — showing a mid-session conversation with context annotations visible -->
 
