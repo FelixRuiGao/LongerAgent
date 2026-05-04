@@ -4076,13 +4076,17 @@ export class Session {
       }
     }
 
-    // 0b. Artifacts-dir bypass: write_file/edit_file inside session artifacts/
-    //    don't need approval (Fermi-style auto-allow for agent-owned scratch space).
-    const isFileWrite = ctx.toolName === "write_file" || ctx.toolName === "edit_file";
+    // 0b. Artifacts-dir bypass: file tools (read/write/edit/list/glob/grep)
+    //    operating inside session artifacts/ don't need approval (agent-owned
+    //    scratch space). Bash is excluded — its cwd-tracking is a separate gate.
+    const ARTIFACTS_BYPASS_TOOLS = new Set([
+      "read_file", "write_file", "edit_file", "list_dir", "glob", "grep",
+    ]);
     const skipPermissionGate =
-      isFileWrite && this._isInsideArtifactsDir((ctx.toolArgs as Record<string, unknown>)["path"]);
+      ARTIFACTS_BYPASS_TOOLS.has(ctx.toolName) &&
+      this._isInsideArtifactsDir((ctx.toolArgs as Record<string, unknown>)["path"]);
 
-    // 1. Permission gate check (skip for artifacts writes)
+    // 1. Permission gate check (skip for artifacts-dir file ops)
     if (!skipPermissionGate) {
       const decision = await this.toolGate.evaluate(ctx);
       switch (decision.kind) {
