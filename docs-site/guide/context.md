@@ -27,7 +27,7 @@ Displays a context map showing all context groups with their sizes and types. Al
 
 Operates on groups of spatially contiguous context IDs. For each group, the agent writes a summary that preserves decisions, key facts, code references, and unresolved issues — then the original content is replaced by the summary.
 
-The key property: this is **append-only**. Original log entries are never mutated. Summary entries are appended with `coveredContextIds`, and the projection algorithm computes visibility dynamically via backward scan.
+The key property: this is **append-only**. Original content is never deleted — summaries are appended, and the system dynamically determines what is visible based on what has been summarized. This means summarization is safe and reversible at the system level.
 
 <!-- MEDIA: Side-by-side showing context map before and after a summarize operation — token counts visibly reduced -->
 
