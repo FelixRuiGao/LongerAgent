@@ -7,6 +7,7 @@
   <a href="./README.md">English</a> | 中文
 </p>
 <p align="center">
+  <a href="https://www.npmjs.com/package/fermi-code"><img alt="npm" src="https://img.shields.io/npm/v/fermi-code?style=flat-square" /></a>
   <a href="https://felixruigao.github.io/Fermi/"><img alt="Docs" src="https://img.shields.io/badge/docs-website-4b4bf0?style=flat-square" /></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
 </p>
