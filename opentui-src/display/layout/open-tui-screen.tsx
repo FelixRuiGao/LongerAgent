@@ -363,7 +363,6 @@ export function OpenTuiScreen({
       flexDirection="column"
       width="100%"
       height="100%"
-      backgroundColor={theme.colors.background}
       paddingTop={theme.spacing.screenPaddingY}
       paddingBottom={theme.spacing.screenPaddingY}
       paddingLeft={1}
@@ -412,6 +411,7 @@ export function OpenTuiScreen({
                   contentWidth={Math.max(20, conversationContentWidth - effectiveSidebarWidth)}
                   markdownMode={markdownMode}
                   colors={theme.colors}
+                  theme={theme}
                   markdownStyle={theme.markdownStyle}
                   selectedChildId={selectedChildId}
                   showLogoInScroll={showLogoInScroll}

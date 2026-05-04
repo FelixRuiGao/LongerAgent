@@ -7,7 +7,7 @@ import { StyledText, RGBA, createTextAttributes, type TextChunk } from "@opentui
 const ATTRS_BOLD = createTextAttributes({ bold: true });
 import type { PresentationEntry } from "../../presentation/types.js";
 import type { ConversationPalette } from "../conversation-types.js";
-import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
+import type { DisplayTheme } from "../../display/theme/index.js";
 import { getSystemEntryColor } from "../../display/entries/entry-variants.js";
 
 const NO_REPLY_LABEL = "NO REPLY";
@@ -25,17 +25,18 @@ function buildGradientLabel(label: string, gradient: readonly string[]): StyledT
 interface SystemEntryProps {
   entry: PresentationEntry;
   colors: ConversationPalette;
+  theme: DisplayTheme;
 }
 
 function SystemEntryInner(
-  { entry, colors }: SystemEntryProps,
+  { entry, colors, theme }: SystemEntryProps,
 ): React.ReactNode {
   const text = entry.systemText ?? "";
   const severity = entry.systemSeverity ?? "info";
-  const fg = getSystemEntryColor(severity, DEFAULT_DISPLAY_THEME);
+  const fg = getSystemEntryColor(severity, theme);
 
   if (severity === "no_reply") {
-    const fullGradient = DEFAULT_DISPLAY_THEME.branding.logoGradient;
+    const fullGradient = theme.branding.logoGradient;
     // Use brighter portion of gradient — skip the darkest tail
     const gradient = useMemo(() => fullGradient.slice(0, 5), [fullGradient]);
     const gradientLabel = useMemo(
@@ -92,5 +93,5 @@ function SystemEntryInner(
 
 export const SystemEntry = React.memo(
   SystemEntryInner,
-  (prev, next) => prev.entry === next.entry && prev.colors === next.colors,
+  (prev, next) => prev.entry === next.entry && prev.colors === next.colors && prev.theme === next.theme,
 );

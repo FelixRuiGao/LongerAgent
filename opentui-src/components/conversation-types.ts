@@ -2,6 +2,7 @@ import type { SyntaxStyle } from "@opentui/core";
 
 import type { PresentationEntry } from "../presentation/types.js";
 import type {
+  DisplayTheme,
   DisplayThemeBrandingTokens,
   DisplayThemeColorTokens,
 } from "../display/theme/index.js";
@@ -12,6 +13,7 @@ export type ConversationPalette = DisplayThemeColorTokens;
 export interface PresentationEntryItemProps {
   entry: PresentationEntry;
   colors: ConversationPalette;
+  theme: DisplayTheme;
   contentWidth: number;
   markdownMode: "rendered" | "raw";
   markdownStyle: SyntaxStyle;
@@ -22,6 +24,7 @@ export interface PresentationEntryItemProps {
 export interface PresentationPanelProps {
   items: readonly PresentationEntry[];
   colors: ConversationPalette;
+  theme: DisplayTheme;
   contentWidth: number;
   markdownMode: "rendered" | "raw";
   markdownStyle: SyntaxStyle;

@@ -13,7 +13,6 @@ import {
   type FileReferenceQuery,
   type TextDiffRange,
 } from "./composer-token-logic.js";
-import { DEFAULT_DISPLAY_THEME } from "./display/theme/index.js";
 
 export interface ComposerTokenVisuals {
   syntaxStyle: SyntaxStyle;
@@ -49,14 +48,6 @@ export function createComposerTokenVisuals(colors: {
     pasteStyleId,
     imageStyleId,
   };
-}
-
-export function createDefaultComposerTokenVisuals(): ComposerTokenVisuals {
-  return createComposerTokenVisuals({
-    accent: DEFAULT_DISPLAY_THEME.colors.accent,
-    cyan: DEFAULT_DISPLAY_THEME.colors.cyan,
-    yellow: DEFAULT_DISPLAY_THEME.colors.yellow,
-  });
 }
 
 export function ensureComposerTokenType(composer: TextareaRenderable): number {

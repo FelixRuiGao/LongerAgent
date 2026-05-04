@@ -144,6 +144,18 @@ export async function launchTui(): Promise<void> {
     useThread,
   });
 
+  // Resolve effective theme mode BEFORE mounting React so the first frame
+  // already uses the correct palette. With a transparent background, rendering
+  // the wrong palette on the wrong terminal would be unreadable, so we must
+  // never paint contents in an unresolved state.
+  const { resolveThemeMode } = await import("./resolve-theme-mode.js");
+  const resolved = await resolveThemeMode(renderer, runtime.themeModePref);
+  writeFermiOpenTuiDiag("main.theme", {
+    pref: resolved.pref,
+    mode: resolved.mode,
+    source: resolved.source,
+  });
+
   const root = createRoot(renderer);
   let exiting = false;
   let fatalCleaningUp = false;
@@ -229,6 +241,8 @@ export async function launchTui(): Promise<void> {
       store: runtime.store,
       verbose: runtime.verbose,
       onExit: exit,
+      themeMode: resolved.mode,
+      themeModePref: resolved.pref,
     }),
   );
 

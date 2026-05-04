@@ -17,16 +17,3 @@ export const theme = {
 export function setAccent(color: string): void {
   theme.accent = color;
 }
-
-/** Preset accent color options for the /theme picker (ordered by hue). */
-export const ACCENT_PRESETS: ReadonlyArray<{ label: string; value: string }> = [
-  { label: "Indigo",      value: "#4b4bf0" },
-  { label: "Lavender",    value: "#7264B5" },
-  { label: "Mauve",       value: "#AF5A85" },
-  { label: "Dusty Rose",  value: "#C0596A" },
-  { label: "Terracotta",  value: "#C26647" },
-  { label: "Gold",        value: "#BE9C37" },
-  { label: "Olive",       value: "#759E4C" },
-  { label: "Ocean",       value: "#4396B2" },
-  { label: "Deep Blue",   value: "#1919E6" },
-];

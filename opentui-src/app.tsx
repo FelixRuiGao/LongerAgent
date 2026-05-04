@@ -56,6 +56,7 @@ import {
 } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import "./forked/patch-opentui-markdown.js";
+import { applyMarkdownTheme } from "./forked/patch-opentui-markdown.js";
 import {
   getFermiAssistantRenderer,
   isFermiMarkdownPatchDisabled,
@@ -102,7 +103,7 @@ import {
   serializeComposerText,
   type ComposerTokenVisuals,
 } from "./composer-tokens.js";
-import { DEFAULT_DISPLAY_THEME, type DisplayTheme } from "./display/theme/index.js";
+import { createDisplayTheme, type DisplayTheme, type ThemeMode } from "./display/theme/index.js";
 import { ContextUsageCard, CodexUsageCard } from "./display/panels/usage-cards.js";
 import { StatusPanel } from "./display/panels/status-panel.js";
 import { usePlan } from "./presentation/use-plan.js";
@@ -128,7 +129,10 @@ export interface OpenTuiAppProps {
   store: SessionStore | null;
   verbose?: boolean;
   onExit: (farewell?: string) => Promise<void> | void;
-  theme?: DisplayTheme;
+  /** Resolved theme mode. Required: there is no canonical default theme. */
+  themeMode: ThemeMode;
+  /** User's theme preference. "auto" means follow live terminal theme_mode events. */
+  themeModePref: "auto" | ThemeMode;
 }
 
 const CTRL_C_EXIT_WINDOW_MS = 2000;
@@ -234,11 +238,26 @@ export function OpenTuiApp({
   store,
   verbose = false,
   onExit,
-  theme: themeProp,
+  themeMode: initialThemeMode,
+  themeModePref: initialThemeModePref,
 }: OpenTuiAppProps): React.ReactNode {
   const renderer = useRenderer();
   const terminal = useTerminalDimensions();
-  const theme = themeProp ?? DEFAULT_DISPLAY_THEME;
+  const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
+  const [themeModePref, setThemeModePref] = useState<"auto" | ThemeMode>(initialThemeModePref);
+  const theme = useMemo<DisplayTheme>(() => createDisplayTheme(themeMode), [themeMode]);
+
+  // Live-follow terminal theme changes only when the user picked "auto".
+  useEffect(() => {
+    if (themeModePref !== "auto") return;
+    const handler = (mode: ThemeMode | null) => {
+      if (mode === "light" || mode === "dark") setThemeMode(mode);
+    };
+    renderer.on("theme_mode", handler);
+    return () => {
+      renderer.off("theme_mode", handler);
+    };
+  }, [renderer, themeModePref]);
   const [processing, _setProcessing] = useState(false);
   const processingRef = useRef(false);
   const setProcessing = useCallback((v: boolean) => {
@@ -449,6 +468,12 @@ export function OpenTuiApp({
     composerTokenVisualsRef.current = createComposerTokenVisuals(colors);
   }
   const composerTokenVisuals = composerTokenVisualsRef.current;
+
+  // Bind markdown render colors (codeBorder/codeFg/HLJS) to the live theme so
+  // mode switches reflect immediately on the next markdown render.
+  useEffect(() => {
+    applyMarkdownTheme(theme);
+  }, [theme]);
 
   // -- Usage poller lifecycle (Codex + Copilot) --
   // Start/stop based on current provider. The poller survives model switches
@@ -1354,6 +1379,19 @@ export function OpenTuiApp({
           const mode = message.slice(17) as "open" | "close" | "auto";
           setSidebarMode(mode);
           showHint(`Sidebar: ${mode}`);
+          return;
+        }
+        if (message.startsWith("__theme_mode__:")) {
+          const value = message.slice("__theme_mode__:".length) as "auto" | ThemeMode;
+          setThemeModePref(value);
+          if (value === "light" || value === "dark") {
+            setThemeMode(value);
+          } else if (value === "auto") {
+            // Snap to whatever the renderer already knows; the live-follow
+            // effect below will pick up future changes.
+            const oscMode = renderer.themeMode;
+            if (oscMode === "light" || oscMode === "dark") setThemeMode(oscMode);
+          }
           return;
         }
         if (message === "__sidebar_toggle__") {

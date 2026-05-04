@@ -49,6 +49,8 @@ export interface OpenTuiRuntime {
   store: SessionStore;
   commandRegistry: CommandRegistry;
   verbose: boolean;
+  /** Persisted user preference for theme mode. main.tsx feeds this into the resolver. */
+  themeModePref: "auto" | "light" | "dark";
 }
 
 export async function bootstrapOpenTuiRuntime(opts?: {
@@ -212,10 +214,13 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   const commandRegistry = buildDefaultRegistry();
   registerSkillCommands(commandRegistry, session.skills);
 
+  const themeModePref: "auto" | "light" | "dark" = settings.theme_mode ?? "auto";
+
   return {
     session,
     store,
     commandRegistry,
     verbose,
+    themeModePref,
   };
 }

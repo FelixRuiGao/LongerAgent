@@ -13,11 +13,7 @@ import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
 import { InlineResult } from "./inline-result.js";
 import { FileModifyBody } from "./file-modify-body.js";
-import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
-
-// Unified tool name color — all categories share the same cyan
-const TOOL_NAME_COLOR = DEFAULT_DISPLAY_THEME.presentation.toolNameColor;
-const TOOL_NAME_RGBA = RGBA.fromHex(TOOL_NAME_COLOR);
+import type { DisplayTheme } from "../../display/theme/index.js";
 
 const BAR_COLOR = "#66635c";
 
@@ -119,19 +115,22 @@ function useElapsedSince(startMs: number | undefined, active: boolean): number {
 interface ToolOperationEntryProps {
   entry: PresentationEntry;
   colors: ConversationPalette;
+  theme: DisplayTheme;
   contentWidth: number;
   onEntryClick?: (entry: PresentationEntry) => void;
   onAgentClick?: (agentId: string) => void;
 }
 
 function ToolOperationEntryInner(
-  { entry, colors, contentWidth, onEntryClick, onAgentClick }: ToolOperationEntryProps,
+  { entry, colors, theme, contentWidth, onEntryClick, onAgentClick }: ToolOperationEntryProps,
 ): React.ReactNode {
   const active = entry.state === "active";
 
+  const toolNameColor = theme.presentation.toolNameColor;
+  const toolNameRgba = React.useMemo(() => RGBA.fromHex(toolNameColor), [toolNameColor]);
   const displayName = entry.toolDisplayName ?? "Tool";
   const barColor = BAR_COLOR;
-  const shimmer = useShimmer(displayName, TOOL_NAME_RGBA, active, ATTRS_BOLD);
+  const shimmer = useShimmer(displayName, toolNameRgba, active, ATTRS_BOLD);
   const interrupted = entry.toolInterrupted === true;
 
   const indicator = active
@@ -141,12 +140,12 @@ function ToolOperationEntryInner(
       : "⏺";
 
   const indicatorColor = active
-    ? TOOL_NAME_COLOR
+    ? toolNameColor
     : interrupted
-      ? DEFAULT_DISPLAY_THEME.colors.waitingStatus
+      ? theme.colors.waitingStatus
       : entry.state === "error"
-      ? DEFAULT_DISPLAY_THEME.presentation.errorColor
-      : DEFAULT_DISPLAY_THEME.presentation.successColor;
+      ? theme.presentation.errorColor
+      : theme.presentation.successColor;
 
   const isAwaitEvent = displayName === "Wait";
   const awaitElapsed = useElapsedSince(entry.toolStartedAt, active && isAwaitEvent);
@@ -189,7 +188,7 @@ function ToolOperationEntryInner(
         {active ? (
           <text content={shimmer} flexShrink={0} />
         ) : (
-          <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={displayName} flexShrink={0} />
+          <text fg={toolNameColor} attributes={ATTRS_BOLD} content={displayName} flexShrink={0} />
         )}
         {suffix ? (
           <text fg={ARG_COLOR} content={` ${suffix}`} flexShrink={0} />
@@ -272,5 +271,6 @@ export const ToolOperationEntry = React.memo(
   (prev, next) =>
     prev.entry === next.entry
     && prev.colors === next.colors
+    && prev.theme === next.theme
     && prev.contentWidth === next.contentWidth,
 );

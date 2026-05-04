@@ -609,6 +609,8 @@ export interface FermiSettings {
 
   // -- Display --
   accent_color?: string;
+  /** Theme mode: "auto" (follow terminal) | "light" | "dark". Default: "auto". */
+  theme_mode?: "auto" | "light" | "dark";
 
   // -- Permissions --
   /** Default permission mode: "read_only" | "reversible" | "yolo". */
@@ -1348,6 +1350,7 @@ export function mergeSettings(global: FermiSettings, local: FermiSettings): Ferm
   if (local.thinking_level !== undefined) merged.thinking_level = local.thinking_level;
   if (local.context_budget_percent !== undefined) merged.context_budget_percent = local.context_budget_percent;
   if (local.accent_color !== undefined) merged.accent_color = local.accent_color;
+  if (local.theme_mode !== undefined) merged.theme_mode = local.theme_mode;
   if (local.permission_mode !== undefined) merged.permission_mode = local.permission_mode;
   if (local.sub_agent_inherit_mcp !== undefined) merged.sub_agent_inherit_mcp = local.sub_agent_inherit_mcp;
   if (local.sub_agent_inherit_hooks !== undefined) merged.sub_agent_inherit_hooks = local.sub_agent_inherit_hooks;
@@ -1449,6 +1452,7 @@ export function saveSettings(settings: FermiSettings, filePath: string): void {
   if (settings.context_budget_percent !== undefined) clean.context_budget_percent = settings.context_budget_percent;
   if (settings.providers !== undefined) clean.providers = settings.providers;
   if (settings.accent_color !== undefined) clean.accent_color = settings.accent_color;
+  if (settings.theme_mode !== undefined) clean.theme_mode = settings.theme_mode;
   if (settings.disabled_skills !== undefined) clean.disabled_skills = settings.disabled_skills;
   if (settings.mcp_servers !== undefined) clean.mcp_servers = settings.mcp_servers;
   if (settings.agent_models !== undefined) clean.agent_models = settings.agent_models;

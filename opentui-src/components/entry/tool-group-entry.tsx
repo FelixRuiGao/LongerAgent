@@ -11,18 +11,17 @@ const ATTRS_BOLD = createTextAttributes({ bold: true });
 import type { PresentationEntry } from "../../presentation/types.js";
 import { useShimmer } from "../../presentation/use-shimmer.js";
 import type { ConversationPalette } from "../conversation-types.js";
-import { DEFAULT_DISPLAY_THEME } from "../../display/theme/index.js";
+import type { DisplayTheme } from "../../display/theme/index.js";
 import { getActivityIndicatorColor } from "../../display/entries/entry-variants.js";
 import { SelectableRow } from "../../display/primitives/selectable-row.js";
 
-const TOOL_NAME_COLOR = DEFAULT_DISPLAY_THEME.presentation.toolNameColor;
-const TOOL_NAME_RGBA = RGBA.fromHex(TOOL_NAME_COLOR);
 const EXPLORE_LABEL = "Explore";
 const PATH_TOOLS = new Set(["Read", "List", "Edit", "Write"]);
 
 interface ToolGroupEntryProps {
   entry: PresentationEntry;
   colors: ConversationPalette;
+  theme: DisplayTheme;
   contentWidth: number;
 }
 
@@ -59,18 +58,20 @@ function ClickablePath({ text, baseColor, hoverBg }: { text: string; baseColor: 
 }
 
 function ToolGroupEntryInner(
-  { entry, colors, contentWidth }: ToolGroupEntryProps,
+  { entry, colors, theme, contentWidth }: ToolGroupEntryProps,
 ): React.ReactNode {
   const [expanded, setExpanded] = useState(false);
   const active = entry.groupActive ?? false;
   const items = entry.groupEntries ?? [];
   const summary = entry.groupSummary ?? "Explore";
 
-  const shimmer = useShimmer(EXPLORE_LABEL, TOOL_NAME_RGBA, active, ATTRS_BOLD);
+  const toolNameColor = theme.presentation.toolNameColor;
+  const toolNameRgba = React.useMemo(() => RGBA.fromHex(toolNameColor), [toolNameColor]);
+  const shimmer = useShimmer(EXPLORE_LABEL, toolNameRgba, active, ATTRS_BOLD);
 
   const indicatorColor = getActivityIndicatorColor(
     { active, error: entry.state === "error", interrupted: entry.toolInterrupted === true },
-    DEFAULT_DISPLAY_THEME,
+    theme,
     "tool",
   );
 
@@ -89,7 +90,7 @@ function ToolGroupEntryInner(
           <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
           <text content={shimmer} flexShrink={0} />
           <text content="  " flexShrink={0} />
-          <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={entry.groupLatestToolName ?? ""} flexShrink={0} />
+          <text fg={toolNameColor} attributes={ATTRS_BOLD} content={entry.groupLatestToolName ?? ""} flexShrink={0} />
           <text content="  " flexShrink={0} />
           <text fg={colors.dim} content={entry.groupLatestToolText ?? ""} truncate flexGrow={1} flexShrink={1} />
         </box>
@@ -98,7 +99,7 @@ function ToolGroupEntryInner(
           <SelectableRow hoverBackgroundColor={colors.border} onPress={toggleExpand}>
             <box flexDirection="row" width="100%">
               <text fg={indicatorColor} content={`${indicator} `} flexShrink={0} />
-              <text fg={TOOL_NAME_COLOR} attributes={ATTRS_BOLD} content={summary} flexShrink={0} />
+              <text fg={toolNameColor} attributes={ATTRS_BOLD} content={summary} flexShrink={0} />
               <text content=" " flexShrink={0} />
               <text fg={colors.dim} content={expanded ? "▾" : "▸"} flexShrink={0} />
             </box>
@@ -115,7 +116,7 @@ function ToolGroupEntryInner(
             const itemIndicator = item.state === "error" ? "⏺" : "⏺";
             const itemColor = getActivityIndicatorColor(
               { active: false, error: item.state === "error", interrupted: item.toolInterrupted === true },
-              DEFAULT_DISPLAY_THEME,
+              theme,
               "tool",
             );
             const isPathTool = PATH_TOOLS.has(name);
@@ -143,5 +144,6 @@ export const ToolGroupEntry = React.memo(
   (prev, next) =>
     prev.entry === next.entry
     && prev.colors === next.colors
+    && prev.theme === next.theme
     && prev.contentWidth === next.contentWidth,
 );

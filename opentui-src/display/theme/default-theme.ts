@@ -5,167 +5,10 @@ import type {
   DisplayTheme,
   DisplayThemeColorTokens,
   DisplayThemeTokens,
+  ThemeMode,
 } from "./types.js";
-
-const DEFAULT_DISPLAY_TOKENS: DisplayThemeTokens = {
-  colors: {
-    background: "transparent",
-    panel: "transparent",
-    userBg: "#322e3e",
-    border: "#2a2630",
-    separator: "#2a2630",
-    scrollbarTrack: "#2a263044",
-    text: "#d0d6e0",
-    dim: "#636a76",
-    muted: "#454a54",
-    accent: "#8ab4f8",
-    orange: "#fb8500",
-    red: "#f85656",
-    magenta: "#e81860",
-    purple: "#a010a0",
-    yellow: "#e8c468",
-    green: "#8cc252",
-    cyan: "#86ded4",
-    thinking: "#5c626e",
-    toolTime: "#8a8078",
-    readyStatus: "#fb8500",
-    thinkingStatus: "#6e4890",
-    workingStatus: "#8ab4f8",
-    generatingStatus: "#ffb703",
-    waitingStatus: "#e8c468",
-    closingStatus: "#4d4843",
-    errorStatus: "#f05030",
-  },
-  spacing: {
-    screenPaddingX: 0,
-    screenPaddingY: 0,
-    screenGap: 1,
-    sectionGap: 1,
-    contentInset: 2,
-    surfacePaddingX: 1,
-    surfacePaddingY: 0,
-    inlineResultIndent: 4,
-  },
-  layout: {
-    inputMaxVisibleLines: 10,
-    pickerVisibleRatio: 0.4,
-    pickerMinVisible: 5,
-    sidebarMinWidth: 30,
-    sidebarMaxWidth: 50,
-    sidebarCollapsedWidth: 4,
-    minTerminalWidthForSidebar: 120,
-    minTerminalWidthForLogoHeader: 72,
-    minTerminalHeightForLogoHeader: 28,
-  },
-  branding: {
-    appVersion: "v0.1.3",
-    logoLines: [
-      "░██████████░██████████ ░█████████  ░███     ░███ ░██████",
-      "░██        ░██         ░██     ░██ ░████   ░████   ░██  ",
-      "░██        ░██         ░██     ░██ ░██░██ ░██░██   ░██  ",
-      "░█████████ ░█████████  ░█████████  ░██ ░████ ░██   ░██  ",
-      "░██        ░██         ░██   ░██   ░██  ░██  ░██   ░██  ",
-      "░██        ░██         ░██    ░██  ░██       ░██   ░██  ",
-      "░██        ░██████████ ░██     ░██ ░██       ░██ ░██████",
-    ],
-    logoGradient: ["#8ab4f8", "#7b9bf0", "#7a80e6", "#8a65dd", "#a050d0", "#b838b8", "#9020a0"],
-    sidebarWordmark: "FERMI",
-    sidebarGradientIndices: [0, 1, 3, 5, 6],
-  },
-  markdown: {
-    codeBorder: "#2a2630",
-    codeBorderHover: "#504860",
-    codeLabelForeground: "#636a76",
-    codeCopyForeground: "#454a54",
-    codeCopyFlash: "#8ab4f8",
-    codeForeground: "#a0a8b4",
-    syntax: {
-      keyword: "#e0a050",
-      string: "#8aad6a",
-      function: "#d0a0d0",
-      type: "#e8c468",
-      number: "#d08770",
-      comment: "#5a5565",
-      operator: "#9098a8",
-      literal: "#6aa8a0",
-      variable: "#b0b8c4",
-      headingPrimary: "#f09418",
-      headingSecondary: "#eca903",
-      raw: "#b4a0ec",
-    },
-    hljs: {
-      "hljs-keyword": "#e0a050",
-      "hljs-built_in": "#6aa8a0",
-      "hljs-type": "#e8c468",
-      "hljs-literal": "#6aa8a0",
-      "hljs-number": "#d08770",
-      "hljs-string": "#8aad6a",
-      "hljs-subst": "#b0b8c4",
-      "hljs-symbol": "#d08770",
-      "hljs-class": "#e8c468",
-      "hljs-function": "#d0a0d0",
-      "hljs-title": "#d0a0d0",
-      "hljs-title.function_": "#d0a0d0",
-      "hljs-title.class_": "#e8c468",
-      "hljs-params": "#b0b8c4",
-      "hljs-comment": "#5a5565",
-      "hljs-doctag": "#636a76",
-      "hljs-meta": "#636a76",
-      "hljs-meta-keyword": "#e0a050",
-      "hljs-meta-string": "#8aad6a",
-      "hljs-section": "#ffb703",
-      "hljs-tag": "#e0a050",
-      "hljs-name": "#e81860",
-      "hljs-attr": "#e8c468",
-      "hljs-attribute": "#e8c468",
-      "hljs-variable": "#b0b8c4",
-      "hljs-bullet": "#d08770",
-      "hljs-code": "#a0a8b4",
-      "hljs-formula": "#d08770",
-      "hljs-link": "#6aa8a0",
-      "hljs-quote": "#5a5565",
-      "hljs-selector-tag": "#e81860",
-      "hljs-selector-id": "#e8c468",
-      "hljs-selector-class": "#d0a0d0",
-      "hljs-selector-attr": "#e8c468",
-      "hljs-selector-pseudo": "#d0a0d0",
-      "hljs-template-tag": "#e0a050",
-      "hljs-template-variable": "#e81860",
-      "hljs-addition": "#8aad6a",
-      "hljs-deletion": "#f05030",
-      "hljs-regexp": "#d08770",
-    },
-  },
-  presentation: {
-    categoryColors: {
-      observe: "#86ded4",
-      modify: "#e8c468",
-      orchestrate: "#b4a0ec",
-    },
-    thinkingColor: "#5a7eb0",
-    successColor: "#2e9e53",
-    errorColor: "#f85656",
-    toolNameColor: "#8ab4f8",
-    modelProviderColors: {
-      openai: "#10a37f",
-      "openai-codex": "#10a37f",
-      kimi: "#38bdf8",
-      "kimi-cn": "#38bdf8",
-      "kimi-code": "#38bdf8",
-      minimax: "#f472b6",
-      "minimax-cn": "#f472b6",
-      glm: "#818cf8",
-      "glm-intl": "#818cf8",
-      "glm-code": "#818cf8",
-      "glm-intl-code": "#818cf8",
-      openrouter: "#c084fc",
-      lmstudio: "#9ca3af",
-      omlx: "#9ca3af",
-      ollama: "#9ca3af",
-      anthropic: "#e6c3a5",
-    },
-  },
-};
+import { DARK_TOKENS } from "./tokens-dark.js";
+import { LIGHT_TOKENS } from "./tokens-light.js";
 
 function mergeNested<T extends object>(base: T, overrides?: DeepPartial<T>): T {
   if (!overrides) return { ...base };
@@ -271,9 +114,18 @@ function buildMarkdownStyle(colors: DisplayThemeColorTokens, tokens: DisplayThem
   });
 }
 
-export function createDisplayTheme(overrides?: DeepPartial<DisplayThemeTokens>): DisplayTheme {
-  const tokens = mergeNested(DEFAULT_DISPLAY_TOKENS, overrides);
+/**
+ * Build a fully-resolved DisplayTheme for a given mode. `overrides` is a
+ * deep-partial token patch applied on top of the chosen mode's palette.
+ *
+ * `mode` is required: there is no canonical default theme. Callers must
+ * resolve the mode first (FERMI_THEME env, settings, terminal OSC, picker).
+ */
+export function createDisplayTheme(mode: ThemeMode, overrides?: DeepPartial<DisplayThemeTokens>): DisplayTheme {
+  const base = mode === "light" ? LIGHT_TOKENS : DARK_TOKENS;
+  const tokens = mergeNested(base, overrides);
   return {
+    mode,
     tokens,
     colors: tokens.colors,
     spacing: tokens.spacing,
@@ -284,5 +136,3 @@ export function createDisplayTheme(overrides?: DeepPartial<DisplayThemeTokens>):
     markdownStyle: buildMarkdownStyle(tokens.colors, tokens.markdown),
   };
 }
-
-export const DEFAULT_DISPLAY_THEME = createDisplayTheme();

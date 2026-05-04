@@ -1,5 +1,6 @@
 import type { SyntaxStyle } from "@opentui/core";
-import type { ToolCategory } from "../../presentation/types.js";
+
+export type ThemeMode = "dark" | "light";
 
 export type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends readonly (infer U)[]
@@ -10,11 +11,8 @@ export type DeepPartial<T> = {
 };
 
 export interface DisplayThemeColorTokens {
-  background: string;
-  panel: string;
   userBg: string;
   border: string;
-  separator: string;
   scrollbarTrack: string;
   text: string;
   dim: string;
@@ -22,19 +20,11 @@ export interface DisplayThemeColorTokens {
   accent: string;
   orange: string;
   red: string;
-  magenta: string;
-  purple: string;
   yellow: string;
   green: string;
   cyan: string;
-  thinking: string;
-  toolTime: string;
-  readyStatus: string;
-  thinkingStatus: string;
   workingStatus: string;
-  generatingStatus: string;
   waitingStatus: string;
-  closingStatus: string;
   errorStatus: string;
 }
 
@@ -62,7 +52,6 @@ export interface DisplayThemeLayoutTokens {
 }
 
 export interface DisplayThemeBrandingTokens {
-  appVersion: string;
   logoLines: readonly string[];
   logoGradient: readonly string[];
   sidebarWordmark: string;
@@ -94,7 +83,6 @@ export interface DisplayThemeMarkdownTokens {
 }
 
 export interface DisplayThemePresentationTokens {
-  categoryColors: Record<ToolCategory, string>;
   thinkingColor: string;
   successColor: string;
   errorColor: string;
@@ -112,6 +100,8 @@ export interface DisplayThemeTokens {
 }
 
 export interface DisplayTheme {
+  /** Resolved theme mode: "dark" or "light". Useful for branching by mode. */
+  mode: ThemeMode;
   tokens: DisplayThemeTokens;
   colors: DisplayThemeColorTokens;
   spacing: DisplayThemeSpacingTokens;

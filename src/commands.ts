@@ -1215,6 +1215,48 @@ async function cmdAddProvider(ctx: CommandContext): Promise<boolean> {
 // /autoupdate — toggle automatic update checks
 // ------------------------------------------------------------------
 
+// ------------------------------------------------------------------
+// /theme — pick light / dark / auto
+// ------------------------------------------------------------------
+
+function themeModeOptions(_ctx: CommandOptionsContext): CommandOption[] {
+  const current = loadGlobalSettings().theme_mode ?? "auto";
+  const mark = (v: string) => (v === current ? " (current)" : "");
+  return [
+    { label: `Auto (follow terminal)${mark("auto")}`, value: "auto" },
+    { label: `Light${mark("light")}`, value: "light" },
+    { label: `Dark${mark("dark")}`, value: "dark" },
+  ];
+}
+
+async function cmdTheme(ctx: CommandContext, args: string): Promise<void> {
+  const hint = ctx.showHint ?? ctx.showMessage;
+  let choice = args.trim().toLowerCase();
+
+  if (!choice && ctx.promptCommandPicker) {
+    const picked = await ctx.promptCommandPicker(
+      themeModeOptions({ session: ctx.session, store: ctx.store }),
+    );
+    if (!picked) return;
+    choice = picked;
+  }
+
+  if (choice === "auto" || choice === "light" || choice === "dark") {
+    persistSettingsPatch({ theme_mode: choice }, ctx.fermiHomeDir);
+    // Magic message — TUI intercepts and updates React state without restart.
+    ctx.showMessage(`__theme_mode__:${choice}`);
+    hint(`Theme: ${choice}`);
+    return;
+  }
+
+  const current = loadGlobalSettings().theme_mode ?? "auto";
+  ctx.showMessage(`Theme mode is "${current}".\nUsage: /theme auto | light | dark`);
+}
+
+// ------------------------------------------------------------------
+// /autoupdate — toggle automatic update checks
+// ------------------------------------------------------------------
+
 function autoUpdateOptions(_ctx: CommandOptionsContext): CommandOption[] {
   const current = loadGlobalSettings().auto_update !== false;
   return [
@@ -1624,6 +1666,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/hooks", description: "Show registered hooks", handler: cmdHooks });
   registry.register({ name: "/copy", description: "Copy the agent's most recent text response", handler: cmdCopy });
   registry.register({ name: "/fork", description: "Fork the current session into a new branch", handler: cmdFork });
+  registry.register({ name: "/theme", description: "Set theme mode (auto / light / dark)", handler: cmdTheme, options: themeModeOptions });
   registry.register({ name: "/autoupdate", description: "Toggle automatic update checks", handler: cmdAutoUpdate, options: autoUpdateOptions });
   return registry;
 }

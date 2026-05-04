@@ -14,13 +14,23 @@
  */
 
 import { RGBA, type TextChunk } from "@opentui/core";
+import type { ThemeMode } from "../display/theme/types.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-/** Shiki theme to use. */
-export const SHIKI_THEME = "catppuccin-mocha";
+/** Shiki theme names by mode. Catppuccin family — same author/family across modes. */
+export const SHIKI_THEME_DARK = "catppuccin-mocha";
+export const SHIKI_THEME_LIGHT = "catppuccin-latte";
+
+/** Currently active shiki theme. Mutated by setShikiTheme(). Defaults to dark. */
+let currentShikiTheme: string = SHIKI_THEME_DARK;
+
+/** Switch the shiki theme to use for subsequent highlight calls. */
+export function setShikiTheme(mode: ThemeMode): void {
+  currentShikiTheme = mode === "light" ? SHIKI_THEME_LIGHT : SHIKI_THEME_DARK;
+}
 
 /**
  * Languages to pre-load at init.  Covers the most common file types a coding
@@ -92,7 +102,7 @@ export async function initShikiHighlighter(): Promise<void> {
     try {
       const shiki = await import("shiki");
       const h = await shiki.createHighlighter({
-        themes: [SHIKI_THEME],
+        themes: [SHIKI_THEME_DARK, SHIKI_THEME_LIGHT],
         langs: PRELOAD_LANGS,
       });
       highlighter = h as unknown as ShikiHighlighter;
@@ -152,7 +162,7 @@ export function shikiHighlightToChunks(
   try {
     const result = highlighter.codeToTokens(code, {
       lang: resolved,
-      theme: SHIKI_THEME,
+      theme: currentShikiTheme,
     });
 
     // result.tokens is line-based — each outer entry is a line of tokens

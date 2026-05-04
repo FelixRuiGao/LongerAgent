@@ -14,8 +14,8 @@ import {
   isFermiMarkdownPatchDisabled,
   writeFermiOpenTuiDiag,
 } from "./core/lib/diagnostic.js";
-import { DEFAULT_DISPLAY_THEME } from "../display/theme/index.js";
-import { isShikiReady, shikiHighlightToChunks } from "./shiki-highlighter.js";
+import type { DisplayTheme } from "../display/theme/types.js";
+import { isShikiReady, setShikiTheme, shikiHighlightToChunks } from "./shiki-highlighter.js";
 
 /**
  * When `true`, `highlightToChunks` uses Shiki (TextMate grammars, VS Code
@@ -37,16 +37,43 @@ const LABEL_REF = Symbol.for("fermi.codeblock.label");
 const COPY_REF = Symbol.for("fermi.codeblock.copy");
 const CODE_CONTENT = Symbol.for("fermi.codeblock.rawcontent");
 
-const CODE_BORDER = DEFAULT_DISPLAY_THEME.markdown.codeBorder;
-const CODE_BORDER_HOVER = DEFAULT_DISPLAY_THEME.markdown.codeBorderHover;
-const CODE_LABEL_FG = DEFAULT_DISPLAY_THEME.markdown.codeLabelForeground;
-const CODE_COPY_FG = DEFAULT_DISPLAY_THEME.markdown.codeCopyForeground;
-const CODE_COPY_FLASH = DEFAULT_DISPLAY_THEME.markdown.codeCopyFlash;
-const CODE_FG = RGBA.fromHex(DEFAULT_DISPLAY_THEME.markdown.codeForeground);
+// Runtime-mutable theme bound by `applyMarkdownTheme`. The patched render
+// closures read these on every call, so swapping the theme reflects on the
+// next render. Defaults to inert values until applyMarkdownTheme is called.
+const FALLBACK_FG = RGBA.fromHex("#a0a8b4");
+const currentMarkdownTheme: {
+  codeBorder: string;
+  codeBorderHover: string;
+  codeLabelFg: string;
+  codeCopyFg: string;
+  codeCopyFlash: string;
+  codeFg: RGBA;
+  hljs: Record<string, RGBA>;
+} = {
+  codeBorder: "#2a2630",
+  codeBorderHover: "#504860",
+  codeLabelFg: "#636a76",
+  codeCopyFg: "#454a54",
+  codeCopyFlash: "#8ab4f8",
+  codeFg: FALLBACK_FG,
+  hljs: {},
+};
 
-const HLJS: Record<string, RGBA> = Object.fromEntries(
-  Object.entries(DEFAULT_DISPLAY_THEME.markdown.hljs).map(([key, value]) => [key, RGBA.fromHex(value)]),
-) as Record<string, RGBA>;
+/** Re-bind markdown render colors. Call on theme switch. */
+export function applyMarkdownTheme(theme: DisplayTheme): void {
+  currentMarkdownTheme.codeBorder = theme.markdown.codeBorder;
+  currentMarkdownTheme.codeBorderHover = theme.markdown.codeBorderHover;
+  currentMarkdownTheme.codeLabelFg = theme.markdown.codeLabelForeground;
+  currentMarkdownTheme.codeCopyFg = theme.markdown.codeCopyForeground;
+  currentMarkdownTheme.codeCopyFlash = theme.markdown.codeCopyFlash;
+  currentMarkdownTheme.codeFg = RGBA.fromHex(theme.markdown.codeForeground);
+  currentMarkdownTheme.hljs = Object.fromEntries(
+    Object.entries(theme.markdown.hljs).map(([key, value]) => [key, RGBA.fromHex(value)]),
+  ) as Record<string, RGBA>;
+  // Keep the shiki highlighter (TextMate path used for fenced code blocks) in
+  // sync with the same mode, so dark/light terminals get readable code.
+  setShikiTheme(theme.mode);
+}
 
 // ── highlight.js integration ────────────────────────────────────────────────
 
@@ -87,7 +114,9 @@ function unescapeHtml(s: string): string {
  */
 function hljsHtmlToChunks(html: string): TextChunk[] {
   const chunks: TextChunk[] = [];
-  const colorStack: (RGBA | undefined)[] = [CODE_FG];
+  const codeFg = currentMarkdownTheme.codeFg;
+  const hljs = currentMarkdownTheme.hljs;
+  const colorStack: (RGBA | undefined)[] = [codeFg];
 
   let pos = 0;
   while (pos < html.length) {
@@ -117,11 +146,11 @@ function hljsHtmlToChunks(html: string): TextChunk[] {
       if (tagEnd === -1) break;
       const tag = html.slice(nextTag, tagEnd + 1);
       const classMatch = tag.match(/class="([^"]+)"/);
-      let color: RGBA | undefined = CODE_FG;
+      let color: RGBA | undefined = codeFg;
       if (classMatch) {
         const classes = classMatch[1].split(/\s+/);
         for (const cls of classes) {
-          if (HLJS[cls]) { color = HLJS[cls]; break; }
+          if (hljs[cls]) { color = hljs[cls]; break; }
         }
       }
       colorStack.push(color);
@@ -261,7 +290,7 @@ if (isFermiMarkdownPatchDisabled()) {
     const chunks = highlightToChunks(code, lang);
     if (chunks && chunks.length > 0) return new StyledText(chunks);
     // Fallback: single chunk with code fg
-    return new StyledText([{ __isChunk: true, text: code, fg: CODE_FG }]);
+    return new StyledText([{ __isChunk: true, text: code, fg: currentMarkdownTheme.codeFg }]);
   }
 
   function buildCodeBlockWrapper(
@@ -275,7 +304,7 @@ if (isFermiMarkdownPatchDisabled()) {
       flexDirection: "column",
       width: "100%",
       border: true,
-      borderColor: CODE_BORDER,
+      borderColor: currentMarkdownTheme.codeBorder,
       borderStyle: "rounded",
       marginBottom,
     }) as WrappedBox;
@@ -289,14 +318,14 @@ if (isFermiMarkdownPatchDisabled()) {
 
     const labelText = new TextRenderable(ctx, {
       content: lang.toUpperCase(),
-      fg: CODE_LABEL_FG,
+      fg: currentMarkdownTheme.codeLabelFg,
     });
 
     const spacer = new BoxRenderable(ctx, { flexGrow: 1 });
 
     const copyText = new TextRenderable(ctx, {
       content: "copy",
-      fg: CODE_COPY_FG,
+      fg: currentMarkdownTheme.codeCopyFg,
     });
 
     header.add(labelText);
@@ -319,12 +348,12 @@ if (isFermiMarkdownPatchDisabled()) {
     wrapper[CODE_CONTENT] = rawContent;
 
     wrapper.onMouseOver = () => {
-      wrapper.borderColor = CODE_BORDER_HOVER;
-      copyText.fg = CODE_LABEL_FG;
+      wrapper.borderColor = currentMarkdownTheme.codeBorderHover;
+      copyText.fg = currentMarkdownTheme.codeLabelFg;
     };
     wrapper.onMouseOut = () => {
-      wrapper.borderColor = CODE_BORDER;
-      copyText.fg = CODE_COPY_FG;
+      wrapper.borderColor = currentMarkdownTheme.codeBorder;
+      copyText.fg = currentMarkdownTheme.codeCopyFg;
     };
 
     wrapper.onMouseDown = () => {
@@ -333,10 +362,10 @@ if (isFermiMarkdownPatchDisabled()) {
       try {
         execSync("pbcopy", { input: raw, timeout: 2000 });
         copyText.content = "copied!";
-        copyText.fg = CODE_COPY_FLASH;
+        copyText.fg = currentMarkdownTheme.codeCopyFlash;
         setTimeout(() => {
           copyText.content = "copy";
-          copyText.fg = CODE_COPY_FG;
+          copyText.fg = currentMarkdownTheme.codeCopyFg;
         }, 1500);
       } catch {
         // ignore
@@ -355,7 +384,7 @@ if (isFermiMarkdownPatchDisabled()) {
     const codeText = new TextRenderable(this.ctx, {
       id,
       content: styled,
-      fg: CODE_FG,
+      fg: currentMarkdownTheme.codeFg,
       width: "100%",
     });
 
