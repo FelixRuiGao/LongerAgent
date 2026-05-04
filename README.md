@@ -22,11 +22,16 @@ Fermi is a terminal AI coding agent designed for multi-hour sessions. The agent 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FelixRuiGao/Fermi/main/scripts/install.sh | sh
-fermi init      # setup wizard — pick providers, models, API keys
-fermi           # start a session
 ```
 
-Single binary, no runtime required. Updates: `fermi update` (manual) or `/autoupdate` to toggle background checks.
+Single binary, no runtime required. The installer puts `fermi` in `~/.fermi/bin/` and adds it to your PATH. Open a new terminal (or `source ~/.zshrc`), then:
+
+```bash
+fermi init   # setup wizard — pick providers, models, API keys
+fermi        # start a session
+```
+
+Updates: `fermi update` (manual) or `/autoupdate` to toggle background checks.
 
 ## Context Management
 

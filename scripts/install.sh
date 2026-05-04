@@ -58,12 +58,26 @@ if [ -n "${SHELL:-}" ]; then
 fi
 [ -n "$profile" ] || profile="$HOME/.profile"
 
+needs_source=0
 if [ "$INSTALL_DIR" = "$HOME/.fermi/bin" ] && ! printf '%s' ":$PATH:" | grep -q ":$HOME/.fermi/bin:"; then
   touch "$profile"
   if ! grep -Fq "$path_line" "$profile"; then
     printf '\n%s\n' "$path_line" >> "$profile"
-    echo "Added ~/.fermi/bin to PATH in $profile"
   fi
+  needs_source=1
 fi
 
-echo "Installed fermi to $INSTALL_DIR/fermi"
+if version=$("$INSTALL_DIR/fermi" --version 2>/dev/null); then
+  installed_label="Installed Fermi $version"
+else
+  installed_label="Installed Fermi"
+fi
+
+echo
+echo "✓ $installed_label"
+echo
+echo "To get started:"
+if [ "$needs_source" = "1" ]; then
+  echo "  source $profile"
+fi
+echo "  fermi init"

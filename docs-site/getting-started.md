@@ -14,6 +14,8 @@ curl -fsSL https://raw.githubusercontent.com/FelixRuiGao/Fermi/main/scripts/inst
 
 Single self-contained binary — no Bun, Node, or other runtime required. The installer extracts to `~/.fermi/bin/` and adds it to your PATH.
 
+> **Open a new terminal** (or run `source ~/.zshrc`) before continuing — the PATH change does not apply to the shell that ran the installer.
+
 ## Setup
 
 The init wizard walks you through provider selection, API key configuration, and model selection:
