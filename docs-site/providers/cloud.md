@@ -16,7 +16,7 @@ The key is stored as `ANTHROPIC_API_KEY` in `~/.fermi/.env`.
 
 The 1M context variants of Sonnet 4.6 and Opus 4.6 appear as separate model options. These use Anthropic's extended context beta and allow up to 1,000,000 tokens of context.
 
-**Thinking levels:** off, low, medium, high, max.
+**Thinking levels:** Opus 4.7: off, low, medium, high, xhigh, max. Opus 4.6: off, low, medium, high, max. Sonnet/Haiku: off, low, medium, high.
 
 ## OpenAI
 
