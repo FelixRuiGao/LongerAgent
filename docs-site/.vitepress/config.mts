@@ -5,8 +5,12 @@ export default defineConfig({
   description: "A terminal AI coding agent with surgical context management for multi-hour sessions",
   base: "/Fermi/",
   cleanUrls: true,
+  lastUpdated: true,
 
   themeConfig: {
+    editLink: {
+      pattern: "https://github.com/FelixRuiGao/Fermi/edit/main/docs-site/:path",
+    },
     nav: [
       { text: "Guide", link: "/getting-started" },
       { text: "Providers", link: "/providers/" },
