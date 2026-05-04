@@ -79,6 +79,7 @@ See [Context Management](/guide/context) for details.
 ```text
 fermi                       # Start with auto-detected config
 fermi init                  # Run setup wizard
+fermi --resume <id>         # Resume a specific session by ID
 fermi oauth                 # Log in to OpenAI via OAuth
 fermi oauth status          # Check OAuth login status
 fermi oauth logout          # Log out
