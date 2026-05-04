@@ -98,8 +98,6 @@ Cloud or local, your choice. Switch at runtime with `/model`. `fermi init` handl
 - **No sandbox** — shell commands and file edits execute directly (use `/permission` to control)
 - **Third-party coding plans** (Kimi-Code, GLM-Code) use provider-side whitelists and may reject requests
 
-## Documentation
-
 Full documentation: **[felixruigao.github.io/Fermi](https://felixruigao.github.io/Fermi/)**
 
 ## Interfaces
