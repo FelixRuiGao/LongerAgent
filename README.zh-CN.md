@@ -58,7 +58,7 @@ fermi           # 开始会话
 
 ## 子 Agent
 
-创建拥有独立上下文窗口的并行工作者：
+Agent 自主创建拥有独立上下文窗口的并行工作者：
 
 ```
 spawn(id="auth-check", template="explorer", mode="oneshot", model_level="low", task="...")

@@ -59,7 +59,7 @@ Context usage ━━━━━━━━━━━━━━━━━━━━━━
 
 ## Sub-Agents
 
-Spawn parallel workers with their own context windows:
+The agent spawns parallel workers with their own context windows:
 
 ```
 spawn(id="auth-check", template="explorer", mode="oneshot", model_level="low", task="...")
