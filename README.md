@@ -13,7 +13,7 @@
 
 <!-- MEDIA: Hero screenshot — TUI mid-session with context annotations visible, showing the agent working on a real task -->
 
-Fermi is a terminal AI coding agent designed for multi-hour sessions. The agent inspects its own context window, decides what is still valuable, and surgically compresses the rest — down to a single tool call result. The session keeps running; decisions, file paths, and unresolved issues stay intact.
+Fermi is a terminal AI coding agent designed for multi-hour sessions. The agent inspects its own context window, decides what is still valuable, and surgically compresses the rest — down to a single tool call result. Sessions run for hours; decisions, file paths, and unresolved issues stay intact.
 
 > **Platform:** macOS (Apple Silicon). **License:** MIT.
 
