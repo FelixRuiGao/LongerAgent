@@ -25,14 +25,17 @@ After switching models, Fermi prompts you to select a thinking level (if the mod
 
 | Provider | Levels |
 |----------|--------|
-| **Anthropic (Claude 4.6+)** | off, low, medium, high, max |
-| **Anthropic (Claude 4.5)** | off, low, medium, high |
+| **Anthropic (Opus 4.7)** | off, low, medium, high, xhigh, max |
+| **Anthropic (Opus 4.6)** | off, low, medium, high, max |
+| **Anthropic (Sonnet 4.6)** | off, low, medium, high |
+| **Anthropic (Haiku 4.5)** | off, low, medium, high |
 | **OpenAI** | none, low, medium, high, xhigh |
-| **GitHub Copilot** | follows the underlying model's levels |
+| **DeepSeek** | off, high, max |
 | **Kimi** | off, on |
 | **GLM** | off, on |
+| **Xiaomi (MiMo)** | off, on |
 | **MiniMax** | always on (not configurable) |
-| **DeepSeek** | off, on |
+| **GitHub Copilot** | follows the underlying model's levels |
 
 Higher reasoning depth produces more thorough analysis but uses more tokens and takes longer.
 
