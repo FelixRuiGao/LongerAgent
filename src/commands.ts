@@ -343,23 +343,18 @@ async function cmdSummarize(ctx: CommandContext, _args: string): Promise<void> {
     }
   }
 
-  // Step 4: Compute context IDs from selected range
+  // Step 4: Compute context IDs from selected range, preserving spatial order
   const selected = targets.slice(startIdx, endIdx + 1);
   const contextIds: string[] = [];
+  const seen = new Set<string>();
 
-  // Collect turn ranges for getContextIdsForTurnRange
-  const turnItems = selected.filter(t => t.kind === "turn");
-  if (turnItems.length > 0) {
-    const minTurn = turnItems[0].turnIndex;
-    const maxTurn = turnItems[turnItems.length - 1].turnIndex;
-    const turnContextIds = session.getContextIdsForTurnRange?.(minTurn, maxTurn) ?? [];
-    contextIds.push(...turnContextIds);
-  }
-
-  // Collect summary contextIds directly
-  const seen = new Set(contextIds);
   for (const t of selected) {
-    if (t.kind === "summary" && t.contextId && !seen.has(t.contextId)) {
+    if (t.kind === "turn") {
+      const turnContextIds = session.getContextIdsForTurnRange?.(t.turnIndex, t.turnIndex) ?? [];
+      for (const id of turnContextIds) {
+        if (!seen.has(id)) { contextIds.push(id); seen.add(id); }
+      }
+    } else if (t.kind === "summary" && t.contextId && !seen.has(t.contextId)) {
       contextIds.push(t.contextId);
       seen.add(t.contextId);
     }

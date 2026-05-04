@@ -83,29 +83,29 @@ describe("execSummarizeContextOnLog", () => {
     expect(result.output).toContain("not found");
   });
 
-  it("treats sub-context IDs as part of their main context", () => {
+  it("summarizes a tool round sharing a single context ID", () => {
     const entries: LogEntry[] = [
       createSystemPrompt("sys-001", "prompt"),
-      createAssistantText("asst-001", 1, 0, "Checking", "Checking", "7.1"),
+      createAssistantText("asst-001", 1, 0, "Checking", "Checking", "c7"),
       createToolCall(
         "tc-001",
         1,
         0,
         "read_file",
         { id: "call_1", name: "read_file", arguments: { path: "x.ts" } },
-        { toolCallId: "call_1", toolName: "read_file", agentName: "agent", contextId: "7.1" },
+        { toolCallId: "call_1", toolName: "read_file", agentName: "agent", contextId: "c7" },
       ),
       createToolResult(
         "tr-001",
         1,
         0,
         { toolCallId: "call_1", toolName: "read_file", content: "source", toolSummary: "read" },
-        { isError: false, contextId: "7.1" },
+        { isError: false, contextId: "c7" },
       ),
     ];
 
     const result = execSummarizeContextOnLog(
-      { operations: [{ from: "7", to: "7", content: "tool round summarized" }] },
+      { operations: [{ from: "c7", to: "c7", content: "tool round summarized" }] },
       entries,
       allocIds("ctx-"),
       allocIds("sum-"),

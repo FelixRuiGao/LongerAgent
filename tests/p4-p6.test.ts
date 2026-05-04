@@ -114,7 +114,7 @@ describe("P6 summarize behavior", () => {
       );
 
       const success = (session as any)._execSummarizeTool({
-        operations: [{ context_ids: ["seed1"], content: "compressed" }],
+        operations: [{ from: "seed1", to: "seed1", content: "compressed" }],
       }) as ToolResult;
       expect(success.content).toContain("1 succeeded");
       // Hint state is NOT reset by summarize itself —
@@ -122,7 +122,7 @@ describe("P6 summarize behavior", () => {
       expect((session as any)._hintState).toBe("level1_sent");
 
       const fail = (session as any)._execSummarizeTool({
-        operations: [{ context_ids: ["missing"], content: "will fail" }],
+        operations: [{ from: "missing", to: "missing", content: "will fail" }],
       }) as ToolResult;
       expect(fail.content).toContain("0 succeeded");
       expect((session as any)._hintState).toBe("level1_sent");

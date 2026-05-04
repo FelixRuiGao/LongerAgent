@@ -70,10 +70,6 @@ function buildLogSpatialIndex(
     if (coveredSet.has(ctxId)) continue;
 
     registerIndex(index, ctxId, i);
-
-    if (ctxId.includes(".")) {
-      registerIndex(index, ctxId.split(".")[0], i);
-    }
   }
   return index;
 }
@@ -162,10 +158,9 @@ function buildSpatialOrder(
     const ctxId = getLogContextId(entries[i]);
     if (!ctxId) continue;
     if (coveredSet.has(ctxId)) continue;
-    const baseId = ctxId.includes(".") ? ctxId.split(".")[0] : ctxId;
-    if (!seen.has(baseId)) {
-      seen.add(baseId);
-      order.push(baseId);
+    if (!seen.has(ctxId)) {
+      seen.add(ctxId);
+      order.push(ctxId);
     }
   }
   return order;
