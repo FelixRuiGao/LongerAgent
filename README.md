@@ -94,6 +94,11 @@ Cloud or local, your choice. Switch at runtime with `/model`. `fermi init` handl
 
 Full documentation: **[felixruigao.github.io/Fermi](https://felixruigao.github.io/Fermi/)**
 
+## Interfaces
+
+- **Terminal (TUI)** — the primary interface, built on [OpenTUI](https://github.com/anomalyco/opentui). Run with `fermi` or `bun run dev`.
+- **Desktop (GUI)** — an Electron app in early development (`gui/`). Same runtime, different frontend.
+
 ## Development
 
 ```bash
@@ -106,6 +111,4 @@ bun run typecheck   # Type check
 
 ## License
 
-[MIT](./LICENSE)
-
-The TUI is built on [OpenTUI](https://github.com/anomalyco/opentui) (MIT). See [`opentui-src/forked/LICENSE.opentui`](opentui-src/forked/LICENSE.opentui).
+[MIT](./LICENSE). The TUI uses [OpenTUI](https://github.com/anomalyco/opentui) (MIT).
