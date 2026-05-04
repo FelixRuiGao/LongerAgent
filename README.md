@@ -13,7 +13,7 @@
 
 <!-- MEDIA: Hero screenshot — TUI mid-session with context annotations visible, showing the agent working on a real task -->
 
-Fermi is a terminal AI coding agent that can run for hours without losing important context. The agent inspects its own context window, decides what is still valuable, and surgically compresses the rest — down to a single tool call result. No blind resets, no lost decisions.
+Fermi is a terminal AI coding agent designed for multi-hour sessions. The agent inspects its own context window, decides what is still valuable, and surgically compresses the rest — down to a single tool call result. The session keeps running; decisions, file paths, and unresolved issues stay intact.
 
 > **Platform:** macOS (Apple Silicon). **License:** MIT.
 
@@ -49,10 +49,6 @@ Three layers prevent context from ever silently overflowing: system hints nudge 
 
 [Full context management guide →](https://felixruigao.github.io/Fermi/guide/context)
 
-## Async Messaging
-
-Type messages at any time — even while the agent is mid-task. Messages queue and deliver at the next activation boundary. No need to wait for the agent to finish.
-
 ## Sub-Agents
 
 Spawn parallel workers with their own context windows:
@@ -65,10 +61,12 @@ spawn(id="auth-check", template="explorer", mode="oneshot", model_level="low", t
 - **Model tiers:** Assign high/medium/low models via `/tier` — save cost on simple tasks
 - **Modes:** `oneshot` (run once, return result) or `persistent` (stays alive, receives messages)
 
-## Rewind & Fork
+## Session Control
 
-- `/rewind` — roll back to any previous turn. Reverts conversation **and** file system state (tracked edits, bash mutations)
-- `/fork` — branch the current session into a new direction
+- **Async messaging** — type while the agent works. Messages queue and deliver at the next activation boundary.
+- **Rewind** — `/rewind` rolls back to any previous turn, reverting conversation **and** file changes.
+- **Fork** — `/fork` branches the current session into a new direction.
+- **Persistent memory** — `AGENTS.md` files (global + project) survive compact and session restarts.
 
 ---
 
