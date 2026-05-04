@@ -2,7 +2,7 @@ import { defineConfig } from "vitepress";
 
 export default defineConfig({
   title: "Fermi",
-  description: "A terminal AI coding agent built for long sessions",
+  description: "A terminal AI coding agent with surgical context management for multi-hour sessions",
   base: "/Fermi/",
   cleanUrls: true,
 
