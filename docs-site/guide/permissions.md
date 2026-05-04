@@ -60,16 +60,19 @@ Hooks on `PreToolUse` can modify tool arguments via the `updatedInput` field bef
 
 ### Configuration
 
-Hooks are configured in a `hook.json` manifest:
+Hooks live in subdirectories of `~/.fermi/hooks/` (global) or `<project>/.fermi/hooks/` (project-scoped). Each hook is a directory containing a `hook.json` manifest:
 
 ```json
 {
   "name": "my-hook",
+  "type": "command",
   "event": "PreToolUse",
   "command": "/path/to/script.sh",
   "failClosed": true
 }
 ```
+
+Optional fields: `args` (string array), `env` (key-value), `matcher` (filter by tool names or agent IDs), `timeoutMs` (default 10000), `disabled`.
 
 When `failClosed` is true, hook failure (crash, timeout) is treated as denial. Supported on: SessionStart, UserPromptSubmit, PreToolUse.
 
