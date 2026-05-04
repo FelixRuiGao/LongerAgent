@@ -15,7 +15,7 @@ hero:
 
 features:
   - title: Fine-Grained Context Control
-    details: The agent inspects its own context distribution and surgically summarizes selected blocks — down to a single tool result. Three layers cooperate to keep sessions alive for hours.
+    details: The agent sees the token cost of every context block and compresses what it chooses — even a single tool result. Three layers (hints → agent summarization → auto-compact) keep sessions alive for hours.
   - title: Async Messaging
     details: Type messages at any time, even mid-task. Messages queue and deliver at the next activation boundary. No waiting, no restart needed.
   - title: Sub-Agents with Model Tiers
