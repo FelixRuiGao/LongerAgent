@@ -5,6 +5,9 @@ hero:
   name: Fermi
   text: The coding agent that compresses its own memory.
   tagline: Surgical context control lets a single session run for hours — no blind resets, no lost decisions.
+  image:
+    src: /session.png
+    alt: Fermi TUI — sub-agent spawning, build verification, and live context stats
   actions:
     - theme: brand
       text: Get Started

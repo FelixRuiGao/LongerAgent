@@ -2,7 +2,7 @@
 
 Get Fermi running in under a minute. Three commands — install, configure, launch.
 
-<!-- MEDIA: Hero screenshot of Fermi TUI in action — showing a mid-session conversation with context annotations visible -->
+![Fermi TUI — sub-agent spawning, build verification, and live context stats](/session.png)
 
 **Platform:** macOS (Apple Silicon).
 

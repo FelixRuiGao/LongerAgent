@@ -12,7 +12,7 @@
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
 </p>
 
-<!-- MEDIA: Hero screenshot — TUI mid-session with context annotations visible, showing the agent working on a real task -->
+![Fermi — sub-agent spawning, build verification, and live context stats](assets/session.png)
 
 Fermi is a terminal AI coding agent designed for multi-hour sessions. The agent inspects its own context window, decides what is still valuable, and surgically compresses the rest — down to a single tool call result. Sessions run for hours; decisions, file paths, and unresolved issues stay intact.
 
@@ -43,8 +43,6 @@ The user can also intervene directly:
 |---------|-------------|
 | `/summarize` | Interactive range picker — select turns, provide a focus prompt |
 | `/compact` | Full context reset with continuation summary |
-
-<!-- MEDIA: Two-panel comparison — left: /summarize interactive picker UI; right: agent calling show_context → summarize autonomously -->
 
 Three layers prevent context from ever silently overflowing:
 

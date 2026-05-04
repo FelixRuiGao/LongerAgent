@@ -12,7 +12,7 @@
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
 </p>
 
-<!-- MEDIA: 主截图 — TUI 工作中，展示上下文注解 -->
+![Fermi — 子 Agent 调度、构建验证、实时上下文统计](assets/session.png)
 
 Fermi 是一个为长时间会话设计的终端 AI 编程 Agent。Agent 能审视自身的上下文窗口，判断哪些信息仍有价值，然后精确压缩其余部分——粒度细到单个 tool call 的结果。会话持续运行数小时；关键决策、文件路径、未解决问题不会丢失。
 
@@ -43,8 +43,6 @@ fermi           # 开始会话
 |------|------|
 | `/summarize` | 交互式范围选择器 — 选择起止 turn，输入可选的保留指令 |
 | `/compact` | 全量上下文重置，生成延续摘要 |
-
-<!-- MEDIA: 双面板对比 — 左: /summarize 交互式选择器；右: Agent 自主调用 show_context → summarize -->
 
 三层机制防止上下文悄然溢出：
 

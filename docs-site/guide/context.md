@@ -29,8 +29,6 @@ Operates on groups of spatially contiguous context IDs. For each group, the agen
 
 The key property: this is **append-only**. Original content is never deleted — summaries are appended, and the system dynamically determines what is visible based on what has been summarized. This means summarization is safe and reversible at the system level.
 
-<!-- MEDIA: Side-by-side showing context map before and after a summarize operation — token counts visibly reduced -->
-
 ### 3. Auto-Compact
 
 When context reaches critical levels despite hints and summarization:
