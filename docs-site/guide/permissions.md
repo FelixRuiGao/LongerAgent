@@ -18,9 +18,9 @@ The permission system uses tree-sitter to parse bash commands and classify them 
 
 - **read** — ls, cat, grep, git status
 - **write_reversible** — mkdir, cp, git add
-- **write_potent** — rm, mv, git commit
-- **write_danger** — rm -rf, git push --force
-- **catastrophic** — always denied without explicit approval
+- **write_potent** — rm (single file), mv, git commit
+- **write_danger** — rm -rf, git push --force, operations on broad paths
+- **catastrophic** — dd to device files, rm targeting / or $HOME (always requires approval even in yolo mode)
 
 File tools are classified by their operation type: `read_file` is always read, `edit_file` is write_reversible, `bash` depends on the command content.
 
