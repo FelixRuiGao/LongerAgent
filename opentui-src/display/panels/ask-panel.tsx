@@ -6,6 +6,7 @@ import type { AgentQuestionItem } from "../../../src/ask.js";
 import type { DisplayTheme } from "../theme/index.js";
 import type { AskPanelProps } from "../types.js";
 import { PanelSurface } from "../primitives/panel-surface.js";
+import { countWrappedDisplayLines } from "../utils/format.js";
 
 function formatAskSource(ask: AskPanelProps["ask"]): string {
   const sourceName = ask.source.agentName || ask.source.agentId || "Main agent";
@@ -30,14 +31,30 @@ export function AskPanelView({
   onInput,
   onSubmit,
   theme,
+  terminalHeight,
+  contentWidth,
 }: AskPanelProps & { theme: DisplayTheme }): React.ReactNode {
   if (ask.kind === "approval") {
     const options = ask.options ?? [];
     const persistentWarning = (ask.payload as Record<string, unknown>)["persistentWarning"] as string | undefined;
-    const panelHeight = 3 + options.length + (persistentWarning ? 1 : 0) + 1 + (error ? 1 : 0) + 2;
+
+    // Fixed chrome: source + blank + options + warning + hint + error + border
+    const fixedLines = 2 + options.length + (persistentWarning ? 1 : 0) + 1 + (error ? 1 : 0) + 2;
+    const summaryLines = countWrappedDisplayLines(ask.summary, Math.max(1, contentWidth - 4));
+    const maxSummaryLines = Math.max(1, Math.floor((terminalHeight - 8) * 0.3));
+    const summaryNeedsScroll = summaryLines > maxSummaryLines;
+    const effectiveSummaryLines = summaryNeedsScroll ? maxSummaryLines : summaryLines;
+    const panelHeight = fixedLines + effectiveSummaryLines;
+
     return (
       <PanelSurface colors={theme.colors} spacing={theme.spacing} height={panelHeight}>
-        <text fg={theme.colors.accent} content={ask.summary} />
+        {summaryNeedsScroll ? (
+          <scrollbox maxHeight={effectiveSummaryLines} scrollY={true} fitContent={true}>
+            <text fg={theme.colors.accent} content={ask.summary} />
+          </scrollbox>
+        ) : (
+          <text fg={theme.colors.accent} content={ask.summary} />
+        )}
         <text fg={theme.colors.dim} content={formatAskSource(ask)} />
         <text content="" />
         {options.map((label, index) => {

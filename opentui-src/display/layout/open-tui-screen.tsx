@@ -312,6 +312,8 @@ export function OpenTuiScreen({
           onInput={onAskInput}
           onSubmit={onAskSubmit}
           theme={theme}
+          terminalHeight={terminal.height}
+          contentWidth={Math.max(20, conversationColumnWidth - effectiveSidebarWidth)}
         />
       ) : null}
       <CommandOverlayView

@@ -75,6 +75,8 @@ export interface AskPanelProps {
   inputRef: RefObject<InputRenderable | null>;
   onInput: (value: string) => void;
   onSubmit: (value: string) => void;
+  terminalHeight: number;
+  contentWidth: number;
 }
 
 export interface AskQuestionState {
