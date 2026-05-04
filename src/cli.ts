@@ -28,6 +28,7 @@ import {
   loadLocalSettings,
   mergeSettings,
   loadModelSelectionState,
+  parseSettingsOverrides,
   settingsToConfigInputs,
 } from "./persistence.js";
 import { loadDotenv } from "./dotenv.js";
@@ -121,6 +122,18 @@ function identifyPrimaryAgent(
   process.exit(1);
 }
 
+// Validate -c overrides up front and exit with a friendly message on bad
+// input — `parseSettingsOverrides` throws raw Errors, which bubble up as
+// stack traces if uncaught.
+function parseConfigOverridesOrExit(overrides: readonly string[]) {
+  try {
+    return parseSettingsOverrides(overrides);
+  } catch (err) {
+    process.stderr.write(`fermi: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(2);
+  }
+}
+
 // ------------------------------------------------------------------
 // Main
 // ------------------------------------------------------------------
@@ -145,9 +158,19 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     const selectedModel = getFlag("--model");
     const selectedAgent = getFlag("--agent");
     const templates = getFlag("--templates");
+    const configOverrides: string[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      if ((args[i] === "--config" || args[i] === "-c") && args[i + 1]) {
+        configOverrides.push(args[i + 1]!);
+        i += 1;
+      }
+    }
+    // Validate now so a bad override fails with a clean message instead of
+    // surfacing as a fatal stack trace from inside the server bootstrap.
+    parseConfigOverridesOrExit(configOverrides);
     const { runServerMode } = await import("./server/server-mode.js");
     try {
-      await runServerMode({ workDir, sessionId, selectedModel, selectedAgent, templates });
+      await runServerMode({ workDir, sessionId, selectedModel, selectedAgent, templates, configOverrides });
     } catch (err) {
       process.stderr.write(
         `[fermi --server] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
@@ -163,6 +186,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .version(VERSION, "-V, --version", "Output the current version")
     .description("A terminal AI coding agent built for long sessions")
     .option("--templates <path>", "Path to agent_templates directory")
+    .option("-c, --config <key=value>", "Override a setting for this process", (value, previous: string[]) => {
+      previous.push(value);
+      return previous;
+    }, [])
     .option("--verbose", "Enable debug logging");
 
   // Subcommands
@@ -224,6 +251,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   const opts = program.opts<{
     templates?: string;
+    config?: string[];
     verbose?: boolean;
   }>();
 
@@ -255,6 +283,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   let globalSettings = loadGlobalSettings(homeDir);
   const localSettings = loadLocalSettings(process.cwd(), store.projectDir);
   let settings = mergeSettings(globalSettings, localSettings);
+  settings = mergeSettings(settings, parseConfigOverridesOrExit(opts.config ?? []));
 
   // If no providers configured, run initialization wizard
   const { providerEnvVars, localProviders, mcpServers } = settingsToConfigInputs(settings);
@@ -271,6 +300,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       // Re-load settings after wizard completes
       globalSettings = loadGlobalSettings(homeDir);
       settings = mergeSettings(globalSettings, localSettings);
+      settings = mergeSettings(settings, parseConfigOverridesOrExit(opts.config ?? []));
     } catch {
       console.error(
         "Error: no providers configured.\n" +
@@ -380,7 +410,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   } catch { /* hooks module optional */ }
 
   // ── Build Session ──
-  const contextRatio = settings.context_ratio ?? 1.0;
+  const contextBudgetPercent = settings.context_budget_percent ?? 100;
   const session = new Session({
     primaryAgent: primary as never,
     config,
@@ -391,7 +421,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     mcpManager: mcpManager as never,
     promptsDirs,
     store: store as never,
-    contextRatio,
+    contextBudgetPercent,
   });
 
   // ── Register hooks with session ──

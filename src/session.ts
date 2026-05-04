@@ -517,8 +517,8 @@ export class Session {
   private _hintResetNone = DEFAULT_THRESHOLDS.context_hint_level1 / 100 - 0.20;
   private _hintResetLevel1 = (DEFAULT_THRESHOLDS.context_hint_level1 + DEFAULT_THRESHOLDS.context_hint_level2) / 200;
 
-  // Context window multiplier (0.0–1.0). Effective context = contextLength × _contextRatio.
-  private _contextRatio = 1.0;
+  // Main-session context budget percentage (1–100).
+  private _contextBudgetPercent = 100;
 
   // Hint compression (two-tier state machine)
   private _hintState: "none" | "level1_sent" | "level2_sent" = "none";
@@ -874,7 +874,7 @@ export class Session {
     mcpManager?: MCPClientManager;
     promptsDirs?: string[];
     store?: any;
-    contextRatio?: number;
+    contextBudgetPercent?: number;
     projectRoot?: string;
     sessionArtifactsDir?: string;
     capabilities?: SessionCapabilities;
@@ -911,9 +911,9 @@ export class Session {
     this._toolExecutorOverrides = opts.toolExecutorOverrides ?? {};
     this._deferQueuedMessageInjectionOnTurnExit = opts.deferQueuedMessageInjectionOnTurnExit ?? false;
 
-    // Apply context ratio
-    if (opts.contextRatio !== undefined) {
-      this._contextRatio = Math.max(0.01, Math.min(1.0, opts.contextRatio));
+    // Apply context budget percentage.
+    if (opts.contextBudgetPercent !== undefined) {
+      this._contextBudgetPercent = Math.max(1, Math.min(100, opts.contextBudgetPercent));
     }
 
     // Attach store if provided (must be set before _initConversation)
@@ -1005,10 +1005,10 @@ export class Session {
   }
 
   /**
-   * Effective context length for a given ModelConfig, scaled by context ratio.
+   * Effective context length for a given ModelConfig, scaled by context budget percent.
    */
   _effectiveContextLength(mc: ModelConfig): number {
-    return Math.round(mc.contextLength * this._contextRatio);
+    return Math.round(mc.contextLength * this._contextBudgetPercent / 100);
   }
 
   // ==================================================================
@@ -2703,7 +2703,7 @@ export class Session {
       mcpManager: this._mcpManager,
       promptsDirs: this._promptsDirs,
       store: shadowStore,
-      contextRatio: this._contextRatio,
+      contextBudgetPercent: this._contextBudgetPercent,
       projectRoot: this._projectRoot,
       sessionArtifactsDir: this._sessionArtifactsOverride || undefined,
       capabilities: this._capabilities,
@@ -2769,11 +2769,14 @@ export class Session {
       if (e.type === "work_start" && !e.discarded) this._workCount += 1;
     }
 
-    // Restore last token counts from log
+    // Restore last token counts from log. A zero token_update means the provider
+    // ended without usable usage data, so keep looking for the last real count.
     for (let i = entries.length - 1; i >= 0; i--) {
       if (entries[i].type === "token_update") {
-        this._lastInputTokens = ((entries[i].meta as Record<string, unknown>)["inputTokens"] as number) ?? 0;
-        this._lastTotalTokens = ((entries[i].meta as Record<string, unknown>)["totalTokens"] as number) ?? 0;
+        const inputTokens = (entries[i].meta as Record<string, unknown>)["inputTokens"] as number;
+        if (!Number.isFinite(inputTokens) || inputTokens <= 0) continue;
+        this._lastInputTokens = inputTokens;
+        this._lastTotalTokens = ((entries[i].meta as Record<string, unknown>)["totalTokens"] as number) ?? inputTokens;
         this._lastCacheReadTokens = ((entries[i].meta as Record<string, unknown>)["cacheReadTokens"] as number) ?? 0;
         break;
       }
@@ -3549,6 +3552,9 @@ export class Session {
       this.primaryAgent.modelConfig.model,
       thinkingLevel,
     );
+    if (settings.context_budget_percent !== undefined) {
+      this._contextBudgetPercent = Math.max(1, Math.min(100, settings.context_budget_percent));
+    }
 
     // Restore disabled skills
     if (settings.disabled_skills && settings.disabled_skills.length > 0) {
@@ -3617,9 +3623,9 @@ export class Session {
     this._lastCacheReadTokens = value;
   }
 
-  /** Effective context budget: contextLength × contextRatio. */
+  /** Effective context budget: contextLength × context budget percent. */
   get contextBudget(): number {
-    return Math.round((this.primaryAgent?.modelConfig?.contextLength ?? 0) * this._contextRatio);
+    return Math.round((this.primaryAgent?.modelConfig?.contextLength ?? 0) * this._contextBudgetPercent / 100);
   }
 
   appendStatusMessage(text: string, statusType = "status", ephemeral = false): void {
@@ -4482,8 +4488,10 @@ export class Session {
           break;
         }
 
-        this._lastInputTokens = result.lastInputTokens;
-        this._lastTotalTokens = result.lastTotalTokens ?? 0;
+        if (Number.isFinite(result.lastInputTokens) && result.lastInputTokens > 0) {
+          this._lastInputTokens = result.lastInputTokens;
+          this._lastTotalTokens = result.lastTotalTokens ?? result.lastInputTokens;
+        }
         this._updateHintStateAfterApiCall();
 
         if (result.suspendedAsk) {
@@ -5292,6 +5300,7 @@ export class Session {
     // Token update callback: update _lastInputTokens after each provider call
     // so the TUI can display real-time context usage.
     const onTokenUpdate = (inputTokens: number, usage?: import("./providers/base.js").Usage) => {
+      if (!Number.isFinite(inputTokens) || inputTokens <= 0) return;
       this._lastInputTokens = inputTokens;
       this._lastTotalTokens = usage?.totalTokens ?? inputTokens;
       this._lastCacheReadTokens = usage?.cacheReadTokens ?? 0;
@@ -6458,7 +6467,6 @@ export class Session {
       promptCacheKey: taskId,
       permissionMode: this.permissionMode,
       progress: this._progress,
-      contextRatio: this._contextRatio,
       permissionRuleStore: this._permissionRuleStore,
       mcpManager: this.config.subAgentInheritMcp ? this._mcpManager : undefined,
       hooks: this.config.subAgentInheritHooks ? this.hookRuntime.hooks : undefined,

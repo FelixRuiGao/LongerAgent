@@ -2,8 +2,7 @@
  * Context management thresholds and hysteresis computation.
  *
  * Thresholds are fixed defaults — no longer loaded from settings.json.
- * The user controls effective context size via the contextRatio
- * preference (stored in tui-preferences.json).
+ * The user controls effective context size via context_budget_percent.
  */
 
 // ------------------------------------------------------------------

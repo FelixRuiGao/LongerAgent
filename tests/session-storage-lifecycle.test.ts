@@ -354,6 +354,112 @@ describe("session storage lifecycle", () => {
     }
   });
 
+  it("restores token counters from the latest non-zero token update", () => {
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store);
+      const entries = [
+        createSystemPrompt("sys-001", "prompt"),
+        createTokenUpdate("tok-001", 1, 7171, 6912, 0, 7510),
+        createTokenUpdate("tok-002", 2, 0, 0, 0, 0),
+      ];
+      const idAllocator = new LogIdAllocator();
+      idAllocator.restoreFrom(entries);
+
+      session.restoreFromLog?.(
+        createLogSessionMeta({
+          createdAt: "2026-03-05T23:55:57Z",
+          updatedAt: "2026-03-05T23:55:57Z",
+          turnCount: 2,
+          compactCount: 0,
+          projectPath: projectRoot,
+          modelConfigName: "test-model",
+        }),
+        entries,
+        idAllocator,
+      );
+
+      expect(session.lastInputTokens).toBe(7171);
+      expect(session.lastTotalTokens).toBe(7510);
+      expect((session as any).lastCacheReadTokens).toBe(6912);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores zero token updates from providers", async () => {
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store);
+      session.lastInputTokens = 7171;
+      session.lastTotalTokens = 7510;
+
+      (session.primaryAgent as any).asyncRunWithMessages = async (...args: unknown[]) => {
+        const onTokenUpdate = args[14] as ((inputTokens: number, usage?: { totalTokens?: number; cacheReadTokens?: number }) => void) | undefined;
+        onTokenUpdate?.(0, { totalTokens: 0, cacheReadTokens: 0 });
+        return {
+          text: "",
+          toolHistory: [],
+          totalUsage: { inputTokens: 0, outputTokens: 0 },
+          intermediateText: [],
+          lastInputTokens: 0,
+          reasoningContent: "",
+          reasoningState: null,
+          lastTotalTokens: 0,
+          textHandledInLog: false,
+          reasoningHandledInLog: false,
+        };
+      };
+
+      await (session as any)._runActivation();
+
+      expect(session.lastInputTokens).toBe(7171);
+      expect(session.lastTotalTokens).toBe(7510);
+      expect(session.log.some((entry) => entry.type === "token_update")).toBe(false);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reset token counters when an activation finishes without usage", async () => {
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store);
+      session.lastInputTokens = 7171;
+      session.lastTotalTokens = 7510;
+
+      (session as any)._runActivation = async () => ({
+        text: "ok",
+        toolHistory: [],
+        totalUsage: { inputTokens: 0, outputTokens: 0 },
+        intermediateText: [],
+        lastInputTokens: 0,
+        reasoningContent: "",
+        reasoningState: null,
+        lastTotalTokens: 0,
+        textHandledInLog: false,
+        reasoningHandledInLog: false,
+        endedWithoutToolCalls: true,
+      });
+
+      await session.turn("hello");
+
+      expect(session.lastInputTokens).toBe(7171);
+      expect(session.lastTotalTokens).toBe(7510);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("restores model config before thinking/cache state from log", () => {
     const baseDir = makeTempDir("fermi-lifecycle-base-");
     const projectRoot = makeTempDir("fermi-lifecycle-project-");
@@ -493,6 +599,73 @@ describe("session storage lifecycle", () => {
       } else {
         process.env["HOME"] = previousHome;
       }
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("applies context budget percent to the main session budget", () => {
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      const session = makeSession(projectRoot, store);
+
+      session.applySettings({ context_budget_percent: 50 }, {});
+
+      expect(session.contextBudget).toBe(4096);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not inherit main context budget percent into child sessions", () => {
+    const baseDir = makeTempDir("fermi-lifecycle-base-");
+    const projectRoot = makeTempDir("fermi-lifecycle-project-");
+    try {
+      const store = new SessionStore({ baseDir, projectPath: projectRoot });
+      store.createSession();
+      const session = makeSession(projectRoot, store, {
+        modelConfigs: {
+          "test-model": {
+            name: "test-model",
+            provider: "openai",
+            model: "gpt-5.2",
+            apiKey: "sk-test",
+            maxTokens: 256,
+            contextLength: 1_000_000,
+            supportsMultimodal: false,
+          },
+        },
+      });
+      session.applySettings({ context_budget_percent: 20 }, {});
+
+      const childAgent = {
+        name: "Child",
+        systemPrompt: "child",
+        tools: [],
+        maxToolRounds: 1,
+        modelConfig: {
+          name: "test-model",
+          provider: "openai",
+          model: "gpt-5.2",
+          apiKey: "sk-test",
+          maxTokens: 256,
+          contextLength: 128_000,
+          supportsMultimodal: false,
+        },
+        _provider: { budgetCalcMode: "full_context" },
+        replaceModelConfig(next: any) {
+          this.modelConfig = next;
+        },
+      } as any;
+
+      const handle = (session as any)._instantiateChildSession("worker-1", "main", "persistent", childAgent);
+
+      expect(session.contextBudget).toBe(200_000);
+      expect(handle.session.contextBudget).toBe(128_000);
+    } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
     }

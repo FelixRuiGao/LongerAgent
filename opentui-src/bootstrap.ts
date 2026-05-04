@@ -12,6 +12,7 @@ import {
   loadLocalSettings,
   mergeSettings,
   loadModelSelectionState,
+  parseSettingsOverrides,
   settingsToConfigInputs,
 } from "../src/persistence.js";
 import { loadDotenv } from "../src/dotenv.js";
@@ -52,6 +53,7 @@ export interface OpenTuiRuntime {
 
 export async function bootstrapOpenTuiRuntime(opts?: {
   templates?: string;
+  configOverrides?: readonly string[];
   verbose?: boolean;
 }): Promise<OpenTuiRuntime> {
   const homeDir = getFermiHomeDir();
@@ -64,7 +66,8 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   // ── Load settings (global + local merge) ──
   const globalSettings = loadGlobalSettings(homeDir);
   const localSettings = loadLocalSettings(projectPath, store.projectDir);
-  const settings = mergeSettings(globalSettings, localSettings);
+  let settings = mergeSettings(globalSettings, localSettings);
+  settings = mergeSettings(settings, parseSettingsOverrides(opts?.configOverrides ?? []));
 
   // Check if any providers are configured
   const { providerEnvVars, localProviders, mcpServers } = settingsToConfigInputs(settings);
@@ -148,7 +151,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
   const skills = loadSkillsMulti(skillRoots);
 
   // ── Session ──
-  const contextRatio = settings.context_ratio ?? 1.0;
+  const contextBudgetPercent = settings.context_budget_percent ?? 100;
   const session = new Session({
     primaryAgent: primary as never,
     config,
@@ -159,7 +162,7 @@ export async function bootstrapOpenTuiRuntime(opts?: {
     mcpManager: mcpManager as never,
     promptsDirs,
     store: store as never,
-    contextRatio,
+    contextBudgetPercent,
   });
 
   // ── Restore model selection ──

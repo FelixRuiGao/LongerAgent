@@ -342,7 +342,7 @@ export class SessionStore {
           disabledSkills: Array.isArray(raw.disabled_skills) ? raw.disabled_skills : undefined,
           providerEnvVars: raw.provider_env_vars ?? undefined,
           localProviders: raw.local_providers ?? undefined,
-          contextRatio: typeof raw.context_ratio === "number" ? raw.context_ratio : undefined,
+          contextBudgetPercent: typeof raw.context_budget_percent === "number" ? raw.context_budget_percent : undefined,
           permissionMode: raw.permission_mode ?? undefined,
         });
       } catch {
@@ -374,7 +374,7 @@ export class SessionStore {
             disabled_skills: payload.disabledSkills ?? null,
             provider_env_vars: payload.providerEnvVars ?? null,
             local_providers: payload.localProviders ?? null,
-            context_ratio: payload.contextRatio ?? null,
+            context_budget_percent: payload.contextBudgetPercent ?? null,
             permission_mode: payload.permissionMode ?? null,
           }, null, 2),
         );
@@ -600,8 +600,8 @@ export interface FermiSettings {
   };
   /** Default thinking level for the main agent. */
   thinking_level?: string;
-  /** Context window multiplier (0.0–1.0). */
-  context_ratio?: number;
+  /** Main-session context budget percentage (1–100). */
+  context_budget_percent?: number;
 
   // -- Providers (global only, not overridden by local settings) --
   /** Cloud provider → env var name, or local provider → full config. */
@@ -684,8 +684,8 @@ export interface GlobalTuiPreferences {
   providerEnvVars?: Record<string, string>;
   /** Local inference server configurations (e.g. { "lmstudio": { baseUrl, model, contextLength } }) */
   localProviders?: Record<string, LocalProviderConfig>;
-  /** Context window multiplier (0.0–1.0). Effective context = contextLength × contextRatio. Default 1.0. */
-  contextRatio?: number;
+  /** Main-session context budget percentage (1–100). Default 100. */
+  contextBudgetPercent?: number;
   /** Whether to show the Codex usage card in the sidebar. Default true. */
   showCodexUsage?: boolean;
   /** Permission mode preference. Default "reversible". */
@@ -1342,7 +1342,7 @@ export function mergeSettings(global: FermiSettings, local: FermiSettings): Ferm
   // Scalars — local overrides if present
   if (local.default_model !== undefined) merged.default_model = local.default_model;
   if (local.thinking_level !== undefined) merged.thinking_level = local.thinking_level;
-  if (local.context_ratio !== undefined) merged.context_ratio = local.context_ratio;
+  if (local.context_budget_percent !== undefined) merged.context_budget_percent = local.context_budget_percent;
   if (local.accent_color !== undefined) merged.accent_color = local.accent_color;
   if (local.permission_mode !== undefined) merged.permission_mode = local.permission_mode;
   if (local.sub_agent_inherit_mcp !== undefined) merged.sub_agent_inherit_mcp = local.sub_agent_inherit_mcp;
@@ -1364,6 +1364,39 @@ export function mergeSettings(global: FermiSettings, local: FermiSettings): Ferm
 
   // providers: global only — do NOT merge local.providers
   return merged;
+}
+
+/**
+ * Parse process-local `-c key=value` overrides. These are intentionally
+ * limited to context budget and are never persisted.
+ */
+export function parseSettingsOverrides(overrides: readonly string[] = []): FermiSettings {
+  const settings: FermiSettings = {};
+
+  for (const override of overrides) {
+    const eq = override.indexOf("=");
+    if (eq <= 0) {
+      throw new Error(`Invalid -c override '${override}'. Expected key=value.`);
+    }
+
+    const key = override.slice(0, eq).trim();
+    const rawValue = override.slice(eq + 1).trim();
+
+    switch (key) {
+      case "context_budget_percent": {
+        const value = Number(rawValue);
+        if (!Number.isFinite(value)) {
+          throw new Error("context_budget_percent override must be a number.");
+        }
+        settings.context_budget_percent = value;
+        break;
+      }
+      default:
+        throw new Error(`Unsupported -c override '${key}'.`);
+    }
+  }
+
+  return settings;
 }
 
 /** Load model selection state from state/model-selection.json. */
@@ -1409,7 +1442,7 @@ export function saveSettings(settings: FermiSettings, filePath: string): void {
   if (settings.default_model !== undefined) clean.default_model = settings.default_model;
   if (settings.model_tiers !== undefined) clean.model_tiers = settings.model_tiers;
   if (settings.thinking_level !== undefined) clean.thinking_level = settings.thinking_level;
-  if (settings.context_ratio !== undefined) clean.context_ratio = settings.context_ratio;
+  if (settings.context_budget_percent !== undefined) clean.context_budget_percent = settings.context_budget_percent;
   if (settings.providers !== undefined) clean.providers = settings.providers;
   if (settings.accent_color !== undefined) clean.accent_color = settings.accent_color;
   if (settings.disabled_skills !== undefined) clean.disabled_skills = settings.disabled_skills;

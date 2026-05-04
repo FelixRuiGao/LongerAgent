@@ -12,6 +12,7 @@ import {
 
 interface ParsedArgs {
   templates?: string;
+  configOverrides: string[];
   verbose: boolean;
 }
 
@@ -29,7 +30,7 @@ function resolveRendererThreadSetting(): boolean {
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = { verbose: false };
+  const parsed: ParsedArgs = { configOverrides: [], verbose: false };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -40,6 +41,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (arg === "--templates") {
       parsed.templates = argv[index + 1];
       index += 1;
+      continue;
+    }
+    if (arg === "--config" || arg === "-c") {
+      if (argv[index + 1]) {
+        parsed.configOverrides.push(argv[index + 1]!);
+        index += 1;
+      }
+      continue;
     }
   }
 
@@ -52,9 +61,18 @@ export async function launchTui(): Promise<void> {
   const { createRoot } = await import("@opentui/react");
   const { bootstrapOpenTuiRuntime } = await import("./bootstrap.js");
   const { OpenTuiApp } = await import("./app.js");
+  const { parseSettingsOverrides } = await import("../src/persistence.js");
 
   process.env.OPENTUI_FORCE_EXPLICIT_WIDTH = "false";
   const args = parseArgs(process.argv.slice(2));
+  // Validate -c overrides before bootstrap so a bad value fails with a
+  // clean stderr line rather than a fatal stack trace from inside bootstrap.
+  try {
+    parseSettingsOverrides(args.configOverrides);
+  } catch (err) {
+    process.stderr.write(`fermi: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(2);
+  }
   if (isFermiOpenTuiDiagEnabled()) {
     resetFermiOpenTuiDiagLog({
       cwd: process.cwd(),

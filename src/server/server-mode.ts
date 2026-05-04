@@ -30,6 +30,7 @@ import {
   loadLocalSettings,
   mergeSettings,
   loadModelSelectionState,
+  parseSettingsOverrides,
   settingsToConfigInputs,
 } from "../persistence.js";
 import { loadDotenv } from "../dotenv.js";
@@ -44,6 +45,7 @@ export interface ServerModeOptions {
   readonly selectedModel?: string;
   readonly selectedAgent?: string;
   readonly templates?: string;
+  readonly configOverrides?: readonly string[];
 }
 
 function identifyPrimaryAgent(agents: Record<string, Agent>, name = "main"): Agent {
@@ -75,7 +77,8 @@ export async function runServerMode(opts: ServerModeOptions): Promise<void> {
 
   const globalSettings = loadGlobalSettings(homeDir);
   const localSettings = loadLocalSettings(projectPath, store.projectDir);
-  const settings = mergeSettings(globalSettings, localSettings);
+  let settings = mergeSettings(globalSettings, localSettings);
+  settings = mergeSettings(settings, parseSettingsOverrides(opts.configOverrides ?? []));
 
   const { providerEnvVars, localProviders, mcpServers } = settingsToConfigInputs(settings);
   const hasProviders =
@@ -161,7 +164,7 @@ export async function runServerMode(opts: ServerModeOptions): Promise<void> {
   } catch { /* optional */ }
 
   // Session
-  const contextRatio = settings.context_ratio ?? 1.0;
+  const contextBudgetPercent = settings.context_budget_percent ?? 100;
   const session = new Session({
     primaryAgent: primary as never,
     config,
@@ -172,7 +175,7 @@ export async function runServerMode(opts: ServerModeOptions): Promise<void> {
     mcpManager: mcpManager as never,
     promptsDirs,
     store: store as never,
-    contextRatio,
+    contextBudgetPercent,
   });
 
   if (hooksLoaded.length > 0) {

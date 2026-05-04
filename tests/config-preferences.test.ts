@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { Config } from "../src/config.js";
+import { mergeSettings, parseSettingsOverrides } from "../src/persistence.js";
 
 describe("Config preference-backed models", () => {
   it("preserves the OAuth sentinel for openai-codex presets", () => {
@@ -32,5 +33,17 @@ describe("Config preference-backed models", () => {
         }),
       ]),
     );
+  });
+});
+
+describe("process settings overrides", () => {
+  it("parses context budget override and applies it above settings", () => {
+    const settings = mergeSettings(
+      { context_budget_percent: 80, thinking_level: "medium" },
+      parseSettingsOverrides(["context_budget_percent=50"]),
+    );
+
+    expect(settings.context_budget_percent).toBe(50);
+    expect(settings.thinking_level).toBe("medium");
   });
 });

@@ -35,7 +35,7 @@ The single user-editable config file. Supports `//` and `/* */` comments.
   // Model configuration
   "default_model": "anthropic:claude-opus-4-6",  // Declarative default
   "thinking_level": "high",                       // Default thinking level
-  "context_ratio": 1.0,                           // Context window multiplier (0.0-1.0)
+  "context_budget_percent": 100,                  // Main-session context budget percentage (1-100)
 
   // Sub-agent model tiers
   "model_tiers": {

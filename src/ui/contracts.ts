@@ -120,6 +120,7 @@ export interface Session {
   lastInputTokens: number;
   lastTotalTokens: number;
   lastCacheReadTokens?: number;
+  contextBudget: number;
   onSaveRequest?: () => void;
   setStore(store: SessionStore | null): void;
   getPendingAsk(): PendingAskUi | null;

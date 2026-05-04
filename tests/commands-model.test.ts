@@ -375,7 +375,7 @@ describe("/model command", () => {
           context_length: 260000,
         },
       },
-      context_ratio: 0.75,
+      context_budget_percent: 75,
     }, null, 2));
 
     try {
@@ -438,7 +438,7 @@ describe("/model command", () => {
             context_length: 260000,
           },
         },
-        context_ratio: 0.75,
+        context_budget_percent: 75,
       });
 
       const persistedState = JSON.parse(

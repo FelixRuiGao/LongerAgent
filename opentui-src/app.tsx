@@ -248,6 +248,11 @@ export function OpenTuiApp({
   const [phase, setPhase] = useState<ActivityPhase>("idle");
   const [contextTokens, setContextTokens] = useState(0);
   const [cacheReadTokens, setCacheReadTokens] = useState(0);
+  const updateContextTokenState = useCallback((inputTokens: number | undefined, cacheTokens?: number) => {
+    if (typeof inputTokens !== "number" || !Number.isFinite(inputTokens) || inputTokens <= 0) return;
+    setContextTokens(inputTokens);
+    setCacheReadTokens(cacheTokens ?? 0);
+  }, []);
   // Usage snapshot for Codex or Copilot — only one is active at a time, based
   // on the current model provider. Hidden for all other providers.
   const [usageSnapshot, setUsageSnapshot] = useState<UsageSnapshot | null>(null);
@@ -571,8 +576,7 @@ export function OpenTuiApp({
     setPhase("Working");
     try {
       await session.resumePendingTurn({ signal: controller.signal });
-      setContextTokens(session.lastInputTokens);
-      setCacheReadTokens(session.lastCacheReadTokens ?? 0);
+      updateContextTokenState(session.lastInputTokens, session.lastCacheReadTokens ?? 0);
       setPendingAsk(session.getPendingAsk?.() ?? null);
       autoSave();
     } catch (err) {
@@ -763,10 +767,7 @@ export function OpenTuiApp({
       setPendingAsk(session.getPendingAsk?.() ?? null);
       setPermissionModeState(session.permissionMode ?? "reversible");
       setRootLogRevision(session.getLogRevision?.() ?? 0);
-      if (session.lastInputTokens > 0) {
-        setContextTokens(session.lastInputTokens);
-        setCacheReadTokens(session.lastCacheReadTokens ?? 0);
-      }
+      updateContextTokenState(session.lastInputTokens, session.lastCacheReadTokens ?? 0);
     };
 
     syncFromLog();
@@ -778,7 +779,7 @@ export function OpenTuiApp({
       if (unsubscribe) unsubscribe();
       clearInterval(poller);
     };
-  }, [selectedChildId, session]);
+  }, [selectedChildId, session, updateContextTokenState]);
 
   useEffect(() => {
     if (!isFermiOpenTuiDiagEnabled()) return;
@@ -810,10 +811,7 @@ export function OpenTuiApp({
         session.appendStatusMessage?.("[No reply] The model chose not to reply.", "no_reply");
         break;
       case "agent_end":
-        if (session.lastInputTokens > 0) {
-          setContextTokens(session.lastInputTokens);
-          setCacheReadTokens(session.lastCacheReadTokens ?? 0);
-        }
+        updateContextTokenState(session.lastInputTokens, session.lastCacheReadTokens ?? 0);
         break;
       case "ask_requested":
         setPendingAsk(session.getPendingAsk?.() ?? null);
@@ -825,8 +823,12 @@ export function OpenTuiApp({
         setAskError(null);
         break;
       case "token_update":
-        setContextTokens((event.extra["input_tokens"] as number) ?? session.lastInputTokens);
-        setCacheReadTokens((event.extra["cache_read_tokens"] as number) ?? session.lastCacheReadTokens ?? 0);
+        // Source-side guard in `onTokenUpdate` already drops zero/missing
+        // usage, so a token_update event always carries a real input_tokens.
+        updateContextTokenState(
+          event.extra["input_tokens"] as number | undefined,
+          event.extra["cache_read_tokens"] as number | undefined,
+        );
         break;
     }
   };
@@ -1367,8 +1369,7 @@ export function OpenTuiApp({
       resetUiState: () => {
         setProcessing(false);
         setPhase("idle");
-        setContextTokens(session.lastInputTokens);
-        setCacheReadTokens(session.lastCacheReadTokens ?? 0);
+        updateContextTokenState(session.lastInputTokens, session.lastCacheReadTokens ?? 0);
         setPendingAsk(null);
         setAskError(null);
       },
@@ -1432,7 +1433,7 @@ export function OpenTuiApp({
       },
       requestOAuthLogin,
     };
-  }, [session, store, commandRegistry, autoSave, performExit, resolvePromptSecret, resolvePromptSelect, requestOAuthLogin, pickerMaxVisible]);
+  }, [session, store, commandRegistry, autoSave, performExit, resolvePromptSecret, resolvePromptSelect, requestOAuthLogin, pickerMaxVisible, updateContextTokenState]);
 
   const runTurn = useCallback(async (input: string, inlineImages?: InlineImageInput[]) => {
     const controller = new AbortController();
@@ -1441,8 +1442,7 @@ export function OpenTuiApp({
     setPhase("Working");
     try {
       await session.turn(input, { signal: controller.signal, inlineImages });
-      setContextTokens(session.lastInputTokens);
-      setCacheReadTokens(session.lastCacheReadTokens ?? 0);
+      updateContextTokenState(session.lastInputTokens, session.lastCacheReadTokens ?? 0);
       setPendingAsk(session.getPendingAsk?.() ?? null);
       autoSave();
     } catch (err) {
@@ -1460,7 +1460,7 @@ export function OpenTuiApp({
         setPhase("idle");
       }
     }
-  }, [session, autoSave]);
+  }, [session, autoSave, updateContextTokenState]);
 
   const runManualSummarize = useCallback(async (opts: { targetContextIds?: string[]; focusPrompt?: string }) => {
     if (typeof session.runManualSummarize !== "function") {
@@ -2836,7 +2836,7 @@ export function OpenTuiApp({
     ? (theme.presentation.modelProviderColors[childSnapshot.modelProvider] ?? modelNameColor)
     : modelNameColor;
   const effectiveContextTokens = childSnapshot ? childSnapshot.inputTokens : contextTokens;
-  const effectiveContextLimit = childSnapshot ? childSnapshot.contextBudget : session.primaryAgent.modelConfig?.contextLength;
+  const effectiveContextLimit = childSnapshot ? childSnapshot.contextBudget : session.contextBudget;
   const effectiveCacheReadTokens = childSnapshot ? childSnapshot.cacheReadTokens : cacheReadTokens;
   const effectiveProcessing = childSnapshot ? childSnapshot.running : processing;
   const effectiveEntries = presentationEntries;
