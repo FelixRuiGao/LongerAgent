@@ -55,6 +55,17 @@ fermi           # 开始会话
 
 [完整上下文管理指南 →](https://felixruigao.github.io/Fermi/guide/context)
 
+## 精致的终端界面
+
+所有细节无需离开终端即可查看。Tool result、文件 diff、bash 输出以智能截断的形式内联展示——点击任意条目即可在独立的详情视图中查看完整内容。子 Agent 拥有独立的对话 tab 页；点击 Agent 名称或使用 `Opt+←/→` 切换。
+
+![子 Agent 详情页 — 完整的 review 输出、独立 tab、Agent 状态和 todo 进度](assets/sub-agent-page.png)
+
+- **语法高亮 diff** — 文件编辑显示为红/绿 hunk，附带上下文行；新文件渲染带行号
+- **可点击的文件路径** — hover 高亮，点击在编辑器中打开
+- **实时状态栏** — Agent 数量、计划进度、模型名称、权限模式、上下文用量和 token 计数
+- **工具分组** — 连续的读取/搜索操作折叠为摘要，如 "Explored (Read ×3, Search ×2)"
+
 ## 子 Agent
 
 Agent 自主创建拥有独立上下文窗口的并行工作者：

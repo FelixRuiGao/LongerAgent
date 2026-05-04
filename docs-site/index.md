@@ -19,6 +19,8 @@ hero:
 features:
   - title: Fine-Grained Context Control
     details: The agent sees the token cost of every context block and compresses what it chooses — even a single tool result. Three layers (hints → agent summarization → auto-compact) keep sessions alive for hours.
+  - title: Rich Terminal UI
+    details: Syntax-highlighted diffs, clickable file paths, expandable tool results, and dedicated sub-agent tabs. Every detail is accessible without leaving the terminal.
   - title: Async Messaging
     details: Type messages at any time, even mid-task. Messages queue and deliver when the agent pauses between actions. No waiting, no restart needed.
   - title: Sub-Agents with Model Tiers

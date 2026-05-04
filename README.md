@@ -56,6 +56,17 @@ Context usage ━━━━━━━━━━━━━━━━━━━━━━
 
 [Full context management guide →](https://felixruigao.github.io/Fermi/guide/context)
 
+## Rich Terminal UI
+
+Every detail is accessible without leaving the terminal. Tool results, file diffs, and bash output are shown inline with smart truncation — click any entry to expand the full content in a dedicated detail view. Sub-agents get their own conversation tabs; click an agent name or use `Opt+←/→` to switch between them.
+
+![Sub-agent detail page — full review output with its own tab, agent status, and todos](assets/sub-agent-page.png)
+
+- **Syntax-highlighted diffs** — file edits shown as red/green hunks with context lines; writes render with line numbers
+- **Clickable file paths** — hover highlights, click opens in your editor
+- **Live status bar** — agent count, plan progress, model name, permission mode, context usage with token counts
+- **Tool grouping** — consecutive reads/searches collapse into a summary like "Explored (Read ×3, Search ×2)"
+
 ## Sub-Agents
 
 The agent spawns parallel workers with their own context windows:

@@ -2,6 +2,10 @@
 
 Fermi can spawn parallel sub-agents within a session. Each sub-agent has its own context window and tool access, runs concurrently with the main agent, and reports results back when finished.
 
+Each sub-agent gets a dedicated tab in the TUI. Click the agent's name in the main conversation or use `Opt+←/→` to switch between tabs. The sub-agent's full conversation — tool calls, diffs, bash output — is visible in its own scrollable view.
+
+![Sub-agent detail page — full review output with dedicated tab, status, and plan todos](/sub-agent-page.png)
+
 ## How It Works
 
 1. The main agent calls `spawn` to create a sub-agent with a task.
