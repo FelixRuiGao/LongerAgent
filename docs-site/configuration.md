@@ -11,6 +11,7 @@ Fermi loads bundled defaults from the installed package and user overrides from 
 ├── mcp.json               # MCP server configurations (optional, user-edited)
 ├── auth.json              # OAuth tokens (auto-managed)
 ├── agent_templates/       # User template overrides
+├── hooks/                 # User hooks (global)
 ├── skills/                # User skills
 └── prompts/               # User prompt overrides
 ```
