@@ -45,7 +45,14 @@ fermi           # 开始会话
 
 <!-- MEDIA: 双面板对比 — 左: /summarize 交互式选择器；右: Agent 自主调用 show_context → summarize -->
 
-三层机制防止上下文悄然溢出：系统提示在 60% 时引导 Agent 开始压缩，Agent 自主精确压缩提供细粒度控制，auto-compact 在 85% 时兜底。
+三层机制防止上下文悄然溢出：
+
+```
+上下文用量 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100%
+              ▲ 60%            ▲ 80%       ▲ 85%    ▲ 90%
+              提示 L1          提示 L2     compact   compact
+              (引导压缩)        (紧急)     (turn前)   (turn中)
+```
 
 [完整上下文管理指南 →](https://felixruigao.github.io/Fermi/guide/context)
 
