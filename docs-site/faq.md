@@ -71,7 +71,7 @@ Context size affects performance. Try:
 1. **Summarize:** `/summarize` to compress older context segments
 2. **Compact:** `/compact` for a full context reset
 3. **Switch models:** `/model` to switch to a faster model
-4. **Reduce context budget:** Set `context_budget_percent` lower in tui-preferences.json
+4. **Reduce context budget:** Set `context_budget_percent` lower in `~/.fermi/settings.json`
 
 ### How do I stop the agent mid-task?
 
