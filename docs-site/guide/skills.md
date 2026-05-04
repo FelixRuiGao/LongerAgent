@@ -1,6 +1,6 @@
 # Skills
 
-Skills are reusable tool definitions that the agent can load on demand. They extend the agent's capabilities without modifying its core tools.
+Skills are reusable prompt expansions that the agent can load on demand. They extend the agent's capabilities without modifying its core tools. The format follows the [Agent Skills](https://agentskills.io) open standard.
 
 ## Using Skills
 
