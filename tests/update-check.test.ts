@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { checkForUpdates } from "../src/update-check.js";
 
 describe("checkForUpdates", () => {
@@ -12,7 +12,6 @@ describe("checkForUpdates", () => {
   beforeEach(() => {
     tempHome = mkdtempSync(join(tmpdir(), "fermi-update-check-"));
     tempFermiHome = join(tempHome, ".fermi");
-    spyOn(console, "log").mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -25,46 +24,55 @@ describe("checkForUpdates", () => {
     rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it("prints a cached notice synchronously when available", () => {
+  it("returns a cached notice synchronously when available", () => {
     mkdirSync(tempFermiHome, { recursive: true });
     writeFileSync(join(tempFermiHome, ".update-check.json"), JSON.stringify({
       lastCheck: Date.now(),
       latestVersion: "0.2.0",
-      notice: "Breaking change",
     }));
 
-    const showUpdateNotice = checkForUpdates("0.1.0", tempFermiHome);
-    showUpdateNotice();
+    const getNotice = checkForUpdates("0.1.0", tempFermiHome);
+    const notice = getNotice();
 
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("Update available: 0.1.0 → 0.2.0"));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("Breaking change"));
+    expect(notice).toContain("0.1.0");
+    expect(notice).toContain("0.2.0");
   });
 
-  it("does not print asynchronously after the caller already rendered startup output", async () => {
+  it("returns null when no update is available from cache", () => {
+    mkdirSync(tempFermiHome, { recursive: true });
+    writeFileSync(join(tempFermiHome, ".update-check.json"), JSON.stringify({
+      lastCheck: Date.now(),
+      latestVersion: "0.1.0",
+    }));
+
+    const getNotice = checkForUpdates("0.1.0", tempFermiHome);
+    expect(getNotice()).toBeNull();
+  });
+
+  it("does not return a notice before the background fetch completes", async () => {
     let resolveFetch!: (value: {
       ok: boolean;
-      json: () => Promise<{ version: string }>;
+      json: () => Promise<{ tag_name: string; assets: { name: string; browser_download_url: string }[] }>;
     }) => void;
     const pendingFetch = new Promise<{
       ok: boolean;
-      json: () => Promise<{ version: string }>;
+      json: () => Promise<{ tag_name: string; assets: { name: string; browser_download_url: string }[] }>;
     }>((resolve) => {
       resolveFetch = resolve;
     });
     globalThis.fetch = mock(async () => await pendingFetch) as typeof fetch;
 
-    const showUpdateNotice = checkForUpdates("0.1.0", tempFermiHome);
-    showUpdateNotice();
-
-    expect(console.log).not.toHaveBeenCalled();
+    const getNotice = checkForUpdates("0.1.0", tempFermiHome);
+    expect(getNotice()).toBeNull();
 
     resolveFetch({
       ok: true,
-      json: async () => ({ version: "0.2.0" }),
+      json: async () => ({ tag_name: "v0.2.0", assets: [] }),
     });
-    await Promise.resolve();
-    await Promise.resolve();
 
-    expect(console.log).not.toHaveBeenCalled();
+    // Let the background promise chain settle
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(getNotice()).toContain("0.2.0");
   });
 });

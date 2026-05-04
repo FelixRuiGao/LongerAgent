@@ -628,6 +628,10 @@ export interface FermiSettings {
 
   // -- MCP Servers (global + local merge) --
   mcp_servers?: Record<string, MCPServerSettingsEntry>;
+
+  // -- Updates --
+  /** Enable background update checks on startup. Default: true. */
+  auto_update?: boolean;
 }
 
 /**
@@ -1450,6 +1454,7 @@ export function saveSettings(settings: FermiSettings, filePath: string): void {
   if (settings.agent_models !== undefined) clean.agent_models = settings.agent_models;
   if (settings.sub_agent_inherit_mcp !== undefined) clean.sub_agent_inherit_mcp = settings.sub_agent_inherit_mcp;
   if (settings.sub_agent_inherit_hooks !== undefined) clean.sub_agent_inherit_hooks = settings.sub_agent_inherit_hooks;
+  if (settings.auto_update !== undefined) clean.auto_update = settings.auto_update;
   writeFileSync(tmp, JSON.stringify(clean, null, 2));
   renameSync(tmp, filePath);
 }

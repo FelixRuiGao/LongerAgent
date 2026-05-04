@@ -42,7 +42,6 @@ import {
   type PromptSelectRequest,
 } from "./provider-credential-flow.js";
 import { resolveSkillContent, type SkillMeta } from "./skills/loader.js";
-import { ACCENT_PRESETS, DEFAULT_ACCENT, setAccent, theme } from "./accent.js";
 import { buildModelPickerTree, toCommandPickerOptions, type ModelPickerTreeContext } from "./model-picker-tree.js";
 import { describeModel, formatCurrentModelScopedLabel, getCurrentModelDescriptor } from "./model-presentation.js";
 import { hasOAuthTokens, isTokenExpiring, readOAuthAccessToken, clearOAuthTokens } from "./auth/openai-oauth.js";
@@ -1218,49 +1217,38 @@ async function cmdAddProvider(ctx: CommandContext): Promise<boolean> {
 }
 
 // ------------------------------------------------------------------
-// /theme command
+// /autoupdate — toggle automatic update checks
 // ------------------------------------------------------------------
 
-function themeOptions(_ctx: CommandOptionsContext): CommandOption[] {
-  const current = theme.accent;
-  return ACCENT_PRESETS.map((preset) => {
-    const isCurrent = preset.value === current;
-    return {
-      label: isCurrent ? `${preset.label}  (current)` : preset.label,
-      value: preset.value,
-    };
-  });
+function autoUpdateOptions(_ctx: CommandOptionsContext): CommandOption[] {
+  const current = loadGlobalSettings().auto_update !== false;
+  return [
+    { label: current ? "On (current)" : "On", value: "on" },
+    { label: current ? "Off" : "Off (current)", value: "off" },
+  ];
 }
 
-async function cmdTheme(ctx: CommandContext, args: string): Promise<void> {
-  const trimmed = args.trim();
+async function cmdAutoUpdate(ctx: CommandContext, args: string): Promise<void> {
+  const hint = ctx.showHint ?? ctx.showMessage;
+  let choice = args.trim().toLowerCase();
 
-  if (!trimmed) {
-    ctx.showMessage(
-      `Current accent: ${theme.accent}\n` +
-      "Use /theme to select a new accent color.",
+  if (!choice && ctx.promptCommandPicker) {
+    const picked = await ctx.promptCommandPicker(
+      autoUpdateOptions({ session: ctx.session, store: ctx.store }),
     );
+    if (!picked) return;
+    choice = picked;
+  }
+
+  if (choice === "on" || choice === "off") {
+    const enabled = choice === "on";
+    persistSettingsPatch({ auto_update: enabled }, ctx.fermiHomeDir);
+    hint(`Auto-update: ${enabled ? "ON" : "OFF"}`);
     return;
   }
 
-  // Accept preset label (case-insensitive) or raw hex value
-  const preset = ACCENT_PRESETS.find(
-    (p) => p.value === trimmed || p.label.toLowerCase() === trimmed.toLowerCase(),
-  );
-  const color = preset ? preset.value : trimmed;
-
-  // Basic hex validation
-  if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
-    ctx.showMessage(`Invalid color: "${trimmed}". Use a preset name or a hex color like #3b82f6.`);
-    return;
-  }
-
-  setAccent(color);
-  ctx.session.accentColor = color;
-  persistSettingsPatch({ accent_color: color }, ctx.fermiHomeDir);
-
-  const label = preset ? `${preset.label} (${color})` : color;
-  ctx.showMessage(`Accent color set to: ${label}`);
+  const current = loadGlobalSettings().auto_update !== false;
+  ctx.showMessage(`Auto-update is ${current ? "ON" : "OFF"}.\nUsage: /autoupdate on | off`);
 }
 
 // ------------------------------------------------------------------
@@ -1641,6 +1629,7 @@ export function buildDefaultRegistry(): CommandRegistry {
   registry.register({ name: "/hooks", description: "Show registered hooks", handler: cmdHooks });
   registry.register({ name: "/copy", description: "Copy the agent's most recent text response", handler: cmdCopy });
   registry.register({ name: "/fork", description: "Fork the current session into a new branch", handler: cmdFork });
+  registry.register({ name: "/autoupdate", description: "Toggle automatic update checks", handler: cmdAutoUpdate, options: autoUpdateOptions });
   return registry;
 }
 

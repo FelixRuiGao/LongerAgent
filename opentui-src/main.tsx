@@ -268,11 +268,21 @@ function isDirectEntry(): boolean {
 }
 
 if (isDirectEntry()) {
-  launchTui().catch((err) => {
-    writeFermiOpenTuiDiag("main.catch", {
-      error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+  const subcommand = process.argv[2];
+  if (subcommand === "update") {
+    import("../src/version.js").then(({ VERSION }) =>
+      import("../src/update-check.js").then(({ runUpdate }) => runUpdate(VERSION)),
+    ).then(() => process.exit(0)).catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
     });
-    console.error("Fatal OpenTUI error:", err);
-    process.exit(1);
-  });
+  } else {
+    launchTui().catch((err) => {
+      writeFermiOpenTuiDiag("main.catch", {
+        error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+      });
+      console.error("Fatal OpenTUI error:", err);
+      process.exit(1);
+    });
+  }
 }

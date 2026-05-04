@@ -33,7 +33,7 @@ import {
 } from "./persistence.js";
 import { loadDotenv } from "./dotenv.js";
 import { getFermiHomeDir } from "./home-path.js";
-import { checkForUpdates } from "./update-check.js";
+import { checkForUpdates, applyStaged } from "./update-check.js";
 import { VERSION } from "./version.js";
 import {
   buildDefaultRegistry,
@@ -236,6 +236,15 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       }
     });
 
+  program
+    .command("update")
+    .description("Check for and install the latest version")
+    .action(async () => {
+      ranSubcommand = true;
+      const { runUpdate } = await import("./update-check.js");
+      await runUpdate(VERSION);
+    });
+
   // Default action — prevents Commander from showing help and exiting
   // when no subcommand is provided.
   program.action(() => {});
@@ -255,8 +264,17 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     verbose?: boolean;
   }>();
 
-  // Start update check in background (non-blocking)
-  const showUpdateNotice = checkForUpdates(VERSION);
+  // Apply staged update from a previous background download
+  const appliedVersion = applyStaged();
+  if (appliedVersion) {
+    console.log(`  Updated to ${appliedVersion}.\n`);
+  }
+
+  // Start update check in background (non-blocking) if enabled
+  const autoUpdateEnabled = loadGlobalSettings().auto_update !== false;
+  const getUpdateNotice = autoUpdateEnabled
+    ? checkForUpdates(VERSION)
+    : () => null;
 
   // Logging
   if (opts.verbose) {
@@ -461,7 +479,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   registerSkillCommands(commandRegistry, session.skills);
 
   // Show update notice (if background check found a newer version)
-  showUpdateNotice();
+  const updateNotice = getUpdateNotice();
+  if (updateNotice) console.log(`  ${updateNotice}\n`);
 
   // Launch TUI (OpenTUI-based). The OpenTUI entry point performs its own
   // runtime bootstrap via `bootstrapOpenTuiRuntime()`; the session/registry
