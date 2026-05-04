@@ -1,7 +1,7 @@
 # Fermi
 
 <p align="center">
-  <strong>A terminal AI coding agent built for long sessions.</strong>
+  <strong>The coding agent that compresses its own memory.</strong>
 </p>
 <p align="center">
   English | <a href="./README.zh-CN.md">中文</a>
@@ -13,9 +13,7 @@
 
 <!-- MEDIA: Hero screenshot — TUI mid-session with context annotations visible, showing the agent working on a real task -->
 
-Fermi keeps an AI coding agent productive for hours by giving it fine-grained control over its own context. Instead of hitting limits and resetting blind, the agent inspects its context distribution and surgically compresses what it no longer needs — down to a single tool result.
-
-Three layers cooperate: **hint compression** nudges the agent early, **agent-initiated summarization** gives surgical control, and **auto-compact** catches anything that slips through.
+Fermi is a terminal AI coding agent that can run for hours without losing important context. The agent inspects its own context window, decides what is still valuable, and surgically compresses the rest — down to a single tool call result. No blind resets, no lost decisions.
 
 > **Platform:** macOS (Apple Silicon). **License:** MIT.
 
@@ -47,15 +45,7 @@ The user can also intervene directly:
 
 <!-- MEDIA: Two-panel comparison — left: /summarize interactive picker UI; right: agent calling show_context → summarize autonomously -->
 
-### Three Layers
-
-| Layer | Trigger | Effect |
-|-------|---------|--------|
-| Hint compression | 60% / 80% of budget | System nudges agent to summarize |
-| Agent summarization | Agent decides | Surgical compression of specific blocks |
-| Auto-compact | 85% / 90% of budget | Full reset with continuation prompt |
-
-The `context_budget_percent` setting lets you restrict effective context without changing models.
+Three layers prevent context from ever silently overflowing: system hints nudge early (60%), agent-initiated summarization gives precise control, and auto-compact (85%) catches anything that slips through.
 
 [Full context management guide →](https://felixruigao.github.io/Fermi/guide/context)
 
@@ -84,35 +74,15 @@ spawn(id="auth-check", template="explorer", mode="oneshot", model_level="low", t
 
 ## Providers
 
-| Provider | Auth |
-|----------|------|
-| Anthropic (Claude) | `ANTHROPIC_API_KEY` |
-| OpenAI | `OPENAI_API_KEY` or ChatGPT OAuth |
-| GitHub Copilot | `/copilot` device-flow login |
-| DeepSeek | Managed slot |
-| Kimi / Moonshot | Managed slots |
-| MiniMax | Managed slots |
-| GLM / Zhipu | Managed slots |
-| Xiaomi (MiMo) | Managed slot |
-| OpenRouter | `OPENROUTER_API_KEY` |
-| Ollama / oMLX / LM Studio | Local — no key needed |
+Anthropic · OpenAI · GitHub Copilot · DeepSeek · Kimi · MiniMax · GLM · Xiaomi · OpenRouter · Ollama · oMLX · LM Studio
 
-Switch at runtime with `/model`. Configure sub-agent tiers with `/tier`.
+Cloud or local, your choice. Switch at runtime with `/model`. `fermi init` handles setup.
 
-## Commands
+[Provider setup guide →](https://felixruigao.github.io/Fermi/providers/)
 
-| Command | Description |
-|---------|-------------|
-| `/model` | Switch model |
-| `/summarize` | Compress older context |
-| `/compact` | Full context reset |
-| `/rewind` | Roll back to previous turn |
-| `/session` | Resume previous session |
-| `/permission` | Set safety mode (read_only / reversible / yolo) |
-| `/tier` | Configure sub-agent model tiers |
-| `/skills` | Manage skills |
-| `/mcp` | MCP server status |
-| `/fork` | Fork session |
+## Key Commands
+
+`/model` switch model · `/summarize` compress context · `/compact` full reset · `/rewind` undo turns + files · `/permission` safety mode · `/tier` sub-agent models · `/session` resume · `/fork` branch session · `/skills` manage skills · `/mcp` MCP tools
 
 [Full command reference →](https://felixruigao.github.io/Fermi/guide/commands)
 

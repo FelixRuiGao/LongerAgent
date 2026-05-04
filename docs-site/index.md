@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Fermi
-  text: A coding agent built for long sessions.
-  tagline: Three-layer context management keeps the agent productive for hours without a full reset.
+  text: The coding agent that compresses its own memory.
+  tagline: Surgical context control lets a single session run for hours — no blind resets, no lost decisions.
   actions:
     - theme: brand
       text: Get Started
