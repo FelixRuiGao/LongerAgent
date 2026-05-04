@@ -95,6 +95,15 @@ Fermi does not sandbox shell commands or file edits. It executes commands and wr
 - **reversible** — read + reversible writes auto-allowed
 - **yolo** — everything auto-allowed except catastrophic operations
 
+## Persistent Memory
+
+Two `AGENTS.md` files are loaded on every turn and survive compact resets:
+
+- **`~/AGENTS.md`** — global preferences across all projects
+- **`<project>/AGENTS.md`** — project-specific patterns, conventions, and decisions
+
+The agent reads these automatically and can write to them when you ask it to save knowledge for future sessions.
+
 ## Next Steps
 
 - [Context Management](/guide/context) — the core feature in depth
