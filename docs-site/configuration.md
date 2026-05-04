@@ -25,15 +25,23 @@ User-editable settings file (JSONC format). Created manually or via `-c` overrid
 {
   "context_budget_percent": 80,
   "permission_mode": "reversible",
-  "accent_color": "#4b4bf0"
+  "default_model": "anthropic:claude-opus-4-6",
+  "thinking_level": "high"
 }
 ```
 
 | Setting | Type | Description |
 |---------|------|-------------|
-| `context_budget_percent` | number (1–100) | Restricts effective context to this percentage of model max. Default: 100. |
-| `permission_mode` | string | Default permission mode: `read_only`, `reversible`, or `yolo`. |
-| `accent_color` | string | Hex color for the TUI accent. |
+| `context_budget_percent` | number (1–100) | Effective context as percentage of model max. Default: 100. |
+| `permission_mode` | string | Default mode: `read_only`, `reversible`, or `yolo`. |
+| `default_model` | string | Declarative default model (overrides init-wizard selection). |
+| `thinking_level` | string | Default thinking level for the main agent. |
+| `model_tiers` | object | Sub-agent tiers: `{ high: {...}, medium: {...}, low: {...} }`. |
+| `sub_agent_inherit_mcp` | boolean | Sub-agents inherit MCP servers. Default: true. |
+| `sub_agent_inherit_hooks` | boolean | Sub-agents inherit hooks. Default: true. |
+| `disabled_skills` | string[] | Skills disabled by default. |
+| `accent_color` | string | Hex color for TUI accent. |
+| `mcp_servers` | object | MCP servers (alternative to mcp.json, supports local overrides). |
 
 Override per-session via CLI: `fermi -c context_budget_percent=70`.
 
