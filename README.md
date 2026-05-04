@@ -71,7 +71,7 @@ spawn(id="auth-check", template="explorer", mode="oneshot", model_level="low", t
 
 ## Session Control
 
-- **Async messaging** — type while the agent works. Messages queue and deliver at the next activation boundary.
+- **Async messaging** — type while the agent works. Messages queue and deliver when the agent pauses between actions.
 - **Rewind** — `/rewind` rolls back to any previous turn, reverting conversation **and** file changes.
 - **Fork** — `/fork` branches the current session into a new direction.
 - **Persistent memory** — `AGENTS.md` files (global + project) survive compact and session restarts.

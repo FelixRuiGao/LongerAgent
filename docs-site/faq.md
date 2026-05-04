@@ -77,7 +77,7 @@ Context size affects performance. Try:
 
 Press `Ctrl+C` to interrupt the current turn. The agent stops cleanly, and you can continue the conversation.
 
-You can also type a new message at any time — it queues and delivers at the next activation boundary without interrupting the agent.
+You can also type a new message at any time — it queues and delivers when the agent pauses between actions without interrupting the agent.
 
 ### Can I undo something the agent did?
 

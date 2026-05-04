@@ -17,7 +17,7 @@ features:
   - title: Fine-Grained Context Control
     details: The agent sees the token cost of every context block and compresses what it chooses — even a single tool result. Three layers (hints → agent summarization → auto-compact) keep sessions alive for hours.
   - title: Async Messaging
-    details: Type messages at any time, even mid-task. Messages queue and deliver at the next activation boundary. No waiting, no restart needed.
+    details: Type messages at any time, even mid-task. Messages queue and deliver when the agent pauses between actions. No waiting, no restart needed.
   - title: Sub-Agents with Model Tiers
     details: Spawn explorer, executor, and reviewer sub-agents — each with its own context window, running in parallel. Assign high/medium/low model tiers to balance cost and capability.
   - title: Rewind & Fork

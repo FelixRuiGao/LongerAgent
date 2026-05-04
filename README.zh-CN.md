@@ -70,7 +70,7 @@ spawn(id="auth-check", template="explorer", mode="oneshot", model_level="low", t
 
 ## 会话控制
 
-- **异步消息** — Agent 工作时随时输入。消息排队，在下一个激活边界投递。
+- **异步消息** — Agent 工作时随时输入。消息排队，在 Agent 两次动作之间投递。
 - **回退** — `/rewind` 回退到任意之前的 turn，同时恢复对话状态**和**文件变更。
 - **分叉** — `/fork` 将当前会话分支到新方向。
 - **持久记忆** — `AGENTS.md` 文件（全局 + 项目级）在 compact 和会话重启后保留。
