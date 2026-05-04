@@ -30,7 +30,6 @@ crash-diag.log
 tmp_repos/
 experiments/
 gui_legacy/
-docs-site/
 
 # GUI build artifacts (gui/ itself is now tracked)
 gui/node_modules/
