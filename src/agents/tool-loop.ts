@@ -601,8 +601,8 @@ export interface ToolLoopResult {
   lastRoundId?: string;
   /** Whether the tool loop detected that compact is needed. */
   compactNeeded?: boolean;
-  /** Which scenario triggered compact: "output" (no tool calls) or "toolcall" (after tool execution). */
-  compactScenario?: "output" | "toolcall";
+  /** Which scenario triggered compact. */
+  compactScenario?: "mid_turn";
   /** Total tokens (input + output) from the last provider call. */
   lastTotalTokens?: number;
   /** Whether the final assistant text was already materialized by stream callbacks. */
@@ -726,7 +726,7 @@ export interface ToolLoopOptions {
     inputTokens: number,
     outputTokens: number,
     hasToolCalls: boolean,
-  ) => { compactNeeded: boolean; scenario?: "output" | "toolcall" } | null;
+  ) => { compactNeeded: boolean; scenario?: "mid_turn" } | null;
   /** Unified thinking level override (passed to provider). */
   thinkingLevel?: string;
   /** Routing key for OpenAI prompt cache affinity (e.g. child session id). */
@@ -1452,7 +1452,7 @@ export async function asyncRunToolLoop(
 
     // Compact check after each provider call
     let compactTriggered = false;
-    let compactScenario: "output" | "toolcall" | undefined;
+    let compactScenario: "mid_turn" | undefined;
 
     if (compactCheck) {
       const check = compactCheck(
@@ -1498,8 +1498,8 @@ export async function asyncRunToolLoop(
         reasoningContent: resp.reasoningContent,
         reasoningState: resp.reasoningState,
         lastRoundId: lastRoundId,
-        compactNeeded: compactTriggered,
-        compactScenario: compactTriggered ? "output" : undefined,
+        compactNeeded: false,
+        compactScenario: undefined,
         lastTotalTokens: resp.usage.inputTokens + resp.usage.outputTokens,
         textHandledInLog: streamCallbacksOwnEntries && textHandledViaCallback,
         reasoningHandledInLog: streamCallbacksOwnEntries && reasoningHandledViaCallback,
@@ -1601,7 +1601,7 @@ export async function asyncRunToolLoop(
         reasoningState: lastReasoningState,
         lastRoundId: lastRoundId,
         compactNeeded: true,
-        compactScenario: "toolcall",
+        compactScenario: "mid_turn",
         lastTotalTokens: resp.usage.inputTokens + resp.usage.outputTokens,
         textHandledInLog: streamCallbacksOwnEntries && textHandledViaCallback,
         reasoningHandledInLog: streamCallbacksOwnEntries && reasoningHandledViaCallback,

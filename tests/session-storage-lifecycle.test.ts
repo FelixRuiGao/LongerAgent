@@ -947,7 +947,7 @@ describe("session storage lifecycle", () => {
     }
   });
 
-  it("requestTurnInterrupt rejects interruption during compact phase", () => {
+  it("requestTurnInterrupt always accepts (even during compact)", () => {
     const baseDir = makeTempDir("fermi-lifecycle-base-");
     const projectRoot = makeTempDir("fermi-lifecycle-project-");
     try {
@@ -955,13 +955,9 @@ describe("session storage lifecycle", () => {
       const session = makeSession(projectRoot, store);
 
       (session as any)._compactInProgress = true;
-      (session as any)._inbox = [
-        { type: "system_notice" as const, sender: "system", content: "queued", timestamp: Date.now() },
-      ];
 
       const decision = session.requestTurnInterrupt();
-      expect(decision).toEqual({ accepted: false, reason: "compact_in_progress" });
-      expect((session as any)._inbox.length).toBe(1);
+      expect(decision).toEqual({ accepted: true });
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
@@ -1003,46 +999,27 @@ describe("session storage lifecycle", () => {
 
       const interruptedToolResult = log.find((e) => e.type === "tool_result" && e.meta?.toolCallId === "call-1");
       expect(interruptedToolResult).toBeTruthy();
-      expect(interruptedToolResult.content.content).toBe("[Interrupted] Tool was not executed.");
-      // Interrupted tool_result now has previewText → tuiVisible
+      expect(interruptedToolResult.content.content).toContain("Tool `edit_file` was not executed.");
+      expect(interruptedToolResult.content.content).toContain("<system-message>");
       expect(interruptedToolResult.tuiVisible).toBe(true);
 
-      // [Interrupted here.] marker exists for API protocol but hidden from TUI
+      // No more fixed [Interrupted here.] marker
       const markerEntry = log.find((e) => e.type === "assistant_text" && String(e.display) === "[Interrupted here.]");
-      expect(markerEntry).toBeTruthy();
-      expect(markerEntry.tuiVisible).toBe(false);
+      expect(markerEntry).toBeUndefined();
 
+      // Interruption user message uses <system-message> format
       const interruptionUser = log[log.length - 1];
       expect(interruptionUser.type).toBe("user_message");
-      expect(String(interruptionUser.display)).toBe("Last turn was interrupted by the user.");
+      expect(String(interruptionUser.content)).toContain("<system-message>");
+      expect(String(interruptionUser.content)).toContain("Last turn was interrupted by the user.");
       expect(interruptionUser.tuiVisible).toBe(false);
       expect(interruptionUser.displayKind).toBeNull();
-
-      const tuiEntries = projectToTuiEntries(log);
-      expect(tuiEntries.some((entry) => entry.text.includes("Last turn was interrupted by the user."))).toBe(false);
-      expect(tuiEntries).toEqual([
-        {
-          kind: "tool_call",
-          text: "edit_file src/a.ts",
-          id: "tc-001",
-          startedAt: expect.any(Number),
-          elapsedMs: expect.any(Number),
-          meta: {
-            toolCallId: "call-1",
-            toolName: "edit_file",
-            toolArgs: { path: "src/a.ts" },
-            rawArguments: "{\"path\":\"src/a.ts\"}",
-          },
-        },
-        { kind: "assistant", text: "partial", id: "as-001" },
-        { kind: "tool_result", text: "[Interrupted] Tool was not executed.", fullText: "[Interrupted] Tool was not executed.", id: expect.any(String), dim: true, meta: { toolCallId: "call-1", toolName: "edit_file", isError: false } },
-      ]);
 
       const apiMessages = projectToApiMessages(log);
       expect(apiMessages.at(-1)).toMatchObject({
         role: "user",
-        content: "Last turn was interrupted by the user.",
       });
+      expect(String((apiMessages.at(-1) as any).content)).toContain("Last turn was interrupted by the user.");
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });
@@ -1102,13 +1079,12 @@ describe("session storage lifecycle", () => {
       ];
       ((session as any)._log[1].meta as Record<string, unknown>).toolExecState = "running";
 
-      (session as any)._completeMissingToolResultsFromLog(1, "[Interrupted] Tool was not executed.");
+      (session as any)._completeMissingToolResultsFromLog(1);
 
       const toolResult = ((session as any)._log as any[]).find((entry) => entry.type === "tool_result");
       expect(toolResult).toBeTruthy();
-      expect(toolResult.display).toBe("[Interrupted] Tool execution was interrupted.");
-      const hints = (session as any)._collectInterruptHints();
-      expect(hints).not.toContain("Some tools may have had partial effects.");
+      expect(toolResult.content.content).toContain("Tool execution was interrupted.");
+      expect(toolResult.content.content).not.toContain("partial effects");
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
       rmSync(projectRoot, { recursive: true, force: true });

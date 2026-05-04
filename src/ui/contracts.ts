@@ -98,7 +98,7 @@ export type { InlineImageInput };
 export interface Session {
   turn(userInput: string, options?: { signal?: AbortSignal; inlineImages?: InlineImageInput[] }): Promise<string>;
   close(): Promise<void>;
-  requestTurnInterrupt?(): { accepted: boolean; reason?: "compact_in_progress" };
+  requestTurnInterrupt?(): { accepted: true };
   cancelCurrentTurn?(): void;
   interruptAllChildAgents?(): void;
   hasRunningChildAgents?(): boolean;

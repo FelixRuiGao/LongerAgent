@@ -179,6 +179,7 @@ import {
   DEFAULT_THRESHOLDS,
   computeHysteresisThresholds,
 } from "./settings.js";
+import { encode as gptEncode } from "gpt-tokenizer/model/gpt-5";
 // ------------------------------------------------------------------
 // Message migration helper (old AgentMessage → MessageEnvelope)
 // ------------------------------------------------------------------
@@ -340,6 +341,10 @@ const SAFE_INTERRUPT_TOOLS = new Set([
   "web_fetch",
   "web_search",
   "bash_output",
+]);
+
+const LONG_RUNNING_TOOLS = new Set([
+  "bash",
 ]);
 
 // ------------------------------------------------------------------
@@ -1640,11 +1645,7 @@ export class Session {
    * This captures a non-destructive delivery snapshot first, then kills active
    * workers and drops unconsumed runtime state.
    */
-  requestTurnInterrupt(): { accepted: boolean; reason?: "compact_in_progress" } {
-    if (this._compactInProgress) {
-      return { accepted: false, reason: "compact_in_progress" };
-    }
-
+  requestTurnInterrupt(): { accepted: true } {
     // Abort main turn ONLY. Sub-agents and background shells are independent
     // background work — they continue running. Explicit Ctrl+X / Ctrl+K
     // kills them separately.
@@ -2957,8 +2958,6 @@ export class Session {
     }
 
     if (turnStartIndex < 0 || interruptedTurnIndex < 0) return;
-
-    const interruptedMarker = "[Interrupted here.]";
     this._activeLogEntryId = null;
 
     let latestRound: number | undefined;
@@ -2987,33 +2986,18 @@ export class Session {
       }
     }
 
-    // Partial text is kept as-is (no suffix appended).
-
     const originalTurnCount = this._turnCount;
     this._turnCount = interruptedTurnIndex;
-    this._completeMissingToolResultsFromLog(turnStartIndex, "[Interrupted] Tool was not executed.");
+    this._completeMissingToolResultsFromLog(turnStartIndex);
 
-    // Create [Interrupted here.] marker for API protocol (ensures proper role alternation
-    // and model awareness), but hide from TUI — interrupted tools show their own status.
-    const markerCtxId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
-    const markerEntry = createAssistantText(
-      this._nextLogId("assistant_text"),
-      interruptedTurnIndex,
-      this._computeNextRoundIndex(),
-      interruptedMarker,
-      interruptedMarker,
-      markerCtxId,
-    );
-    markerEntry.tuiVisible = false;
-    markerEntry.displayKind = null;
-    this._appendEntry(markerEntry, false);
-
+    // Inject <system-message> about the recovery (same format as live interrupt).
+    const interruptionContent = `<system-message>\n${message}\n</system-message>`;
     const interruptionCtxId = this._allocateContextId();
     const interruptionEntry = createUserMessageEntry(
       this._nextLogId("user_message"),
       interruptedTurnIndex,
-      message,
-      message,
+      "",
+      interruptionContent,
       interruptionCtxId,
     );
     interruptionEntry.tuiVisible = false;
@@ -3888,7 +3872,7 @@ export class Session {
       this._agentState = "working";
       this._beginWorkIfNeeded();
       try {
-        await this._doAutoCompact("output", turnSignalState.signal, prompt);
+        await this._doAutoCompact("before_turn", turnSignalState.signal, prompt);
         this._hintState = "none";
         this.onSaveRequest?.();
         this._finishCurrentWork("completed");
@@ -4555,10 +4539,7 @@ export class Session {
           // Fall through to normal response handling — turn ends naturally.
         }
 
-        const shouldMaterializeFinalResponse =
-          !result.compactNeeded || result.compactScenario === "output";
-
-        if (result.text && shouldMaterializeFinalResponse) {
+        if (result.text) {
           finalText = result.text;
 
           // v2 log: create final assistant_text + optional reasoning entries
@@ -4599,25 +4580,17 @@ export class Session {
         this.onSaveRequest?.();
 
         if (result.compactNeeded && result.compactScenario) {
-          const drainedBeforeCompact = this._hasInboxMessages();
           if (this._hasInboxMessages()) {
             this._drainInboxAsEntries();
           }
           const logLenBefore = this._log.length;
           try {
-            await this._doAutoCompact(result.compactScenario, activeSignal);
+            await this._doAutoCompact(result.compactScenario!, activeSignal);
           } catch (compactErr) {
             if ((compactErr as any)?.name === "AbortError" || activeSignal.aborted) {
-              // Mark compact-phase entries as discarded
               for (let ci = logLenBefore; ci < this._log.length; ci++) {
                 this._log[ci].discarded = true;
               }
-              this._appendEntry(createStatus(
-                this._nextLogId("status"),
-                this._turnCount,
-                "[This turn was interrupted during context compaction.]",
-                "compact_interrupted",
-              ), false);
               this.onSaveRequest?.();
               finalText = textAccumulator.text.trim() || "";
               turnEndStatus = "interrupted";
@@ -4626,24 +4599,12 @@ export class Session {
             throw compactErr;
           }
           this.onSaveRequest?.();
-
-          if (result.compactScenario === "output") {
-            if (drainedBeforeCompact) {
-              activationIdx = -1;
-              continue;
-            }
-            reachedLimit = false;
-            turnEndStatus = "completed";
-            break;
-          } else {
-            // Reset activation budget after compact — the agent gets a fresh
-            // context and should not be penalised for pre-compact activations.
-            activationIdx = -1;  // for-loop increment will set it to 0
-            continue;
-          }
+          // Always continue after compact — fresh context, reset activation budget.
+          activationIdx = -1;
+          continue;
         }
 
-        if (!result.compactNeeded) {
+        if (!result.compactNeeded && !result.endedWithoutToolCalls) {
           this._checkAndInjectHint(result);
         }
 
@@ -4830,6 +4791,52 @@ export class Session {
     }
     this.onSaveRequest?.();
 
+    // Before-turn auto-compact: if last known usage + estimated new tokens
+    // exceeds the threshold, compact now so the activation runs in fresh context.
+    if (this._capabilities.includeSpawnTool && !this._compactInProgress) {
+      const mc = this.primaryAgent.modelConfig;
+      const provider = (this.primaryAgent as any)._provider;
+      const effectiveMax = mc.maxTokens;
+      const budget = provider.budgetCalcMode === "full_context"
+        ? this._effectiveContextLength(mc)
+        : this._effectiveContextLength(mc) - effectiveMax;
+      if (budget > 0) {
+        const estimatedTokens = this._lastInputTokens + gptEncode(userInput).length;
+        const beforeTurnRatio = this._thresholds.compact_before_turn / 100;
+        if (estimatedTokens > beforeTurnRatio * budget) {
+          const logLenBefore = this._log.length;
+          try {
+            await this._doAutoCompact("before_turn", signal);
+          } catch (compactErr) {
+            if ((compactErr as any)?.name === "AbortError" || signal?.aborted) {
+              for (let ci = logLenBefore; ci < this._log.length; ci++) {
+                this._log[ci].discarded = true;
+              }
+              this._beginWorkIfNeeded();
+              const interruptionContent = "<system-message>\nLast turn was interrupted by the user.\nContext compaction was in progress and has been canceled due to this interruption.\n</system-message>";
+              const interruptionCtxId = this._allocateContextId();
+              const interruptionEntry = createUserMessageEntry(
+                this._nextLogId("user_message"),
+                this._turnCount,
+                "",
+                interruptionContent,
+                interruptionCtxId,
+              );
+              interruptionEntry.tuiVisible = false;
+              interruptionEntry.displayKind = null;
+              this._appendEntry(interruptionEntry, false);
+              this._recordSessionEvent("interrupted by user");
+              this._finishCurrentWork("interrupted");
+              throw compactErr;
+            } else {
+              throw compactErr;
+            }
+          }
+          this.onSaveRequest?.();
+        }
+      }
+    }
+
     // Track streamed content for abort recovery
     const textAccumulator = { text: "" };
     const reasoningAccumulator = { text: "" };
@@ -4859,9 +4866,11 @@ export class Session {
    *
    * Rules:
    * - Keep completed reasoning, drop incomplete reasoning of the currently interrupted round
-   * - Keep partial text and append " [Interrupted here.]" when interruption happens mid-activation
-   * - For each complete tool_call lacking result, append interrupted tool_result
-   * - Append synthetic interruption user message
+   * - Materialize partial streamed text as assistant_text
+   * - For each complete tool_call lacking result, append contextual tool_result
+   * - For partial (unclosed) tool_calls visible only in TUI, append a user-role
+   *   system-message explaining their absence from the API context
+   * - Inject a single user-role system-message about the interruption
    */
   private _handleInterruption(
     logLenBefore: number,
@@ -4869,18 +4878,13 @@ export class Session {
     opts?: { activationCompleted?: boolean },
   ): void {
     const activationCompleted = opts?.activationCompleted ?? false;
-    const interruptedSuffix = " [Interrupted here.]";
-    const interruptedMarker = "[Interrupted here.]";
 
-    // Clear ask runtime state and active entry tracker for interrupted turn.
     this._activeAsk = null;
     this._pendingTurnState = null;
     this._activeLogEntryId = null;
 
     let latestRound: number | undefined;
     let latestRoundHasToolCall = false;
-    let hasAssistantInActivation = false;
-    let latestAssistantEntry: LogEntry | null = null;
 
     for (let i = logLenBefore; i < this._log.length; i++) {
       const e = this._log[i];
@@ -4910,16 +4914,14 @@ export class Session {
       }
     }
 
+    // Materialize any unsaved partial text from mid-activation streaming.
+    let hasAssistantInActivation = false;
     for (let i = logLenBefore; i < this._log.length; i++) {
-      const e = this._log[i];
-      if (e.type === "assistant_text" && !e.discarded) {
+      if (this._log[i].type === "assistant_text" && !this._log[i].discarded) {
         hasAssistantInActivation = true;
-        latestAssistantEntry = e;
       }
     }
-
-    // Mid-activation interruption: materialize any unsaved partial text (without suffix).
-    if (!activationCompleted && !latestAssistantEntry) {
+    if (!activationCompleted && !hasAssistantInActivation) {
       const partialText = stripContextTags(accumulatedText).trim();
       if (partialText) {
         const partialContextId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
@@ -4931,44 +4933,42 @@ export class Session {
           partialText,
           partialContextId,
         ), false);
-        hasAssistantInActivation = true;
       }
     }
 
-    // Complete all materialized tool calls that have no results yet.
-    // These tool calls were never executed (abort happened before tool execution).
-    this._completeMissingToolResultsFromLog(
-      logLenBefore,
-      "[Interrupted] Tool was not executed.",
-    );
+    // Generate contextual tool_results for closed tool_calls without results.
+    this._completeMissingToolResultsFromLog(logLenBefore);
 
-    // Create [Interrupted here.] marker for API protocol (ensures proper role alternation
-    // and model awareness), but hide from TUI — interrupted tools show their own status.
-    const markerCtxId = this._findPrecedingUserSideContextId() ?? this._allocateContextId();
-    const markerEntry = createAssistantText(
-      this._nextLogId("assistant_text"),
-      this._turnCount,
-      this._computeNextRoundIndex(),
-      interruptedMarker,
-      interruptedMarker,
-      markerCtxId,
-    );
-    markerEntry.tuiVisible = false;
-    markerEntry.displayKind = null;
-    this._appendEntry(markerEntry, false);
+    // Collect names of partial (unclosed) tool_calls — visible in TUI but
+    // invisible in API context (apiRole=null). Agent needs to know about them.
+    const partialToolNames: string[] = [];
+    for (let i = logLenBefore; i < this._log.length; i++) {
+      const e = this._log[i];
+      if (e.type === "tool_call" && e.apiRole === null && !e.discarded) {
+        const name = (e.meta as Record<string, unknown>)["toolName"];
+        if (typeof name === "string") partialToolNames.push(name);
+      }
+    }
 
-    const interruptionMessage = "Last turn was interrupted by the user.";
+    // Build the interruption system-message (user role).
     this._recordSessionEvent("interrupted by user");
+    const compactWasInterrupted = this._compactInProgress;
+    const msgParts: string[] = ["Last turn was interrupted by the user."];
+    for (const name of partialToolNames) {
+      msgParts.push(`You tried to use tool \`${name}\` but the call was interrupted before completion. The tool call is not visible in your context because it was not fully transmitted.`);
+    }
+    if (compactWasInterrupted) {
+      msgParts.push("Context compaction was in progress and has been canceled due to this interruption.");
+    }
+    const interruptionContent = `<system-message>\n${msgParts.join("\n")}\n</system-message>`;
     const interruptionCtxId = this._allocateContextId();
     const interruptionEntry = createUserMessageEntry(
       this._nextLogId("user_message"),
       this._turnCount,
-      interruptionMessage,
-      interruptionMessage,
+      "",
+      interruptionContent,
       interruptionCtxId,
     );
-    // Keep interruption recovery context for the provider, but don't surface
-    // this synthetic message in the conversation UI.
     interruptionEntry.tuiVisible = false;
     interruptionEntry.displayKind = null;
     this._appendEntry(interruptionEntry, false);
@@ -5017,17 +5017,17 @@ export class Session {
   }
 
   /**
-   * Scan log entries from `fromIdx` onwards: for each tool_call entry,
-   * check if a tool_result exists for it. Create missing tool_results.
+   * Scan log entries from `fromIdx` onwards: for each tool_call entry
+   * (apiRole="assistant") that has no matching tool_result, create a
+   * contextual interrupted tool_result with a system-message body.
    */
-  private _completeMissingToolResultsFromLog(fromIdx: number, interruptedContent: string): void {
+  private _completeMissingToolResultsFromLog(fromIdx: number): void {
     const pendingToolCalls: Array<{
       id: string;
       name: string;
       roundIndex?: number;
       contextId?: string;
       execState?: string;
-      streamState?: string;
     }> = [];
     const resolvedToolCallIds = new Set<string>();
 
@@ -5042,7 +5042,6 @@ export class Session {
           roundIndex: e.roundIndex,
           contextId: typeof meta["contextId"] === "string" ? meta["contextId"] as string : undefined,
           execState: typeof meta["toolExecState"] === "string" ? meta["toolExecState"] as string : undefined,
-          streamState: typeof meta["toolStreamState"] === "string" ? meta["toolStreamState"] as string : undefined,
         });
       } else if (e.type === "tool_result") {
         resolvedToolCallIds.add((e.meta as Record<string, unknown>)["toolCallId"] as string);
@@ -5052,12 +5051,15 @@ export class Session {
     for (const tc of pendingToolCalls) {
       if (resolvedToolCallIds.has(tc.id)) continue;
       if (!tc.id) continue;
-      const content =
-        tc.execState === "running"
-          ? this._toolMayHavePartialEffects(tc.name)
-            ? "[Interrupted] Tool execution was interrupted and may have had partial effects."
-            : "[Interrupted] Tool execution was interrupted."
-          : interruptedContent;
+      let detail: string;
+      if (tc.execState === "running") {
+        detail = LONG_RUNNING_TOOLS.has(tc.name)
+          ? "Tool execution was interrupted and may have had partial effects."
+          : "Tool execution was interrupted.";
+      } else {
+        detail = `Tool \`${tc.name}\` was not executed.`;
+      }
+      const content = `<system-message>\nLast turn was interrupted by the user.\n${detail}\n</system-message>`;
       this._appendEntry(createToolResultEntry(
         this._nextLogId("tool_result"),
         this._turnCount,
@@ -5066,9 +5068,9 @@ export class Session {
           toolCallId: tc.id,
           toolName: tc.name,
           content,
-          toolSummary: content,
+          toolSummary: detail,
         },
-        { isError: false, contextId: tc.contextId, previewText: content, previewDim: true },
+        { isError: false, contextId: tc.contextId, previewText: detail, previewDim: true },
       ), false);
     }
   }
@@ -6137,7 +6139,7 @@ export class Session {
 
   private _buildCompactCheck(): ((
     inputTokens: number, outputTokens: number, hasToolCalls: boolean,
-  ) => { compactNeeded: boolean; scenario?: "output" | "toolcall" } | null) | undefined {
+  ) => { compactNeeded: boolean; scenario?: "mid_turn" } | null) | undefined {
     if (this._compactInProgress) return undefined;
 
     // Child sessions do not auto-compact; they receive a 90% warning instead
@@ -6153,18 +6155,19 @@ export class Session {
 
     if (budget <= 0) return undefined;
 
-    const compactOutputRatio = this._thresholds.compact_output / 100;
-    const compactToolcallRatio = this._thresholds.compact_toolcall / 100;
+    const midTurnRatio = this._thresholds.compact_mid_turn / 100;
 
     return (inputTokens: number, outputTokens: number, hasToolCalls: boolean) => {
+      // Only trigger mid-turn compact on tool-call path. Text-only responses
+      // mean the turn is ending; compact at the start of the NEXT turn instead.
+      if (!hasToolCalls) return { compactNeeded: false };
+
       const tokensToCheck = provider.budgetCalcMode === "full_context"
-        ? inputTokens              // full_context mode: only check input
+        ? inputTokens
         : inputTokens + outputTokens;
 
-      const threshold = hasToolCalls ? compactToolcallRatio : compactOutputRatio;
-
-      if (tokensToCheck > threshold * budget) {
-        return { compactNeeded: true, scenario: hasToolCalls ? "toolcall" : "output" };
+      if (tokensToCheck > midTurnRatio * budget) {
+        return { compactNeeded: true, scenario: "mid_turn" };
       }
       return { compactNeeded: false };
     };
@@ -6175,7 +6178,7 @@ export class Session {
    * a continuation prompt (possibly using tools), then return it.
    */
   private async _runCompactPhase(
-    scenario: "output" | "toolcall",
+    scenario: "before_turn" | "mid_turn",
     promptOverride?: string,
     signal?: AbortSignal,
   ): Promise<string> {
@@ -6187,7 +6190,7 @@ export class Session {
     }
 
     // Inject compact prompt as user_message entry (compactPhase, invisible in TUI)
-    const prompt = promptOverride ?? (scenario === "output" ? COMPACT_PROMPT_OUTPUT : COMPACT_PROMPT_TOOLCALL);
+    const prompt = promptOverride ?? (scenario === "before_turn" ? COMPACT_PROMPT_OUTPUT : COMPACT_PROMPT_TOOLCALL);
     const compactPromptEntry = createUserMessageEntry(
       this._nextLogId("user_message"),
       this._turnCount,
@@ -6202,13 +6205,16 @@ export class Session {
     let continuationPrompt = "";
     try {
       for (let i = 0; i < MAX_COMPACT_PHASE_ROUNDS; i++) {
-        if (signal?.aborted) break;
+        if (signal?.aborted) {
+          throw new DOMException("Compact phase aborted.", "AbortError");
+        }
 
         const result = await this._runActivation(signal, undefined, undefined, true);
-        if (signal?.aborted) break;
+        if (signal?.aborted) {
+          throw new DOMException("Compact phase aborted.", "AbortError");
+        }
 
         if (result.text) {
-          // Agent produced text → this is the continuation prompt
           const compactRound = this._computeNextRoundIndex();
           const compactContextId = this._allocateContextId();
           if (result.reasoningContent) {
@@ -6230,7 +6236,7 @@ export class Session {
             this._nextLogId("assistant_text"),
             this._turnCount,
             compactRound,
-            "",  // not visible in TUI
+            "",
             result.text,
             compactContextId,
           );
@@ -6256,7 +6262,7 @@ export class Session {
    * with marker + system prompt + continuation prompt.
    */
   private async _doAutoCompact(
-    scenario: "output" | "toolcall",
+    scenario: "before_turn" | "mid_turn",
     signal?: AbortSignal,
     promptOverride?: string,
   ): Promise<void> {

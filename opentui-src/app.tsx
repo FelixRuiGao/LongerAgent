@@ -2462,19 +2462,13 @@ export function OpenTuiApp({
         setPendingAsk(null);
       }
       if (!processingRef.current && !pendingAsk) return false;
-      const decision = session.requestTurnInterrupt
-        ? session.requestTurnInterrupt()
-        : (session.cancelCurrentTurn?.(), { accepted: true as const });
-      if (decision.accepted) {
-        abortControllerRef.current?.abort();
-        setPhase("Working");
+      if (session.requestTurnInterrupt) {
+        session.requestTurnInterrupt();
       } else {
-        showHint(
-          decision.reason === "compact_in_progress"
-            ? "Interrupt is disabled during compact phase"
-            : "Interrupt is currently disabled.",
-        );
+        session.cancelCurrentTurn?.();
       }
+      abortControllerRef.current?.abort();
+      setPhase("Working");
       return true;
     };
 

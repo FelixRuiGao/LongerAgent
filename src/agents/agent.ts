@@ -217,7 +217,7 @@ export class Agent {
       inputTokens: number,
       outputTokens: number,
       hasToolCalls: boolean,
-    ) => { compactNeeded: boolean; scenario?: "output" | "toolcall" } | null,
+    ) => { compactNeeded: boolean; scenario?: "mid_turn" } | null,
     onTokenUpdate?: (inputTokens: number, usage?: import("../providers/base.js").Usage) => void,
     thinkingLevel?: string,
     promptCacheKey?: string,

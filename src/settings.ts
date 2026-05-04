@@ -14,10 +14,10 @@ export interface ContextThresholds {
   context_hint_level1: number;
   /** Context hint level 2 trigger (percentage, must be >= level1). */
   context_hint_level2: number;
-  /** Auto-compact trigger on normal output (percentage). */
-  compact_output: number;
-  /** Auto-compact trigger when tool calls present (percentage, must be >= compact_output). */
-  compact_toolcall: number;
+  /** Auto-compact trigger at user-input boundary (percentage). */
+  compact_before_turn: number;
+  /** Auto-compact trigger mid-turn after tool calls (percentage, must be >= compact_before_turn). */
+  compact_mid_turn: number;
 }
 
 // ------------------------------------------------------------------
@@ -27,8 +27,8 @@ export interface ContextThresholds {
 export const DEFAULT_THRESHOLDS: ContextThresholds = {
   context_hint_level1: 60,
   context_hint_level2: 80,
-  compact_output: 85,
-  compact_toolcall: 90,
+  compact_before_turn: 85,
+  compact_mid_turn: 90,
 };
 
 // ------------------------------------------------------------------
