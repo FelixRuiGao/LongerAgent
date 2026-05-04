@@ -14,21 +14,8 @@
   "bugs": {
     "url": "https://github.com/FelixRuiGao/Fermi/issues"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "bin": {
-    "fermi": "dist/cli.js"
-  },
   "workspaces": [
     "opentui-src/forked/core"
-  ],
-  "files": [
-    "dist/",
-    "agent_templates/",
-    "prompts/",
-    "skills/",
-    "LICENSE",
-    "README.md"
   ],
   "keywords": [
     "ai",
@@ -42,7 +29,7 @@
     "terminal"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build": "bun run scripts/build-binary.ts",
     "dev": "bun run opentui-src/main.tsx",
     "dev:cli": "bun src/cli.ts",
     "opentui:dev": "bun run opentui-src/main.tsx",
@@ -50,8 +37,7 @@
     "test:watch": "bun test --watch tests/ opentui-src/transcript/",
     "typecheck": "tsc --noEmit",
     "docs:dev": "bunx vitepress dev docs-site",
-    "docs:build": "bunx vitepress build docs-site",
-    "prepublishOnly": "bun run build && bun test"
+    "docs:build": "bunx vitepress build docs-site"
   },
   "engines": {
     "bun": ">=1.3.0"

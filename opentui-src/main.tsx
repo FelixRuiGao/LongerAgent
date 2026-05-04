@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   getFermiAssistantRenderer,
@@ -17,6 +18,33 @@ interface ParsedArgs {
 }
 
 const SESSION_CLOSE_TIMEOUT_MS = 150;
+
+async function prewarmCompiledOpenTuiCore(): Promise<void> {
+  if (!fileURLToPath(import.meta.url).includes("$bunfs")) return;
+
+  // Bun's compiled bundler can initialize @opentui/react before async
+  // @opentui/core re-exports settle. Import the concrete modules first so
+  // React receives initialized renderable constructors from the package barrel.
+  await Promise.all([
+    import("./forked/core/Renderable.js"),
+    import("./forked/core/renderer.js"),
+    import("./forked/core/animation/Timeline.js"),
+    import("./forked/core/renderables/ASCIIFont.js"),
+    import("./forked/core/renderables/Box.js"),
+    import("./forked/core/renderables/Code.js"),
+    import("./forked/core/renderables/Diff.js"),
+    import("./forked/core/renderables/Input.js"),
+    import("./forked/core/renderables/LineNumberRenderable.js"),
+    import("./forked/core/renderables/Markdown.js"),
+    import("./forked/core/renderables/ScrollBox.js"),
+    import("./forked/core/renderables/Select.js"),
+    import("./forked/core/renderables/TabSelect.js"),
+    import("./forked/core/renderables/Text.js"),
+    import("./forked/core/renderables/Textarea.js"),
+    import("./forked/core/renderables/TextNode.js"),
+    import("./forked/core/renderables/TimeToFirstDraw.js"),
+  ]);
+}
 
 function resolveRendererThreadSetting(): boolean {
   const override = process.env.FERMI_OPENTUI_USE_THREAD?.trim().toLowerCase();
@@ -56,6 +84,8 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 export async function launchTui(): Promise<void> {
+  await prewarmCompiledOpenTuiCore();
+
   const React = await import("react");
   const { createCliRenderer } = await import("@opentui/core");
   const { createRoot } = await import("@opentui/react");

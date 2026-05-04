@@ -1,5 +1,7 @@
 import type { Edit, QueryCapture, Range } from "web-tree-sitter"
 import { mkdir } from "fs/promises"
+import { fileURLToPath } from "url"
+import treeSitterWasm from "web-tree-sitter/tree-sitter.wasm" with { type: "file" }
 
 type Parser = import("web-tree-sitter").Parser
 type Query = import("web-tree-sitter").Query
@@ -95,7 +97,9 @@ class ParserWorker {
       await mkdir(path.join(this.tsDataPath, "languages"), { recursive: true })
       await mkdir(path.join(this.tsDataPath, "queries"), { recursive: true })
 
-      const wasmPath = require.resolve("web-tree-sitter/tree-sitter.wasm")
+      const wasmPath = treeSitterWasm.startsWith(".")
+        ? fileURLToPath(new URL(treeSitterWasm, import.meta.url))
+        : treeSitterWasm
       const wts = await import("web-tree-sitter")
       Parser = wts.Parser
       Query = wts.Query

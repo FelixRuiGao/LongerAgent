@@ -12,7 +12,7 @@ import type {
   SimpleHighlight,
 } from "./types.js"
 import { getParsers } from "./default-parsers.js"
-import { resolve, isAbsolute, parse } from "path"
+import { dirname, join, resolve, isAbsolute, parse } from "path"
 import { existsSync } from "fs"
 import { registerEnvVar, env } from "../env.js"
 import { isBunfsPath, normalizeBunfsPath } from "../bunfs.js"
@@ -97,8 +97,13 @@ export class TreeSitterClient extends EventEmitter<TreeSitterClientEvents> {
     } else if (this.options.workerPath) {
       worker_path = this.options.workerPath
     } else {
-      worker_path = new URL("./parser.worker.js", import.meta.url).href
-      if (!existsSync(resolve(import.meta.dirname, "parser.worker.js"))) {
+      const moduleDir = import.meta.dirname
+      if (isBunfsPath(moduleDir)) {
+        worker_path = join(dirname(process.execPath), "tree-sitter", "parser.worker.js")
+      } else {
+        worker_path = new URL("./parser.worker.js", import.meta.url).href
+      }
+      if (!isBunfsPath(moduleDir) && !existsSync(resolve(moduleDir, "parser.worker.js"))) {
         worker_path = new URL("./parser.worker.ts", import.meta.url).href
       }
     }

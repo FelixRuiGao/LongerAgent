@@ -645,8 +645,13 @@ function makeProjectSlug(projectPath: string): string {
 
 /** Return the root directory of the installed package (parent of dist/). */
 export function getBundledAssetsDir(): string {
-  // This file compiles to dist/config.js, so ".." reaches the package root.
   const thisFile = fileURLToPath(import.meta.url);
+  if (thisFile.includes("$bunfs")) {
+    return dirname(process.execPath);
+  }
+
+  // In development this file is under src/. In the old tsc build it compiled
+  // to dist/config.js. Both layouts keep bundled assets at the project root.
   return join(dirname(thisFile), "..");
 }
 

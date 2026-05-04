@@ -48,12 +48,17 @@ import { isBunfsPath } from "./lib/bunfs.js"
 import { toPointer as toPlatformPointer } from "./platform/ffi.js"
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
-const realCurrentDir = realpathSync(currentDir)
+const realCurrentDir = isBunfsPath(currentDir) ? currentDir : realpathSync(currentDir)
+const executableDir = dirname(process.execPath)
 const repoRoot = process.cwd()
 const zigArch =
   process.arch === "arm64" ? "aarch64" : process.arch === "x64" ? "x86_64" : process.arch
 const zigOs = process.platform === "darwin" ? "macos" : process.platform
+const nativeLibFile =
+  process.platform === "darwin" ? "libopentui.dylib" : process.platform === "win32" ? "opentui.dll" : "libopentui.so"
 const localNativeCandidates = [
+  join(executableDir, "native", `${process.platform}-${process.arch}`, nativeLibFile),
+  join(executableDir, nativeLibFile),
   join(currentDir, "zig", "zig-out", "lib", "libopentui.dylib"),
   join(currentDir, "zig", "lib", `${zigArch}-${zigOs}`, "libopentui.dylib"),
   join(currentDir, "native", `${process.platform}-${process.arch}`, "libopentui.dylib"),
