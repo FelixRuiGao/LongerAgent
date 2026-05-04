@@ -10,6 +10,8 @@
 import { createSummary, type LogEntry } from "./log-entry.js";
 
 export interface SummarizeOperation {
+  from: string;
+  to: string;
   context_ids: string[];
   summary: string;
   reason?: string;
@@ -135,12 +137,61 @@ export function buildCoveredContextIds(entries: LogEntry[]): Set<string> {
 function parseOperations(args: Record<string, unknown>): SummarizeOperation[] {
   const operations = (args["operations"] as Array<Record<string, unknown>>) ?? [];
   return operations.map((raw) => ({
-    context_ids: ((raw["context_ids"] as string[]) ?? []).map(String),
+    from: typeof raw["from"] === "string" ? raw["from"] : "",
+    to: typeof raw["to"] === "string" ? raw["to"] : "",
+    context_ids: [],
     summary: typeof raw["content"] === "string" ? raw["content"] : "",
     reason: typeof raw["reason"] === "string" && raw["reason"].trim()
       ? raw["reason"]
       : undefined,
   }));
+}
+
+/**
+ * Build the ordered list of unique context IDs as they appear in the log.
+ * This is the spatial order the model sees via show_context.
+ */
+function buildSpatialOrder(
+  entries: LogEntry[],
+  coveredSet: Set<string>,
+): string[] {
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i].type === "compact_context") continue;
+    const ctxId = getLogContextId(entries[i]);
+    if (!ctxId) continue;
+    if (coveredSet.has(ctxId)) continue;
+    const baseId = ctxId.includes(".") ? ctxId.split(".")[0] : ctxId;
+    if (!seen.has(baseId)) {
+      seen.add(baseId);
+      order.push(baseId);
+    }
+  }
+  return order;
+}
+
+/**
+ * Expand a from/to range into the list of context IDs between them (inclusive)
+ * using the spatial order derived from the log.
+ */
+function expandRange(
+  from: string,
+  to: string,
+  spatialOrder: string[],
+): { context_ids: string[]; error?: string } {
+  const fromIdx = spatialOrder.indexOf(from);
+  if (fromIdx < 0) {
+    return { context_ids: [], error: `"from" context_id "${from}" not found in the active context.` };
+  }
+  const toIdx = spatialOrder.indexOf(to);
+  if (toIdx < 0) {
+    return { context_ids: [], error: `"to" context_id "${to}" not found in the active context.` };
+  }
+  if (fromIdx > toIdx) {
+    return { context_ids: [], error: `"from" ("${from}") appears after "to" ("${to}") in spatial order. Swap them or check show_context.` };
+  }
+  return { context_ids: spatialOrder.slice(fromIdx, toIdx + 1) };
 }
 
 function validateLogOperation(
@@ -153,7 +204,7 @@ function validateLogOperation(
   const { context_ids, summary } = op;
 
   if (!context_ids.length) {
-    return { valid: false, error: "Empty context_ids array." };
+    return { valid: false, error: "Empty range — from/to produced no context IDs." };
   }
   if (!summary.trim()) {
     return { valid: false, error: "Empty summary. Provide a non-empty summary string." };
@@ -190,12 +241,12 @@ function validateLogOperation(
     if (entryCtxId && coveredSet.has(entryCtxId)) continue;
 
     const nearbyIds = collectNearbyLogContextIds(entries, minIdx, maxIdx, coveredSet);
+    const rangeLabel = op.from === op.to ? op.from : `${op.from}..${op.to}`;
     return {
       valid: false,
       error:
-        `Not spatially contiguous. Current spatial order near that region: ` +
-        `${nearbyIds.join(", ")} — did you mean [${context_ids.join(", ")}] ` +
-        `to include the gaps, or split into separate operations?`,
+        `Not spatially contiguous in range ${rangeLabel}. Current spatial order near that region: ` +
+        `${nearbyIds.join(", ")}. Split into separate operations if needed.`,
     };
   }
 
@@ -228,7 +279,8 @@ function buildSummaryEntry(
     }
   }
 
-  let display = `[Summary of ${op.context_ids.join(", ")}]\n`;
+  const rangeLabel = op.from === op.to ? op.from : `${op.from}..${op.to}`;
+  let display = `[Summary of ${rangeLabel}]\n`;
   if (op.reason) {
     display += `Reason: ${op.reason}\n`;
   }
@@ -261,12 +313,14 @@ function formatExecutionOutput(ops: SummarizeOperation[], results: OperationResu
   const lines: string[] = [];
   lines.push(`Operations: ${ops.length} submitted, ${succeeded} succeeded, ${failed} failed.`);
   lines.push("");
-  for (const result of results) {
-    const idsLabel = result.contextIds.join(", ");
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    const op = ops[i];
+    const rangeLabel = op.from === op.to ? op.from : `${op.from}..${op.to}`;
     if (result.success) {
-      lines.push(`✓ [context_ids: ${idsLabel}] → Replaced with context_id ${String(result.newContextId)}.`);
+      lines.push(`✓ [${rangeLabel}] → Replaced with context_id ${String(result.newContextId)}.`);
     } else {
-      lines.push(`✗ [context_ids: ${idsLabel}] → Error: ${result.error}`);
+      lines.push(`✗ [${rangeLabel}] → Error: ${result.error}`);
     }
   }
   return lines.join("\n");
@@ -320,6 +374,7 @@ export function execSummarizeContextOnLog(
 
   const coveredSet = buildCoveredContextIds(entries);
   const spatialIndex = buildLogSpatialIndex(entries, coveredSet);
+  const spatialOrder = buildSpatialOrder(entries, coveredSet);
   const lastCompactMarkerIdx = findLastCompactMarkerEntryIdx(entries);
   const orderedResults: Array<OperationResult | undefined> = new Array(ops.length);
   const newEntries: LogEntry[] = [];
@@ -327,6 +382,27 @@ export function execSummarizeContextOnLog(
 
   for (let opIndex = 0; opIndex < ops.length; opIndex++) {
     const op = ops[opIndex];
+
+    if (!op.from || !op.to) {
+      orderedResults[opIndex] = {
+        success: false,
+        contextIds: [],
+        error: "Missing required fields: from and to.",
+      };
+      continue;
+    }
+
+    const expanded = expandRange(op.from, op.to, spatialOrder);
+    if (expanded.error) {
+      orderedResults[opIndex] = {
+        success: false,
+        contextIds: [],
+        error: expanded.error,
+      };
+      continue;
+    }
+    op.context_ids = expanded.context_ids;
+
     const duplicates = op.context_ids.filter((id) => claimedIds.has(id));
     if (duplicates.length > 0) {
       orderedResults[opIndex] = {

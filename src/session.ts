@@ -3802,17 +3802,18 @@ export class Session {
         throw new Error("/summarize requires selecting target turns first.");
       }
 
-      const idList = targetIds.map(id => `  - ${id}`).join("\n");
+      const rangeFrom = targetIds[0];
+      const rangeTo = targetIds[targetIds.length - 1];
+      const rangeLabel = rangeFrom === rangeTo ? rangeFrom : `${rangeFrom}..${rangeTo}`;
       let prompt = [
         `[Targeted summarize request]`,
         ``,
-        `The user has selected the following context groups to be summarized:`,
-        idList,
+        `The user has selected context groups to be summarized: from="${rangeFrom}" to="${rangeTo}" (${targetIds.length} groups).`,
         ``,
         `Instructions:`,
-        `1. First call \`show_context\` to inspect the content and size of each group.`,
+        `1. First call \`show_context\` to inspect the content and size of the range.`,
         `2. You may call \`read_file\`, \`grep\`, \`glob\`, or \`list_dir\` to verify details before writing the summary.`,
-        `3. Call \`summarize\` to compress the selected groups. You MUST only target the context_ids listed above.`,
+        `3. Call \`summarize\` with from="${rangeFrom}", to="${rangeTo}" to compress the selected range.`,
         `4. Your summary content should match the information density of the original — do not over-compress.`,
         `   Preserve: user message intent and original wording, file paths with line numbers, key decisions and why,`,
         `   unresolved issues, code references you'd look back at, and any constraints or rules the user stated.`,
@@ -3825,7 +3826,7 @@ export class Session {
       }
       const displayText = options?.focusPrompt?.trim()
         ? `/summarize ${options.focusPrompt.trim()}`
-        : `/summarize ${targetIds.length} context groups`;
+        : `/summarize ${rangeLabel}`;
 
       // Enable tool whitelist for this turn
       this._summarizeToolWhitelist = (this.constructor as typeof Session).SUMMARIZE_TOOL_WHITELIST;

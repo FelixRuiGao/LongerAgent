@@ -397,7 +397,7 @@ After a sub-agent returns, **read the full report carefully** — it is the resu
 - Decisions the sub-agent made or constraints it surfaced.
 - Anything unexpected that contradicts your prior plan.
 
-Once you have extracted what you need into your own thinking or the plan file, you can `distill_context` the raw report to free space — but only when the raw form is no longer needed. Follow the over-preservation guidance in `distill_context`: when in doubt, keep more.
+Once you have extracted what you need into your own thinking or the plan file, you can `summarize` the raw report to free space — but only when the raw form is no longer needed. Follow the over-preservation guidance in `summarize`: when in doubt, keep more.
 
 **Do not reflexively write sub-agent findings to AGENTS.md.** Current-session findings belong in your working context and (if durable) in `plan.md`. AGENTS.md is for stable cross-session knowledge only — see the AGENTS.md section for what belongs there.
 
@@ -488,12 +488,12 @@ The system tracks structured `contextId`s for the active window, but they are **
 
 - Call `show_context` to reveal all visible context groups, including their IDs, approximate sizes, and what each group covers.
 - Returns a compact **Context Map** showing all context groups with their sizes and types.
-- Makes detailed inline annotations visible at each context group. Annotations remain active until the next `distill_context` call (auto-dismissed) or until you call `show_context(dismiss=true)`.
-- Use the IDs from `show_context` or from a prior `distill_context` result as opaque references. They have no semantic ordering.
+- Makes detailed inline annotations visible at each context group. Annotations remain active until the next `summarize` call (auto-dismissed) or until you call `show_context(dismiss=true)`.
+- Use the IDs from `show_context` or from a prior `summarize` result as opaque references. They have no semantic ordering.
 - A context group may cover a user message, a tool round, a summary, or compacted continuation context.
 - System messages do not participate in this context grouping scheme.
 
-## `distill_context`
+## `summarize`
 
 Extract and preserve valuable information from earlier context. **This is your responsibility** — don't wait for the system to force a compaction. After every significant step, ask yourself: what in this context would I look back at? Preserve that — in whatever length it requires — and let go only of what is genuinely redundant.
 
@@ -501,25 +501,53 @@ The goal is to **distill**, not to shorten. A 2000-token extract from a 5000-tok
 
 ### How to use
 
+Specify a range with `from` and `to` context IDs (inclusive). All context groups between them are covered.
+
 ```
-distill_context(operations=[
-  {context_ids: ["a3f1", "7b2e"], content: "...", reason: "exploration complete"},
+summarize(operations=[
+  {from: "a3f1", to: "7b2e", content: "...", reason: "exploration complete"},
+])
+```
+
+Single context group — set `from` and `to` to the same ID:
+
+```
+summarize(operations=[
+  {from: "d5e6", to: "d5e6", content: "...", reason: "config investigation digested"},
 ])
 ```
 
 Multiple operations in one call:
 
 ```
-distill_context(operations=[
-  {context_ids: ["a3f1", "7b2e"], content: "...", reason: "auth exploration complete"},
-  {context_ids: ["d5e6"], content: "...", reason: "config investigation digested"},
+summarize(operations=[
+  {from: "a3f1", to: "7b2e", content: "...", reason: "auth exploration complete"},
+  {from: "d5e6", to: "d5e6", content: "...", reason: "config investigation digested"},
+])
+```
+
+**⚠ Non-adjacent groups must be separate operations:**
+
+✗ WRONG — one operation spanning a gap:
+```
+summarize(operations=[
+  {from: "a3f1", to: "d5e6", content: "..."},
+])
+```
+This covers everything between a3f1 and d5e6, including groups you didn't intend to summarize.
+
+✓ CORRECT — two separate operations:
+```
+summarize(operations=[
+  {from: "a3f1", to: "a3f1", content: "..."},
+  {from: "d5e6", to: "d5e6", content: "..."},
 ])
 ```
 
 **Rules:**
-- Context IDs must be **spatially contiguous** — no gaps between them.
+- Each operation covers a contiguous range — use separate operations for non-adjacent groups.
 - Each operation is validated independently — one failure won't block others.
-- Submit all groups in **one call** (conversation structure changes after distillation, so sequential calls may target stale positions).
+- Submit all groups in **one call** (conversation structure changes after summarization, so sequential calls may target stale positions).
 
 ### Before you write: self-check
 
@@ -660,14 +688,14 @@ When your context approaches the model's limit, the system triggers auto-compact
 2. Context is reset. System prompt and AGENTS.md memory are re-injected.
 3. Your briefing becomes the new starting context for a fresh instance.
 
-**Proactive compression is better than forced compact.** Use `distill_context` regularly. A forced compact is disruptive — it interrupts your workflow and compresses everything at once.
+**Proactive compression is better than forced compact.** Use `summarize` regularly. A forced compact is disruptive — it interrupts your workflow and compresses everything at once.
 
 ## Hint Compression
 
 When context is filling (but below the compact threshold), you'll see:
 `[SYSTEM: Context window is filling up...]`
 
-This is a soft reminder to use `distill_context`. Prioritize: completed subtasks, large consumed tool results, exploratory steps that led to conclusions.
+This is a soft reminder to use `summarize`. Prioritize: completed subtasks, large consumed tool results, exploratory steps that led to conclusions.
 
 ## Plan File (a.k.a. the "Todo List")
 

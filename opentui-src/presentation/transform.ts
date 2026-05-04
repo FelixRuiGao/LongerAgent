@@ -518,6 +518,29 @@ export function presentationTransform(
     }
   }
 
+  // Pre-associate summary entries with their summarize tool_call.
+  // Summary entries are flushed right after the tool_result, so we track the
+  // last summarize callId and collect consecutive isSummary entries.
+  const summariesByCallId = new Map<string, ReconciledConversationEntry[]>();
+  const consumedSummaryIds = new Set<string>();
+  {
+    let lastSummarizeCallId: string | null = null;
+    for (const e of entries) {
+      if (e.entry.kind === "tool_call" && getToolName(e) === "summarize") {
+        lastSummarizeCallId = getToolCallId(e) ?? null;
+      } else if (e.entry.kind === "tool_result") {
+        // tool_result doesn't break the chain
+      } else if (getMeta(e).isSummary && lastSummarizeCallId) {
+        const list = summariesByCallId.get(lastSummarizeCallId) ?? [];
+        list.push(e);
+        summariesByCallId.set(lastSummarizeCallId, list);
+        consumedSummaryIds.add(e.id);
+      } else {
+        lastSummarizeCallId = null;
+      }
+    }
+  }
+
   let i = 0;
 
   while (i < entries.length) {
@@ -539,6 +562,10 @@ export function presentationTransform(
     // 2. Route by kind
     switch (kind) {
       case "user": {
+        if (consumedSummaryIds.has(entry.id)) {
+          i++;
+          break;
+        }
         result.push(transformUser(entry));
         i++;
         break;
@@ -578,23 +605,25 @@ export function presentationTransform(
           : null;
         const toolOp = buildToolOperation(callEntry, resultEntry, activeEntryId);
 
-        // Fold subsequent summary entries into the summarize tool's inline result
-        if (callToolName === "summarize" && resultEntry) {
-          const summaryTexts: string[] = [];
-          while (i < entries.length && getMeta(entries[i]).isSummary) {
-            const summaryText = entries[i].entry.text;
-            const stripped = summaryText.replace(/^\[Summary of [^\]]*\]\n?/, "");
-            if (stripped.trim()) summaryTexts.push(stripped.trim());
-            i++;
-          }
-          if (summaryTexts.length > 0) {
-            const merged = summaryTexts.join("\n---\n");
-            toolOp.toolInlineResult = {
-              text: merged,
-              dim: false,
-              maxLines: 5,
-            };
-            toolOp.toolResultFullText = merged;
+        // Fold pre-associated summary entries into the summarize tool's inline result
+        if (callToolName === "summarize" && callId) {
+          const summaries = summariesByCallId.get(callId);
+          if (summaries && summaries.length > 0) {
+            const summaryTexts: string[] = [];
+            for (const s of summaries) {
+              const text = s.entry.text;
+              const stripped = text.replace(/^\[Summary of [^\]]*\]\n?/, "");
+              if (stripped.trim()) summaryTexts.push(stripped.trim());
+            }
+            if (summaryTexts.length > 0) {
+              const merged = summaryTexts.join("\n---\n");
+              toolOp.toolInlineResult = {
+                text: merged,
+                dim: false,
+                maxLines: 5,
+              };
+              toolOp.toolResultFullText = merged;
+            }
           }
         }
 

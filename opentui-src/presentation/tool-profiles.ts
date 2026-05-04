@@ -165,16 +165,6 @@ export const TOOL_PROFILES: Record<string, ToolDisplayProfile> = {
     text: () => "",
     inlineResult: false,
   },
-  distill_context: {
-    category: "observe",
-    displayName: "Distill",
-    text: (args) => {
-      const ops = args.operations;
-      if (Array.isArray(ops)) return `[${ops.length} contexts]`;
-      return "";
-    },
-    inlineResult: false,
-  },
   check_status: {
     category: "observe",
     displayName: "Status",

@@ -206,7 +206,7 @@ describe("P6 summarize behavior", () => {
       };
 
       await session._runActivation();
-      // Annotations still active (cleared by distill_context or show_context(dismiss=true))
+      // Annotations still active (cleared by summarize or show_context(dismiss=true))
       expect(session._showContextRoundsRemaining).toBe(1);
       expect(session._showContextAnnotations).not.toBeNull();
 

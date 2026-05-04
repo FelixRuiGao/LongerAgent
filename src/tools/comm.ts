@@ -128,21 +128,27 @@ export const SHOW_CONTEXT_TOOL: ToolDef = {
 export const SUMMARIZE_TOOL: ToolDef = {
   name: "summarize",
   description:
-    "Summarize groups of spatially contiguous contexts — extract and preserve valuable information, discard the rest. " +
-    "If you need to inspect the current context distribution first, call show_context.",
+    "Summarize a contiguous range of context groups — extract and preserve valuable information, discard the rest. " +
+    "Specify the range with `from` and `to` context IDs (inclusive). " +
+    "If you need to inspect the current context distribution first, call show_context.\n\n" +
+    "Example — single context group: from=\"a3f1\", to=\"a3f1\"\n" +
+    "Example — two non-adjacent groups: use TWO separate operations (one per group), NOT one operation spanning the gap.",
   parameters: {
     type: "object",
     properties: {
       operations: {
         type: "array",
-        description: "Each operation summarizes a group of contiguous context_ids into a preserved extract.",
+        description: "Each operation summarizes a contiguous range of context groups into a preserved extract.",
         items: {
           type: "object",
           properties: {
-            context_ids: {
-              type: "array",
-              items: { type: "string" },
-              description: "Spatially contiguous context IDs to merge.",
+            from: {
+              type: "string",
+              description: "Start context ID of the range (inclusive).",
+            },
+            to: {
+              type: "string",
+              description: "End context ID of the range (inclusive). Same as `from` for a single group.",
             },
             content: {
               type: "string",
@@ -153,14 +159,14 @@ export const SUMMARIZE_TOOL: ToolDef = {
               description: "Brief reason for summarizing this group.",
             },
           },
-          required: ["context_ids", "content"],
+          required: ["from", "to", "content"],
         },
       },
     },
     required: ["operations"],
   },
   summaryTemplate: "{agent} is summarizing context",
-  tuiPolicy: { partialReveal: "closed" },
+  tuiPolicy: { partialReveal: "immediate" },
 };
 
 export const CHECK_STATUS_TOOL: ToolDef = {
