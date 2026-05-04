@@ -45,7 +45,15 @@ The user can also intervene directly:
 
 <!-- MEDIA: Two-panel comparison — left: /summarize interactive picker UI; right: agent calling show_context → summarize autonomously -->
 
-Three layers prevent context from ever silently overflowing: system hints nudge early (60%), agent-initiated summarization gives precise control, and auto-compact (85%) catches anything that slips through.
+Three layers prevent context from ever silently overflowing:
+
+```
+Context usage ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100%
+               ▲ 60%            ▲ 80%       ▲ 85%    ▲ 90%
+               hint L1          hint L2     compact   compact
+               (nudge)          (urgent)   (before    (mid-
+                                            turn)     turn)
+```
 
 [Full context management guide →](https://felixruigao.github.io/Fermi/guide/context)
 
