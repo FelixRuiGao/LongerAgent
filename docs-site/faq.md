@@ -106,6 +106,16 @@ Persistent memory files loaded on every turn:
 
 The agent reads them for context and can write to them. They persist across sessions and compact resets.
 
+### How does /rewind work?
+
+`/rewind` shows a picker of previous turns. When you select one, Fermi:
+
+1. Rolls back the conversation to that turn (all later entries are discarded)
+2. Reverts file changes the agent made after that turn (tracked edits, writes, mkdir/cp/mv)
+3. Reports any conflicts (files modified externally after the agent changed them are skipped)
+
+This means you can undo both the conversation direction and its real-world effects in one step.
+
 ## Sub-Agents
 
 ### How many sub-agents can run at once?
